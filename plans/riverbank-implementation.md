@@ -19,7 +19,7 @@
 
 ### Non-goals
 
-1. **Not a custom UI.** Review uses Label Studio. Observability uses Langfuse and Grafana. The compiler exposes APIs, not a bespoke web app.
+1. **Not a custom UI.** Review uses Label Studio. Observability uses Langfuse and Perses. The compiler exposes APIs, not a bespoke web app.
 2. **Not a workflow editor.** The compiler is a pipeline of well-defined stages, not a DAG editor for end users to assemble.
 3. **Not a connector marketplace.** The MVP supports filesystem ingest and a Singer-tap shim. Pre-built connectors land per-source as needed.
 4. **Not multi-tenant in the MVP.** Single-tenant from Phase 1; multi-tenant scaffolding lands in Phase 5.
@@ -114,16 +114,16 @@ All choices are open-source with permissive licences. Versions are minimum-suppo
 | Probabilistic entity matching | [dedupe](https://github.com/dedupeio/dedupe) | MIT | Phase 4 | Active-learning entity-matching trained on review corrections. Note: pg-ripple provides three in-database dedup methods — `suggest_sameas()` (vector-based, v0.49), `find_alignments()` (KGE cross-graph, v0.57), and `pagerank_find_duplicates()` (centrality-guided, v0.88) — which handle most scenarios without a Python dependency. Use dedupe only when active-learning from Label Studio corrections requires a Python-native training loop |
 | Source connectors | [Singer SDK](https://github.com/meltano/sdk) (Meltano) | Apache 2.0 | Phase 2 | 600+ existing taps with a uniform output schema; lighter than Airbyte for self-hosting |
 | Human review | [Label Studio](https://github.com/HumanSignal/label-studio) ≥ 1.13 | Apache 2.0 | Phase 3 | Pre-labeling, span annotation, ensemble arbitration, webhook-driven correction loop |
-| Hybrid text search | [pg_search / ParadeDB](https://github.com/paradedb/paradedb) | AGPL/PostgreSQL | Phase 3 | Tantivy BM25 inside PostgreSQL for keyword search over compiled artifacts. Optional — `tsvector` is sufficient for small corpora |
+| Hybrid text search | PostgreSQL `tsvector` (built-in) | PostgreSQL (BSD) | Phase 1 | GIN-indexed full-text search over compiled artifact text. Sufficient for most corpora; pg-ripple's GIN trigram index provides fuzzy matching on top. No additional dependency required |
 | Vector search | pgvector (already in pg_ripple) | PostgreSQL | Phase 1 | Embeddings co-located with compiled artifacts |
 | Container packaging | Docker / Compose | Apache 2.0 | Phase 0 | Standard. Single Dockerfile per worker variant |
 | Kubernetes packaging | Helm chart | Apache 2.0 | Phase 4 | Production deployments. Built on the existing pg_ripple chart |
-| Metrics & dashboards | [Prometheus](https://github.com/prometheus/prometheus) + [Grafana](https://github.com/grafana/grafana) | Apache 2.0 / AGPL | Phase 4 | Compiler run rates, cost trends, queue depth, SHACL score over time |
-| Object storage (artifacts) | [MinIO](https://github.com/minio/minio) | AGPL | Phase 4 | Optional for deployments needing S3-compatible storage of large source documents; not required for filesystem deployments |
+| Metrics & dashboards | [Prometheus](https://github.com/prometheus/prometheus) + [Perses](https://github.com/perses/perses) | Apache 2.0 | Phase 4 | Compiler run rates, cost trends, queue depth, SHACL score over time. Perses is a CNCF Apache 2.0 dashboard tool designed for Prometheus |
+| Object storage (artifacts) | Filesystem (default) + [fsspec](https://github.com/fsspec/filesystem_spec) with provider backends | Apache 2.0 | Phase 4 | Local deployments use the filesystem. Cloud deployments configure a backend via `RIVERBANK_STORAGE_BACKEND`: S3 ([s3fs](https://github.com/fsspec/s3fs), Apache 2.0 — AWS S3, Cloudflare R2, Backblaze B2), Azure Blob Storage ([adlfs](https://github.com/fsspec/adlfs), MIT), or GCP Cloud Storage ([gcsfs](https://github.com/fsspec/gcsfs), BSD). All share the same fsspec `AbstractFileSystem` interface; switching backends requires only a config change |
 
 ### Licence notes
 
-- All Phase 1 dependencies are MIT or Apache 2.0. AGPL dependencies (Grafana, ParadeDB, MinIO) are sidecars used over the network — they do not impose obligations on the worker code.
+- All dependencies are MIT, Apache 2.0, or PostgreSQL (BSD). No AGPL dependencies are used. AGPL carries network-service disclosure obligations (AGPL v3 §13) that apply to any hosted deployment of riverbank; this is avoided by design.
 - Langfuse Cloud is *not* required. The MIT-licensed core supports all features used in this plan; the `ee/` enterprise folder is excluded by Docker build.
 
 ---
@@ -559,13 +559,13 @@ Goal: deployable in a regulated production environment with multi-replica worker
 
 1. **Helm chart.** `riverbank/helm/` deploys the worker, Prefect server, Langfuse, and Label Studio onto Kubernetes. The chart depends on the existing `pg_ripple` chart.
 2. **Multi-replica workers.** Workers acquire fragment-level advisory locks via PostgreSQL (`pg_try_advisory_lock(hashtext(fragment_iri)::bigint)`) and skip locked fragments. Combined with the `runs` idempotency key (fragment_id + profile_id + content_hash), this prevents duplicate work without a separate coordinator.
-3. **Prometheus metrics.** A `/metrics` endpoint exposes: `riverbank_runs_total{outcome=...}`, `riverbank_run_duration_seconds`, `riverbank_llm_cost_usd_total`, `riverbank_shacl_score{graph=...}`, `riverbank_review_queue_depth`. A Grafana dashboard ships in `riverbank/grafana/`.
+3. **Prometheus metrics.** A `/metrics` endpoint exposes: `riverbank_runs_total{outcome=...}`, `riverbank_run_duration_seconds`, `riverbank_llm_cost_usd_total`, `riverbank_shacl_score{graph=...}`, `riverbank_review_queue_depth`. A Perses dashboard ships in `riverbank/perses/`.
 4. **Backups.** The catalog tables back up via standard PostgreSQL `pg_dump` along with the existing pg_ripple data. The `_riverbank.log` table is the recovery key — replaying it reconstructs the compilation state.
 5. **Secret management.** LLM API keys load from environment variables, Kubernetes Secrets, or HashiCorp Vault (via `hvac`). No secret is ever logged.
 6. **Rate limiting & circuit breakers.** Per-provider concurrency limits and a circuit breaker (using `aiobreaker`) protect against runaway LLM costs when an upstream API misbehaves.
 7. **Audit trail.** Every operation that mutates the compiled graph writes to `_riverbank.log` with operator/agent identifier. The log is append-only at the database level (`REVOKE UPDATE, DELETE`).
 8. **Bulk reprocessing.** `riverbank recompile --profile docs-policy-v1 --version 2` scans all sources compiled with v1, queues them for recompilation against v2, and produces a semantic diff report when complete.
-9. **Cost dashboard.** Grafana panels for cost per source, cost per profile, cost trend over time, and projected monthly spend at current rate.
+9. **Cost dashboard.** Perses panels for cost per source, cost per profile, cost trend over time, and projected monthly spend at current rate.
 10. **OpenTelemetry export.** `OTEL_EXPORTER_OTLP_ENDPOINT` routes traces to any collector (Jaeger, Tempo, Honeycomb-OSS).
 
 ### Acceptance (load test)
@@ -645,8 +645,7 @@ For organisational deployments: the Helm chart from Phase 4. Components:
 | Langfuse web + worker | 2 + 1 | Requires PostgreSQL (shared) and ClickHouse for traces |
 | Label Studio | 1 | Backed by PostgreSQL (shared) |
 | Ollama (optional) | 1 with GPU | For local-model deployments; cloud LLM provider also supported |
-| Prometheus + Grafana | 1 + 1 | Metrics and dashboards |
-| MinIO (optional) | 4 | Large source document storage |
+| Prometheus + Perses | 1 + 1 | Metrics and dashboards (Apache 2.0) |
 
 Total minimum production footprint without GPU: ~12 vCPU, 32 GB RAM.
 
