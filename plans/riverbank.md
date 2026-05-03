@@ -1,8 +1,8 @@
-# riverbed — Living LLM Knowledge Base
+# riverbank — Living LLM Knowledge Base
 
 > **Date:** 2026-05-02  
 > **Status:** Strategy document — not a committed roadmap item  
-> **Project:** [riverbed](https://github.com/trickle-labs/riverbed) — standalone, builds on [pg-ripple](https://github.com/trickle-labs/pg-ripple) and [pg-trickle](https://github.com/trickle-labs/pg-trickle)  
+> **Project:** [riverbank](https://github.com/trickle-labs/riverbank) — standalone, builds on [pg-ripple](https://github.com/trickle-labs/pg-ripple) and [pg-trickle](https://github.com/trickle-labs/pg-trickle)  
 > **Inspiration:** [Karpathy's LLM Wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) · [companion blog post](https://www.mindstudio.ai/blog/karpathy-llm-knowledge-base-architecture-compiler-analogy)  
 > **Related plans:** [GraphRAG synergy](graphrag.md) · [pg-trickle relay](pg_trickle_relay_integration.md) · [future directions](future-directions.md) · [ROADMAP](../ROADMAP.md)
 
@@ -61,7 +61,7 @@ rebuild. That is exactly what pg_ripple and pg_trickle solve together.
 ## 2.1 Karpathy's three-layer structure
 
 Karpathy's LLM Wiki document names three layers precisely. Understanding them
-clarifies where riverbed sits and where it goes further.
+clarifies where riverbank sits and where it goes further.
 
 **Raw sources** are immutable. The LLM reads them and never modifies them. They
 are the source of truth — a quarantine boundary that prevents the compiled layer
@@ -80,10 +80,10 @@ querying, or linting. Karpathy's key insight is that the schema is
 Our compiler profiles extend this: they are versioned, diffable, and
 audit-trailed — the schema cannot drift silently.
 
-Karpathy names three operations that map directly to riverbed
+Karpathy names three operations that map directly to riverbank
 primitives:
 
-| Operation | Description | riverbed equivalent |
+| Operation | Description | riverbank equivalent |
 |---|---|---|
 | **Ingest** | Read a source, discuss key takeaways, write pages, update index and log | Source hash check → fragment extraction → LLM compile → ingest gate → SHACL gate → graph write → outbox event |
 | **Query** | Ask against the compiled wiki; file good answers back as pages | SPARQL + `rag_context()` → synthesis artifact filed as `pgc:Synthesis` node (§9.5) |
@@ -135,7 +135,7 @@ pg_ripple already covers most of what a compiled knowledge base needs.
 | Privacy and compliance | `erase_subject()` GDPR right-to-erasure across all tables (v0.61); per-graph access control and RLS policies |
 
 The missing product layer is the step that takes raw human-readable sources and
-reliably turns them into that compiled artifact. That is `riverbed`.
+reliably turns them into that compiled artifact. That is `riverbank`.
 
 ---
 
@@ -155,7 +155,7 @@ standard SQL and maintained incrementally as the underlying data changes.
 
 Four refresh modes serve different compilation needs:
 
-| Mode | Use case in riverbed |
+| Mode | Use case in riverbank |
 |---|---|
 | `AUTO` | Default for most derived views; pg_trickle decides optimal timing |
 | `DIFFERENTIAL` | Force Z-set differential dataflow; best for high-change entity pages |
@@ -209,7 +209,7 @@ SELECT pgtrickle.set_relay_outbox('knowledge-events',
     config => '{"stream_table": "entity_updates",
                 "sink_type": "nats",
                 "nats_url": "nats://localhost:4222",
-                "subject_template": "riverbed.{stream_table}.{op}"}'::jsonb);
+                "subject_template": "riverbank.{stream_table}.{op}"}'::jsonb);
 
 -- Reverse: consume source documents from a Kafka topic
 SELECT pgtrickle.set_relay_inbox('source-ingest',
@@ -258,20 +258,20 @@ living knowledge**.
 
 ---
 
-## 5. The product: riverbed
+## 5. The product: riverbank
 
 The compiler layer is a distinct concern from storage and transport.
 
 | Component | Responsibility |
 |---|---|
 | **pg_ripple** | Database truth: graph writes, validation, rules, provenance, queries, entity resolution, uncertain knowledge, PageRank & centrality analytics |
-| **riverbed** | Long-running AI work: document fetching, chunking, LLM calls, structured output, retries |
+| **riverbank** | Long-running AI work: document fetching, chunking, LLM calls, structured output, retries |
 | **pg_trickle** | Event transport: inbound feeds, change propagation, outboxes, downstream delivery, IMMEDIATE-mode transactional consistency |
 | **pgtrickle-relay** | External system bridge: forward mode (compiled knowledge→NATS/Kafka/Redis/SQS/RabbitMQ/webhooks), reverse mode (external feeds→inbox), Singer target mode (Singer taps→inbox), HA via advisory locks |
 
 The product promise:
 
-> Point riverbed at a stream or corpus of human-readable knowledge. It compiles
+> Point riverbank at a stream or corpus of human-readable knowledge. It compiles
 > that material into a governed, queryable, incrementally maintained knowledge
 > graph that humans, agents, and applications can use at runtime — backed by
 > pg-ripple for graph storage and pg-trickle for incremental change propagation.
@@ -299,7 +299,7 @@ queryable, auditable, and operationally safe.
   +----------------------+----------------------------+
                          |
                          v
-               COMPILATION (riverbed)
+               COMPILATION (riverbank)
   +---------------------------------------------------+
   |  * split document into stable sections             |
   |  * extract facts, relationships, entities          |
@@ -363,7 +363,7 @@ it, with an evidence span (character offsets or paragraph identifier). A triple
 without traceable provenance is quarantined to the `_pg_ripple.compile_draft`
 named graph and cannot be promoted to the trusted graph, influence Datalog
 rules, or contribute to PageRank without explicit operator approval. This
-constraint is enforced by the `riverbed` worker before any write
+constraint is enforced by the `riverbank` worker before any write
 reaches the database. The difference from a soft confidence threshold: a
 low-confidence fact with evidence can be reviewed, corrected, and promoted; a
 fact with no evidence anchor cannot be trusted regardless of its score, because
@@ -1365,7 +1365,7 @@ validation runs, and a meaningful change event is published.
 1. Source registry: sources, fragments, profiles, runs, diagnostics.
 2. Compiler profiles with prompt template, version, output schema, and
    validation rules.
-3. `riverbed` worker with an OpenAI-compatible endpoint and a
+3. `riverbank` worker with an OpenAI-compatible endpoint and a
    deterministic mock mode for CI.
 4. Compiled artifacts: atomic facts, summaries, entity pages, Q&A pairs,
    diagnostics.
@@ -1397,7 +1397,7 @@ validation runs, and a meaningful change event is published.
 
 - Source and compiler catalogs.
 - SQL APIs for registering profiles and enqueueing compilation.
-- riverbed standalone worker.
+- riverbank standalone worker.
 - Structured LLM output validation and mock mode for CI.
 - End-to-end compile of a small Markdown or ticket corpus.
 
@@ -1554,7 +1554,7 @@ the system persona from the source material further reduces susceptibility.
 **Structured output as a type boundary.** Requiring JSON Schema output from the
 LLM and validating it strictly against the compiler profile's schema before any
 content enters the database is the strongest single defense. A fact that does not
-match the schema is rejected, not interpreted. The `riverbed` worker
+match the schema is rejected, not interpreted. The `riverbank` worker
 validates LLM output before calling any pg_ripple SQL function.
 
 **Named graph quarantine.** LLM output that passes schema validation but fails
@@ -1659,7 +1659,7 @@ Three guardrails compose into a practical solution. **Fragment-level
 idempotency:** every compilation run is keyed by source IRI + content hash +
 profile version + model name (§7.4). A second agent that attempts to recompile
 the same unchanged fragment finds the run record already present and skips.
-**Transaction-level isolation:** the `riverbed` worker takes a
+**Transaction-level isolation:** the `riverbank` worker takes a
 PostgreSQL advisory lock per source IRI during compilation; two workers cannot
 race on the same source. **Profile-as-schema:** the compiler profile is stored
 in the database, versioned, and fetched by each worker at the start of a run —
@@ -1683,7 +1683,7 @@ and open questions that die between sessions.
    fragment, profile, run, artifact, dependency.
 3. Draft the catalog schema for sources, fragments, profiles, runs, diagnostics,
    and artifacts.
-4. Prototype riverbed as a standalone worker that calls pg-ripple and pg-trickle
+4. Prototype riverbank as a standalone worker that calls pg-ripple and pg-trickle
    SQL functions.
 5. Add a deterministic mock compiler profile for CI.
 6. Show one complete incremental update: source change, partial recompile,
@@ -1734,7 +1734,7 @@ well.
 
 At larger scale, or in team, multi-agent, or high-stakes deployments, the
 pattern runs into five structural limits. This section states them plainly,
-because understanding them clarifies why riverbed is not just a heavier
+because understanding them clarifies why riverbank is not just a heavier
 implementation of the same idea.
 
 **The scale problem: similarity vs. traversal.** At ~100 sources the index file
@@ -1784,7 +1784,7 @@ The right summary: the flat-file wiki is an excellent **output format** for huma
 consumption and an excellent **input format** for LLM context. It is not the
 right **storage format** for a knowledge system that must be queried, inferred
 over, validated, incrementally updated, and audited.
-`riverbed` uses graph-native storage internally and generates flat-file
+`riverbank` uses graph-native storage internally and generates flat-file
 output (Turtle, JSON-LD, Markdown entity pages) as a rendering step — giving
 human readers the familiar wiki surface while keeping the durable store
 machine-queryable.

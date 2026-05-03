@@ -1,8 +1,8 @@
-# riverbed — Implementation Plan
+# riverbank — Implementation Plan
 
 > **Date:** 2026-05-03  
-> **Status:** Implementation plan — companion to [riverbed.md](riverbed.md)  
-> **Scope:** Engineering blueprint for riverbed — a standalone project built on top of [pg-ripple](https://github.com/trickle-labs/pg-ripple) and [pg-trickle](https://github.com/trickle-labs/pg-trickle), from MVP through production hardening  
+> **Status:** Implementation plan — companion to [riverbank.md](riverbank.md)  
+> **Scope:** Engineering blueprint for riverbank — a standalone project built on top of [pg-ripple](https://github.com/trickle-labs/pg-ripple) and [pg-trickle](https://github.com/trickle-labs/pg-trickle), from MVP through production hardening  
 > **Constraint:** Open-source software only (permissive licences preferred: MIT, Apache 2.0, BSD)
 
 ---
@@ -47,7 +47,7 @@
                               └────────┬────────┘
                                        │
 ┌──────────────────────────────────────▼───────────────────────────────────────┐
-│                        riverbed worker                               │
+│                        riverbank worker                               │
 │  ┌────────────┐  ┌─────────────┐  ┌──────────────┐  ┌─────────────────────┐  │
 │  │ Parser     │→ │ Fragmenter  │→ │ Ingest gate  │→ │ Extraction (LLM)    │  │
 │  │ (Docling,  │  │ (heading,   │  │ (policy +    │  │ (Instructor +       │  │
@@ -130,19 +130,19 @@ All choices are open-source with permissive licences. Versions are minimum-suppo
 
 ## 3. Repository layout
 
-riverbed is a standalone repository. It depends on pg-ripple and pg-trickle as external packages — no code is copied or forked from those repos.
+riverbank is a standalone repository. It depends on pg-ripple and pg-trickle as external packages — no code is copied or forked from those repos.
 
 ```
-riverbed/                       (this repo)
+riverbank/                       (this repo)
 ├── pyproject.toml
 ├── README.md
 ├── Dockerfile
 ├── docker-compose.yml          one-command MVP launcher (includes pg-ripple + pg-trickle)
 ├── helm/                       Phase 4
 ├── plans/                      strategy and implementation docs
-├── src/riverbed/
+├── src/riverbank/
 │   ├── __init__.py
-│   ├── cli.py                  `riverbed` command
+│   ├── cli.py                  `riverbank` command
 │   ├── config.py               pydantic-settings; env + YAML
 │   ├── flows/                  Prefect flows
 │   │   ├── ingest.py
@@ -173,7 +173,7 @@ riverbed/                       (this repo)
 
 Dependencies on sibling projects:
 
-| Dependency | Role in riverbed |
+| Dependency | Role in riverbank |
 |---|---|
 | **pg-ripple** | Graph storage, SPARQL, SHACL validation, Datalog inference, provenance, pgvector, fuzzy matching (`pg:fuzzy_match`, `pg:token_set_ratio`), entity resolution (`suggest_sameas`, `find_alignments`, `pagerank_find_duplicates`), JSON↔RDF mapping registry, CONSTRUCT writeback rules, CDC bridge triggers, bidirectional integration (conflict policies, outbox/inbox), SPARQL live subscriptions (SSE), uncertain knowledge engine, PageRank & centrality analytics |
 | **pg-trickle** | Inbound stream tables (with IMMEDIATE mode for transactional consistency), differential change propagation, outbox event delivery, tiered scheduling, watermark gating, change buffer compaction, dbt integration |
@@ -183,18 +183,18 @@ Dependencies on sibling projects:
 
 ## 4. Catalog schema
 
-The schema lives in the `_riverbed` PostgreSQL schema, separate from `_pg_ripple` to keep the compiler upgradable independently of the extension.
+The schema lives in the `_riverbank` PostgreSQL schema, separate from `_pg_ripple` to keep the compiler upgradable independently of the extension.
 
 ### 4.1 Tables
 
 ```sql
 -- A registered source (a logical identifier, not a fragment).
-CREATE TABLE _riverbed.sources (
+CREATE TABLE _riverbank.sources (
     id              BIGSERIAL PRIMARY KEY,
     iri             TEXT UNIQUE NOT NULL,           -- e.g., file:///docs/intro.md
     source_type     TEXT NOT NULL,                  -- 'file', 'github_issue', 'kafka', …
     connector       TEXT NOT NULL,                  -- which plugin produced it
-    profile_id      BIGINT NOT NULL REFERENCES _riverbed.profiles(id),
+    profile_id      BIGINT NOT NULL REFERENCES _riverbank.profiles(id),
     named_graph     TEXT NOT NULL,                  -- where compiled triples land
     content_hash    BYTEA NOT NULL,                 -- last seen
     last_seen_at    TIMESTAMPTZ NOT NULL,
@@ -204,9 +204,9 @@ CREATE TABLE _riverbed.sources (
 );
 
 -- A stable section of a source (page, heading, time segment, …).
-CREATE TABLE _riverbed.fragments (
+CREATE TABLE _riverbank.fragments (
     id              BIGSERIAL PRIMARY KEY,
-    source_id       BIGINT NOT NULL REFERENCES _riverbed.sources(id) ON DELETE CASCADE,
+    source_id       BIGINT NOT NULL REFERENCES _riverbank.sources(id) ON DELETE CASCADE,
     fragment_key    TEXT NOT NULL,                  -- stable identifier within the source
     content_hash    BYTEA NOT NULL,                 -- skip re-extraction when unchanged
     char_start      INTEGER,
@@ -216,10 +216,10 @@ CREATE TABLE _riverbed.fragments (
     text_excerpt    TEXT,                           -- the raw text content
     UNIQUE (source_id, fragment_key)
 );
-CREATE INDEX ON _riverbed.fragments (content_hash);
+CREATE INDEX ON _riverbank.fragments (content_hash);
 
 -- A compiler profile (versioned).
-CREATE TABLE _riverbed.profiles (
+CREATE TABLE _riverbank.profiles (
     id              BIGSERIAL PRIMARY KEY,
     name            TEXT NOT NULL,
     version         INTEGER NOT NULL,
@@ -236,10 +236,10 @@ CREATE TABLE _riverbed.profiles (
 );
 
 -- One row per compile attempt (success or failure).
-CREATE TABLE _riverbed.runs (
+CREATE TABLE _riverbank.runs (
     id              BIGSERIAL PRIMARY KEY,
-    fragment_id     BIGINT NOT NULL REFERENCES _riverbed.fragments(id) ON DELETE CASCADE,
-    profile_id      BIGINT NOT NULL REFERENCES _riverbed.profiles(id),
+    fragment_id     BIGINT NOT NULL REFERENCES _riverbank.fragments(id) ON DELETE CASCADE,
+    profile_id      BIGINT NOT NULL REFERENCES _riverbank.profiles(id),
     started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     finished_at     TIMESTAMPTZ,
     outcome         TEXT NOT NULL,                  -- 'success', 'schema_fail', 'gate_reject', 'shacl_fail', 'error'
@@ -251,20 +251,20 @@ CREATE TABLE _riverbed.runs (
     diagnostics     JSONB,                          -- warnings, contradictions, …
     langfuse_trace_id TEXT
 );
-CREATE INDEX ON _riverbed.runs (fragment_id, started_at DESC);
-CREATE INDEX ON _riverbed.runs (profile_id, started_at DESC);
+CREATE INDEX ON _riverbank.runs (fragment_id, started_at DESC);
+CREATE INDEX ON _riverbank.runs (profile_id, started_at DESC);
 
 -- Dependency graph: which compiled artifact depends on which fragments and rules.
-CREATE TABLE _riverbed.artifact_deps (
+CREATE TABLE _riverbank.artifact_deps (
     artifact_iri    TEXT NOT NULL,                  -- the SPARQL/RDF identifier of the artifact
     dep_kind        TEXT NOT NULL,                  -- 'fragment', 'rule', 'profile', 'artifact'
     dep_ref         TEXT NOT NULL,                  -- fragment IRI, rule name, profile id:version, artifact IRI
     PRIMARY KEY (artifact_iri, dep_kind, dep_ref)
 );
-CREATE INDEX ON _riverbed.artifact_deps (dep_kind, dep_ref);
+CREATE INDEX ON _riverbank.artifact_deps (dep_kind, dep_ref);
 
 -- Append-only log of every compile-side operation (the §7.10 audit log).
-CREATE TABLE _riverbed.log (
+CREATE TABLE _riverbank.log (
     id              BIGSERIAL PRIMARY KEY,
     occurred_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     operation       TEXT NOT NULL,                  -- 'ingest', 'lint', 'render', 'gate_reject', …
@@ -272,13 +272,13 @@ CREATE TABLE _riverbed.log (
     subject_iri     TEXT,
     payload         JSONB NOT NULL
 );
-CREATE INDEX ON _riverbed.log (occurred_at DESC);
-CREATE INDEX ON _riverbed.log (operation, occurred_at DESC);
+CREATE INDEX ON _riverbank.log (occurred_at DESC);
+CREATE INDEX ON _riverbank.log (operation, occurred_at DESC);
 ```
 
 ### 4.2 RDF vocabulary
 
-A small `pgc:` vocabulary lives in `_pg_ripple.dictionary` and is published as a Turtle ontology file in `riverbed/ontology/pgc.ttl`:
+A small `pgc:` vocabulary lives in `_pg_ripple.dictionary` and is published as a Turtle ontology file in `riverbank/ontology/pgc.ttl`:
 
 ```turtle
 @prefix pgc: <https://pg-ripple.org/compile#> .
@@ -310,24 +310,24 @@ The vocabulary is intentionally small. Domain extraction is expressed in the com
 Five extension points are implemented as Python entry points in `pyproject.toml`:
 
 ```toml
-[project.entry-points."riverbed.parsers"]
-docling   = "riverbed.parsers.docling:DoclingParser"
-markdown  = "riverbed.parsers.markdown:MarkdownParser"
+[project.entry-points."riverbank.parsers"]
+docling   = "riverbank.parsers.docling:DoclingParser"
+markdown  = "riverbank.parsers.markdown:MarkdownParser"
 
-[project.entry-points."riverbed.fragmenters"]
-heading   = "riverbed.fragmenters.heading:HeadingFragmenter"
-page      = "riverbed.fragmenters.page:PageFragmenter"
+[project.entry-points."riverbank.fragmenters"]
+heading   = "riverbank.fragmenters.heading:HeadingFragmenter"
+page      = "riverbank.fragmenters.page:PageFragmenter"
 
-[project.entry-points."riverbed.extractors"]
-instructor = "riverbed.extractors.instructor_extractor:InstructorExtractor"
+[project.entry-points."riverbank.extractors"]
+instructor = "riverbank.extractors.instructor_extractor:InstructorExtractor"
 
-[project.entry-points."riverbed.connectors"]
-filesystem = "riverbed.connectors.fs:FilesystemConnector"
-singer     = "riverbed.connectors.singer:SingerTapConnector"
+[project.entry-points."riverbank.connectors"]
+filesystem = "riverbank.connectors.fs:FilesystemConnector"
+singer     = "riverbank.connectors.singer:SingerTapConnector"
 
-[project.entry-points."riverbed.reviewers"]
-labelstudio = "riverbed.reviewers.labelstudio:LabelStudioReviewer"
-file        = "riverbed.reviewers.file:FileReviewer"
+[project.entry-points."riverbank.reviewers"]
+labelstudio = "riverbank.reviewers.labelstudio:LabelStudioReviewer"
+file        = "riverbank.reviewers.file:FileReviewer"
 ```
 
 Each plugin implements a small protocol (Python `Protocol` class):
@@ -368,8 +368,8 @@ Goal: a runnable empty pipeline with all the scaffolding in place.
 
 ### Deliverables
 
-1. `riverbed/` directory with `pyproject.toml`, `Dockerfile`, `docker-compose.yml`.
-2. `riverbed` CLI with `init`, `version`, `health` subcommands.
+1. `riverbank/` directory with `pyproject.toml`, `Dockerfile`, `docker-compose.yml`.
+2. `riverbank` CLI with `init`, `version`, `health` subcommands.
 3. Catalog schema migrations (Alembic) for the §4.1 tables.
 4. CI workflow that runs `pytest` against an ephemeral PostgreSQL with pg_ripple installed (via `testcontainers-python`).
 5. A no-op extractor that records a run, emits a span, and writes nothing to the graph — verifying the orchestration plumbing end-to-end.
@@ -378,9 +378,9 @@ Goal: a runnable empty pipeline with all the scaffolding in place.
 ### Acceptance
 
 ```bash
-git clone <repo> && cd riverbed
+git clone <repo> && cd riverbank
 docker compose up -d
-riverbed health   # → "all systems nominal"
+riverbank health   # → "all systems nominal"
 ```
 
 No LLM call is made yet. This phase exists to prove the deployment story.
@@ -405,7 +405,7 @@ Goal: ingest a Markdown corpus, extract atomic facts, write them to pg_ripple wi
 - Run records with token counts, cost, Langfuse trace links
 - Fragment hash check: re-ingesting an unchanged file results in 0 LLM calls
 - Filesystem connector with directory-watcher mode (`watchdog` library)
-- `riverbed ingest <path>`, `riverbed query <sparql>`, `riverbed runs --since 1h`
+- `riverbank ingest <path>`, `riverbank query <sparql>`, `riverbank runs --since 1h`
 
 **Out (deferred):**
 - PDF/DOCX parsing (Phase 2)
@@ -442,7 +442,7 @@ A Pydantic validator confirms `fragment.text[span.char_start:span.char_end] == s
 **Ingest gate flow.**
 
 ```
-Fragment ─▶ editorial policy score ─▶ if below threshold: insert into _riverbed.log
+Fragment ─▶ editorial policy score ─▶ if below threshold: insert into _riverbank.log
                                        (gate_reject), do not call LLM
               │
               ▼ above threshold
@@ -462,7 +462,7 @@ Fragment ─▶ editorial policy score ─▶ if below threshold: insert into _r
          Emit pg_trickle outbox event (entity.updated, source.compiled)
 ```
 
-**Cost accounting.** Token counts come from the Instructor response. Cost-per-token tables are in YAML in `riverbed/cost_tables/`; Ollama models are zero-cost. The `cost_usd` column is the source of truth for §7.6 dashboards.
+**Cost accounting.** Token counts come from the Instructor response. Cost-per-token tables are in YAML in `riverbank/cost_tables/`; Ollama models are zero-cost. The `cost_usd` column is the source of truth for §7.6 dashboards.
 
 **Observability.** OpenTelemetry spans wrap every stage (parse, fragment, gate, extract, validate, write). Langfuse receives the LLM call traces with prompt and completion. The Prefect run record links to the Langfuse trace via `langfuse_trace_id`.
 
@@ -474,7 +474,7 @@ Fragment ─▶ editorial policy score ─▶ if below threshold: insert into _r
 |---|---|---|
 | postgres | `postgres:18` with pg_ripple and pg_trickle installed | 5432 |
 | pgtrickle-relay | `ghcr.io/grove/pgtrickle-relay:0.29.0` | 9090 (metrics) |
-| worker | `riverbed:latest` | — |
+| worker | `riverbank:latest` | — |
 | prefect | `prefecthq/prefect:3.6` | 4200 |
 | langfuse-web | `langfuse/langfuse:3` | 3000 |
 | langfuse-worker | `langfuse/langfuse-worker:3` | — |
@@ -484,8 +484,8 @@ Resource budget: the entire stack runs comfortably on a 4 vCPU / 8 GB laptop for
 
 ### 7.4 Acceptance tests
 
-1. **End-to-end ingest.** `riverbed ingest examples/markdown-corpus/` produces N triples in pg_ripple, all with `pgc:fromFragment` edges and confidence scores.
-2. **Idempotent re-ingest.** Running the same command twice produces 0 additional LLM calls. The second run's `_riverbed.runs` rows have `outcome = 'skipped'`.
+1. **End-to-end ingest.** `riverbank ingest examples/markdown-corpus/` produces N triples in pg_ripple, all with `pgc:fromFragment` edges and confidence scores.
+2. **Idempotent re-ingest.** Running the same command twice produces 0 additional LLM calls. The second run's `_riverbank.runs` rows have `outcome = 'skipped'`.
 3. **Schema rejection.** A malformed prompt (configured to produce invalid output) results in `outcome = 'schema_fail'` and zero graph writes.
 4. **Citation enforcement.** A fact with a fabricated quote (test fixture) is rejected; the run diagnostics record the failure.
 5. **SHACL gate.** A fragment that produces facts violating a profile's SHACL shape (e.g., missing required predicate) routes to the `<review>` graph, not `<trusted>`.
@@ -500,7 +500,7 @@ Goal: prove that the system rebuilds *only* what changed when a source updates.
 ### Deliverables
 
 1. **Artifact dependency graph.** Every compiled artifact records its `(fragment, profile_version, rule_set)` dependencies in `artifact_deps`. The graph is queryable in SQL and SPARQL.
-2. **`riverbed explain <artifact-iri>`** — dumps the dependency tree of any compiled artifact: which fragments it came from, which profile version, which rules contributed.
+2. **`riverbank explain <artifact-iri>`** — dumps the dependency tree of any compiled artifact: which fragments it came from, which profile version, which rules contributed.
 3. **Recompile flow.** When a source updates: identify changed fragments → identify dependent artifacts → invalidate them → re-extract changed fragments → re-derive dependent artifacts → emit semantic diff event.
 4. **Docling integration.** PDF, DOCX, PPTX, HTML, and image OCR. The `Docling` parser becomes the default for non-Markdown sources.
 5. **spaCy NER pre-resolution.** Named entities are extracted before the LLM call and passed as a structured context block. The Instructor schema can reference pre-resolved entity IRIs, reducing both token usage and entity-confusion errors.
@@ -518,10 +518,10 @@ This bypasses the Python connector wrapper entirely. For SaaS-specific integrati
 
 ### Acceptance
 
-1. Modify one paragraph in one Markdown file. Re-run `riverbed ingest`. Exactly one fragment is re-extracted; all unrelated artifacts remain untouched.
+1. Modify one paragraph in one Markdown file. Re-run `riverbank ingest`. Exactly one fragment is re-extracted; all unrelated artifacts remain untouched.
 2. The semantic diff event (`pg_trickle` outbox payload) lists exactly the affected facts, summaries, and entity pages.
 3. Replace one PDF in the corpus with an updated version. Only fragments whose content hash changed are re-extracted, even if the page numbers shifted.
-4. `riverbed explain entity:Acme` prints a tree showing every fragment, profile version, and rule that contributed to the entity page.
+4. `riverbank explain entity:Acme` prints a tree showing every fragment, profile version, and rule that contributed to the entity page.
 
 ---
 
@@ -534,13 +534,13 @@ Goal: a running human-in-the-loop pipeline that converts low-confidence extracti
 1. **Label Studio integration.**
    - `LabelStudioReviewer` plugin creates one Label Studio task per item in the review queue.
    - Pre-labels the fact with the LLM's extraction; the reviewer accepts, corrects, or rejects.
-   - Webhook posts decisions back to `riverbed`; corrections enter the `<human-review>` named graph at higher priority than LLM-extracted facts.
+   - Webhook posts decisions back to `riverbank`; corrections enter the `<human-review>` named graph at higher priority than LLM-extracted facts.
    - Custom labeling templates for: atomic-fact correction, span-based evidence annotation, ensemble disagreement arbitration.
-2. **Active-learning queue.** `riverbed review queue` runs the SPARQL query from §10.9 of the parent plan (centrality × uncertainty) and refreshes Label Studio task priorities.
+2. **Active-learning queue.** `riverbank review queue` runs the SPARQL query from §10.9 of the parent plan (centrality × uncertainty) and refreshes Label Studio task priorities.
 3. **Editorial policy example bank.** Each Label Studio decision is exported to the profile's example bank. The next compile run uses these as few-shot examples.
 4. **SHACL score history.** A daily Prefect flow snapshots `shacl_score()` per named graph into a Prometheus metric.
 5. **Langfuse evaluations.** Generated Q&A pairs (parent §8.4) run as Langfuse dataset evaluations on every recompile; regressions surface as Langfuse alerts.
-6. **Lint flow.** `riverbed lint` runs the §10.21 lint pass and writes findings to `pgc:LintFinding` triples; Prefect schedules it nightly.
+6. **Lint flow.** `riverbank lint` runs the §10.21 lint pass and writes findings to `pgc:LintFinding` triples; Prefect schedules it nightly.
 
 ### Acceptance
 
@@ -557,14 +557,14 @@ Goal: deployable in a regulated production environment with multi-replica worker
 
 ### Deliverables
 
-1. **Helm chart.** `riverbed/helm/` deploys the worker, Prefect server, Langfuse, and Label Studio onto Kubernetes. The chart depends on the existing `pg_ripple` chart.
+1. **Helm chart.** `riverbank/helm/` deploys the worker, Prefect server, Langfuse, and Label Studio onto Kubernetes. The chart depends on the existing `pg_ripple` chart.
 2. **Multi-replica workers.** Workers acquire fragment-level advisory locks via PostgreSQL (`pg_try_advisory_lock(hashtext(fragment_iri)::bigint)`) and skip locked fragments. Combined with the `runs` idempotency key (fragment_id + profile_id + content_hash), this prevents duplicate work without a separate coordinator.
-3. **Prometheus metrics.** A `/metrics` endpoint exposes: `riverbed_runs_total{outcome=...}`, `riverbed_run_duration_seconds`, `riverbed_llm_cost_usd_total`, `riverbed_shacl_score{graph=...}`, `riverbed_review_queue_depth`. A Grafana dashboard ships in `riverbed/grafana/`.
-4. **Backups.** The catalog tables back up via standard PostgreSQL `pg_dump` along with the existing pg_ripple data. The `_riverbed.log` table is the recovery key — replaying it reconstructs the compilation state.
+3. **Prometheus metrics.** A `/metrics` endpoint exposes: `riverbank_runs_total{outcome=...}`, `riverbank_run_duration_seconds`, `riverbank_llm_cost_usd_total`, `riverbank_shacl_score{graph=...}`, `riverbank_review_queue_depth`. A Grafana dashboard ships in `riverbank/grafana/`.
+4. **Backups.** The catalog tables back up via standard PostgreSQL `pg_dump` along with the existing pg_ripple data. The `_riverbank.log` table is the recovery key — replaying it reconstructs the compilation state.
 5. **Secret management.** LLM API keys load from environment variables, Kubernetes Secrets, or HashiCorp Vault (via `hvac`). No secret is ever logged.
 6. **Rate limiting & circuit breakers.** Per-provider concurrency limits and a circuit breaker (using `aiobreaker`) protect against runaway LLM costs when an upstream API misbehaves.
-7. **Audit trail.** Every operation that mutates the compiled graph writes to `_riverbed.log` with operator/agent identifier. The log is append-only at the database level (`REVOKE UPDATE, DELETE`).
-8. **Bulk reprocessing.** `riverbed recompile --profile docs-policy-v1 --version 2` scans all sources compiled with v1, queues them for recompilation against v2, and produces a semantic diff report when complete.
+7. **Audit trail.** Every operation that mutates the compiled graph writes to `_riverbank.log` with operator/agent identifier. The log is append-only at the database level (`REVOKE UPDATE, DELETE`).
+8. **Bulk reprocessing.** `riverbank recompile --profile docs-policy-v1 --version 2` scans all sources compiled with v1, queues them for recompilation against v2, and produces a semantic diff report when complete.
 9. **Cost dashboard.** Grafana panels for cost per source, cost per profile, cost trend over time, and projected monthly spend at current rate.
 10. **OpenTelemetry export.** `OTEL_EXPORTER_OTLP_ENDPOINT` routes traces to any collector (Jaeger, Tempo, Honeycomb-OSS).
 
@@ -587,7 +587,7 @@ Goal: implement the §10.12, §10.13, §10.17, §10.18 features from the parent 
 3. **Assumption registry.** Extracted assumptions attached as RDF-star annotations to facts; surfaced by `rag_context()`.
 4. **Epistemic status layer.** Every fact gets a `pgc:epistemicStatus` annotation: `observed`, `extracted`, `inferred`, `verified`, `deprecated`, `normative`, `predicted`, `disputed`, `speculative`. Status flows from compiler outcome (`extracted`), Datalog inference (`inferred`), and Label Studio decisions (`verified`).
 5. **Model ensemble compilation.** Per-profile opt-in; runs N model variants and routes disagreements to Label Studio with a side-by-side template. Hard cost cap configurable per profile.
-6. **Minimal contradiction explanation.** A `riverbed explain-conflict <iri>` command computes the smallest set of facts and rules producing a contradiction, using a SAT-style minimal-cause algorithm over the inference dependency graph.
+6. **Minimal contradiction explanation.** A `riverbank explain-conflict <iri>` command computes the smallest set of facts and rules producing a contradiction, using a SAT-style minimal-cause algorithm over the inference dependency graph.
 7. **Coverage maps.** A daily flow computes per-topic source density, mean confidence, and unanswered-question count; results write to `pgc:CoverageMap` triples surfaced by `rag_context()`.
 
 ### Acceptance
@@ -614,7 +614,7 @@ Goal: deploy as shared infrastructure across multiple knowledge bases; render co
 ### Acceptance
 
 1. Two tenants can compile independently against the same physical PostgreSQL with no data leakage (verified by row-level security tests).
-2. `riverbed render --format markdown --target docs/` produces a navigable MkDocs site of entity pages with citations linking back to source fragments.
+2. `riverbank render --format markdown --target docs/` produces a navigable MkDocs site of entity pages with citations linking back to source fragments.
 3. Modifying one fact regenerates exactly the pages that depend on it.
 
 ---
@@ -625,7 +625,7 @@ Three supported deployment shapes:
 
 ### 13.1 Single-binary local
 
-For development and CI: `pip install riverbed[ollama]` and `riverbed serve`. Uses SQLite for catalog (no PostgreSQL required) and `tap-files` for ingest. Trades durability for setup speed.
+For development and CI: `pip install riverbank[ollama]` and `riverbank serve`. Uses SQLite for catalog (no PostgreSQL required) and `tap-files` for ingest. Trades durability for setup speed.
 
 ### 13.2 Single-VM with Docker Compose
 
@@ -640,7 +640,7 @@ For organisational deployments: the Helm chart from Phase 4. Components:
 | pg_ripple (PostgreSQL with extension) | 1 primary + 2 replicas | CloudNativePG operator recommended |
 | pg_ripple_http | 2+ | Existing companion |
 | pgtrickle-relay | 2+ | HA via advisory locks; no external coordinator needed |
-| riverbed worker | 3+ | Horizontal autoscaling on queue depth |
+| riverbank worker | 3+ | Horizontal autoscaling on queue depth |
 | Prefect server | 1 | State in PostgreSQL |
 | Langfuse web + worker | 2 + 1 | Requires PostgreSQL (shared) and ClickHouse for traces |
 | Label Studio | 1 | Backed by PostgreSQL (shared) |
@@ -656,7 +656,7 @@ Total minimum production footprint without GPU: ~12 vCPU, 32 GB RAM.
 
 ### 14.1 Unit tests
 
-Pure-function tests for the parser plugins, fragmenters, ingest gate logic, and the artifact dependency resolver. Target ≥ 90% line coverage on the `riverbed/src/` tree.
+Pure-function tests for the parser plugins, fragmenters, ingest gate logic, and the artifact dependency resolver. Target ≥ 90% line coverage on the `riverbank/src/` tree.
 
 ### 14.2 Integration tests
 
@@ -693,18 +693,18 @@ A Phase 4 scenario kills the LLM endpoint mid-run; the worker should recover, th
 ### 15.1 Adding a new connector
 
 ```python
-# my_company/riverbed_jira.py
+# my_company/riverbank_jira.py
 class JiraConnector:
     name = "jira"
     def discover(self, config): ...
     def fetch(self, source): ...
 
 # pyproject.toml
-[project.entry-points."riverbed.connectors"]
-jira = "my_company.riverbed_jira:JiraConnector"
+[project.entry-points."riverbank.connectors"]
+jira = "my_company.riverbank_jira:JiraConnector"
 ```
 
-`pip install my-company-riverbed-jira` and the connector is available — no fork of riverbed required.
+`pip install my-company-riverbank-jira` and the connector is available — no fork of riverbank required.
 
 **Alternative 1: pgtrickle-relay for message-queue sources.** If the source system publishes to Kafka, NATS, Redis Streams, SQS, or RabbitMQ, configure a relay reverse pipeline via SQL instead of writing a Python connector:
 
@@ -717,7 +717,7 @@ SELECT pgtrickle.set_relay_inbox('jira-events',
 SELECT pgtrickle.enable_relay('jira-events');
 ```
 
-The relay writes directly to a pg-trickle inbox stream table. A riverbed flow watches the inbox and triggers compilation. No Python connector code is required.
+The relay writes directly to a pg-trickle inbox stream table. A riverbank flow watches the inbox and triggers compilation. No Python connector code is required.
 
 **Alternative 2: pgtrickle-relay as a Singer target.** If a Singer tap already exists (e.g., `tap-jira` from Meltano Hub), pipe it directly to pgtrickle-relay as a Singer target instead of writing a Python wrapper:
 
@@ -747,11 +747,11 @@ model_name: gpt-4o-mini
 embedding_model: bge-small-en-v1.5
 ```
 
-`riverbed profile register profiles/incident-reports.yaml` writes it to the catalog. Existing sources can opt in via `riverbed source set-profile <iri> incident-reports`.
+`riverbank profile register profiles/incident-reports.yaml` writes it to the catalog. Existing sources can opt in via `riverbank source set-profile <iri> incident-reports`.
 
 ### 15.3 Adding a new renderer
 
-Phase 6 renderers live in `riverbed/renderers/`. A new renderer implements `Renderer.render(artifact_iri) -> bytes` and registers itself via the `riverbed.renderers` entry point. Output goes to a configurable target (filesystem, S3, HTTP push).
+Phase 6 renderers live in `riverbank/renderers/`. A new renderer implements `Renderer.render(artifact_iri) -> bytes` and registers itself via the `riverbank.renderers` entry point. Output goes to a configurable target (filesystem, S3, HTTP push).
 
 ---
 
@@ -761,7 +761,7 @@ Phase 6 renderers live in `riverbed/renderers/`. A new renderer implements `Rend
 |---|---|---|
 | LLM cost runaway | High | Cost cap per profile; circuit breaker; daily budget alarm; cost dashboard panel |
 | Hallucinated facts entering trusted graph | High | Citation grounding at write time; SHACL gate; ingest-gate quarantine; review queue with active-learning prioritisation |
-| Catalog/graph drift after partial failure | Medium | All compile operations write to `_riverbed.log` first; replay on recovery; advisory-lock-based idempotency |
+| Catalog/graph drift after partial failure | Medium | All compile operations write to `_riverbank.log` first; replay on recovery; advisory-lock-based idempotency |
 | Plugin compatibility breakage | Medium | Plugin protocol versioning; conformance test suite plugins must pass; semantic versioning of the plugin API |
 | Self-hosted Langfuse / Label Studio drift | Medium | Pin to specific tags; integration tests against the pinned versions in CI |
 | Ollama model determinism in CI | Low | Fixed seed, temperature 0; record model digest in run; fail CI on digest change without explicit approval |
@@ -827,11 +827,11 @@ Each phase ends with a tagged release and a demo. Phases 1–3 are sequential de
 
 ## 19. Recommended next steps
 
-1. Create the `riverbed/` directory and Phase 0 scaffolding in a single PR.
+1. Create the `riverbank/` directory and Phase 0 scaffolding in a single PR.
 2. Land the catalog migrations and the no-op flow.
 3. Stand up the `docker-compose.yml` and verify Langfuse + Prefect are reachable.
 4. Implement the markdown parser and heading fragmenter as the first plugins.
 5. Implement the Instructor extractor with the `EvidenceSpan` validator.
-6. Run the first end-to-end compile against `docs/src/` and tag `riverbed-v0.1.0`.
+6. Run the first end-to-end compile against `docs/src/` and tag `riverbank-v0.1.0`.
 
 The MVP exit criterion is the strongest demo: change one paragraph in one Markdown file, watch exactly one fragment recompile, see exactly the affected facts update in the SPARQL query result, and observe the semantic event arrive on the pg_trickle outbox — end-to-end in under a second.

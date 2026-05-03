@@ -1,10 +1,10 @@
-# riverbed
+# riverbank
 
 **Turn raw documents into a governed, living knowledge graph — inside PostgreSQL.**
 
-riverbed is a knowledge compilation system. It takes messy human-readable sources — Markdown files, PDFs, tickets, transcripts, API feeds — runs them through an LLM pipeline that extracts structured facts, relationships, and summaries, then stores the result as a validated RDF knowledge graph. From that point on, you query compiled knowledge rather than re-reading raw text on every request.
+riverbank is a knowledge compilation system. It takes messy human-readable sources — Markdown files, PDFs, tickets, transcripts, API feeds — runs them through an LLM pipeline that extracts structured facts, relationships, and summaries, then stores the result as a validated RDF knowledge graph. From that point on, you query compiled knowledge rather than re-reading raw text on every request.
 
-The key insight, borrowed from [Andrej Karpathy's LLM Wiki proposal](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f): *documents are source code, and the knowledge graph is the compiled binary*. riverbed is the compiler.
+The key insight, borrowed from [Andrej Karpathy's LLM Wiki proposal](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f): *documents are source code, and the knowledge graph is the compiled binary*. riverbank is the compiler.
 
 ---
 
@@ -14,7 +14,7 @@ Standard RAG (retrieval-augmented generation) is fast to set up but has well-kno
 
 Compilation does more work upfront so runtime is faster and more reliable:
 
-| Compilation phase | What riverbed does |
+| Compilation phase | What riverbank does |
 |---|---|
 | **Parse** | Read documents in any format (Markdown, PDF, HTML) |
 | **Fragment** | Split into semantically coherent units |
@@ -24,15 +24,15 @@ Compilation does more work upfront so runtime is faster and more reliable:
 | **Maintain** | Only changed fragments recompile — not the whole corpus |
 | **Publish** | Downstream systems receive structured change events the moment knowledge updates |
 
-The incremental maintenance step is what makes the difference. riverbed doesn't re-index everything on a schedule. When a source document changes, only the knowledge derived from that document rebuilds — and only the downstream artifacts that depend on it refresh.
+The incremental maintenance step is what makes the difference. riverbank doesn't re-index everything on a schedule. When a source document changes, only the knowledge derived from that document rebuilds — and only the downstream artifacts that depend on it refresh.
 
 ---
 
 ## What it is built on
 
-riverbed is a Python project but its heavy lifting lives in two PostgreSQL extensions:
+riverbank is a Python project but its heavy lifting lives in two PostgreSQL extensions:
 
-**[pg-ripple](https://github.com/trickle-labs/pg-ripple)** is the knowledge store. It provides a full RDF triple store with SPARQL 1.1, SHACL validation, Datalog inference, OWL 2 RL reasoning, vector search via pgvector, and GraphRAG export — all inside PostgreSQL. Highlights that riverbed relies on heavily:
+**[pg-ripple](https://github.com/trickle-labs/pg-ripple)** is the knowledge store. It provides a full RDF triple store with SPARQL 1.1, SHACL validation, Datalog inference, OWL 2 RL reasoning, vector search via pgvector, and GraphRAG export — all inside PostgreSQL. Highlights that riverbank relies on heavily:
 
 - `load_triples_with_confidence()` — writes facts with extraction confidence scores
 - `shacl_score()` / `shacl_report_scored()` — numeric quality gates, not just pass/fail
@@ -68,14 +68,14 @@ Once your documents are compiled, the full pg-ripple query layer is available:
 ## Quick start
 
 ```bash
-git clone https://github.com/trickle-labs/riverbed
-cd riverbed
+git clone https://github.com/trickle-labs/riverbank
+cd riverbank
 docker compose up          # Postgres + pg-ripple + pg-trickle + relay + worker + Prefect + Langfuse
 
-riverbed init my-corpus
-riverbed source add filesystem --path ./docs
-riverbed run               # Compiles all sources
-riverbed query "What are the main entities in this corpus?"
+riverbank init my-corpus
+riverbank source add filesystem --path ./docs
+riverbank run               # Compiles all sources
+riverbank query "What are the main entities in this corpus?"
 ```
 
 Everything runs locally. PostgreSQL is the only required dependency. Cloud LLM endpoints are optional — Ollama works out of the box for development.
@@ -84,14 +84,14 @@ Everything runs locally. PostgreSQL is the only required dependency. Cloud LLM e
 
 ## Project status
 
-riverbed is at the **planning stage**. The plan documents in [`plans/`](plans/) describe the full architecture, phased implementation roadmap, and detailed engineering decisions. Implementation begins with the MVP phase (single-command corpus ingest, fragment-level incremental recompilation, SHACL quality gate, review queue).
+riverbank is at the **planning stage**. The plan documents in [`plans/`](plans/) describe the full architecture, phased implementation roadmap, and detailed engineering decisions. Implementation begins with the MVP phase (single-command corpus ingest, fragment-level incremental recompilation, SHACL quality gate, review queue).
 
 ---
 
 ## Plans
 
-- [`plans/riverbed.md`](plans/riverbed.md) — Strategy document: the knowledge compiler analogy, what pg-ripple and pg-trickle provide, and the full feature vision
-- [`plans/riverbed-implementation.md`](plans/riverbed-implementation.md) — Engineering blueprint: architecture diagram, phased roadmap, tech stack, extensibility recipes, and operational decisions
+- [`plans/riverbank.md`](plans/riverbank.md) — Strategy document: the knowledge compiler analogy, what pg-ripple and pg-trickle provide, and the full feature vision
+- [`plans/riverbank-implementation.md`](plans/riverbank-implementation.md) — Engineering blueprint: architecture diagram, phased roadmap, tech stack, extensibility recipes, and operational decisions
 
 ---
 
@@ -104,7 +104,7 @@ Sources (files, APIs, Kafka, NATS, Singer taps)
         │
   pg-trickle inbox stream tables
         │
-  riverbed worker
+  riverbank worker
   ├── Parser → Fragmenter → Ingest gate
   └── LLM extraction → SHACL validation → Graph writer
         │
