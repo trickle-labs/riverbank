@@ -34,15 +34,16 @@
 └──────────────────────────────────────┬───────────────────────────────────────┘
                                        │
                               ┌────────▼────────┐
-                              │   Connector     │  (plugin)
-                              │   plane          │   filesystem, Singer tap, GitHub, …
+                              │   Connector     │  (plugin or Singer tap)
+                              │   plane          │   filesystem, Singer tap, GitHub,
+                              │                  │   Meltano SDK, …
                               └────────┬────────┘
                                        │ source events
                               ┌────────▼────────┐
                               │   pg_trickle    │   inbox stream tables
                               │   (existing)     │   + pgtrickle-relay for
                               │                  │   Kafka, NATS, Redis, SQS,
-                              │                  │   RabbitMQ, webhooks
+                              │                  │   RabbitMQ, webhooks, Singer
                               └────────┬────────┘
                                        │
 ┌──────────────────────────────────────▼───────────────────────────────────────┐
@@ -176,7 +177,7 @@ Dependencies on sibling projects:
 |---|---|
 | **pg-ripple** | Graph storage, SPARQL, SHACL validation, Datalog inference, provenance, pgvector, fuzzy matching (`pg:fuzzy_match`, `pg:token_set_ratio`), entity resolution (`suggest_sameas`, `find_alignments`, `pagerank_find_duplicates`), JSON↔RDF mapping registry, CONSTRUCT writeback rules, CDC bridge triggers, bidirectional integration (conflict policies, outbox/inbox), SPARQL live subscriptions (SSE), uncertain knowledge engine, PageRank & centrality analytics |
 | **pg-trickle** | Inbound stream tables (with IMMEDIATE mode for transactional consistency), differential change propagation, outbox event delivery, tiered scheduling, watermark gating, change buffer compaction, dbt integration |
-| **pgtrickle-relay** | External system integration: forward mode (outbox→NATS/Kafka/Redis/SQS/RabbitMQ/webhooks), reverse mode (external→inbox), SQL-configured pipelines, hot reload, HA via advisory locks |
+| **pgtrickle-relay** | External system integration: forward mode (outbox→NATS/Kafka/Redis/SQS/RabbitMQ/webhooks), reverse mode (external→inbox), Singer target mode (Singer taps→inbox via standard Singer protocol), SQL-configured pipelines, hot reload, HA via advisory locks |
 
 ---
 
@@ -505,7 +506,15 @@ Goal: prove that the system rebuilds *only* what changed when a source updates.
 5. **spaCy NER pre-resolution.** Named entities are extracted before the LLM call and passed as a structured context block. The Instructor schema can reference pre-resolved entity IRIs, reducing both token usage and entity-confusion errors.
 6. **Fuzzy entity matching.** pg-ripple provides `pg:fuzzy_match()` and `pg:token_set_ratio()` directly in SPARQL (v0.87), backed by a GIN trigram index on `_pg_ripple.confidence`. These produce candidate `owl:sameAs` edges with confidence scores without leaving the database. For Python-side pre-resolution before LLM calls, `RapidFuzz` token-set ratio provides the same matching in the extraction pipeline. Above-threshold matches are written automatically; borderline matches are flagged for Phase 3 review. Additionally, pg-ripple's `suggest_sameas()` (v0.49) provides vector-based entity candidates and `pagerank_find_duplicates()` (v0.88) provides centrality-guided entity deduplication.
 7. **Embedding generation.** Sentence-transformers locally produce embeddings for each compiled summary. Embeddings are written to a pgvector column on the entity-page artifact.
-8. **Singer-tap connector.** A `singer` connector wraps any Singer tap; the MVP includes `tap-github` for issues and `tap-slack-search` for channel exports. Note: for message-queue sources (Kafka, NATS, Redis Streams, SQS, RabbitMQ), pgtrickle-relay's reverse mode is the preferred ingest path — it writes directly to pg-trickle inbox tables with no Python code required. Singer taps remain the best choice for SaaS-specific integrations not covered by relay backends.
+8. **Singer-tap connector.** A `singer` connector wraps any Singer tap; the MVP includes `tap-github` for issues and `tap-slack-search` for channel exports. Alternatively, configure pgtrickle-relay as a Singer target:
+
+```bash
+# In a Meltano project or standalone
+tap-github | pgtrickle-relay --target singer --config relay-singer-config.json
+# The relay writes RECORD messages directly to the pg-trickle inbox table
+```
+
+This bypasses the Python connector wrapper entirely. For SaaS-specific integrations not covered by relay backends, the Python wrapper remains the best choice; for standard Singer taps, piping directly to the relay target is simpler.
 
 ### Acceptance
 
@@ -697,7 +706,7 @@ jira = "my_company.riverbed_jira:JiraConnector"
 
 `pip install my-company-riverbed-jira` and the connector is available — no fork of riverbed required.
 
-**Alternative: pgtrickle-relay for message-queue sources.** If the source system publishes to Kafka, NATS, Redis Streams, SQS, or RabbitMQ, configure a relay reverse pipeline via SQL instead of writing a Python connector:
+**Alternative 1: pgtrickle-relay for message-queue sources.** If the source system publishes to Kafka, NATS, Redis Streams, SQS, or RabbitMQ, configure a relay reverse pipeline via SQL instead of writing a Python connector:
 
 ```sql
 SELECT pgtrickle.set_relay_inbox('jira-events',
@@ -709,6 +718,14 @@ SELECT pgtrickle.enable_relay('jira-events');
 ```
 
 The relay writes directly to a pg-trickle inbox stream table. A riverbed flow watches the inbox and triggers compilation. No Python connector code is required.
+
+**Alternative 2: pgtrickle-relay as a Singer target.** If a Singer tap already exists (e.g., `tap-jira` from Meltano Hub), pipe it directly to pgtrickle-relay as a Singer target instead of writing a Python wrapper:
+
+```bash
+tap-jira --config jira-config.json | pgtrickle-relay --target singer --config relay-singer.json
+```
+
+The relay ingests the Singer protocol RECORD messages and writes directly to the pg-trickle inbox table. Ideal for leveraging existing Meltano taps without additional Python code.
 
 ### 15.2 Adding a new compiler profile
 

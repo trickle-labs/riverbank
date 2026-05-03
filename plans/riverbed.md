@@ -267,7 +267,7 @@ The compiler layer is a distinct concern from storage and transport.
 | **pg_ripple** | Database truth: graph writes, validation, rules, provenance, queries, entity resolution, uncertain knowledge, PageRank & centrality analytics |
 | **riverbed** | Long-running AI work: document fetching, chunking, LLM calls, structured output, retries |
 | **pg_trickle** | Event transport: inbound feeds, change propagation, outboxes, downstream delivery, IMMEDIATE-mode transactional consistency |
-| **pgtrickle-relay** | External system bridge: forward mode (compiled knowledge→NATS/Kafka/Redis/SQS/RabbitMQ/webhooks), reverse mode (source feeds→inbox), HA via advisory locks |
+| **pgtrickle-relay** | External system bridge: forward mode (compiled knowledge→NATS/Kafka/Redis/SQS/RabbitMQ/webhooks), reverse mode (external feeds→inbox), Singer target mode (Singer taps→inbox), HA via advisory locks |
 
 The product promise:
 
