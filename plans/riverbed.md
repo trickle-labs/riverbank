@@ -104,26 +104,35 @@ pg_ripple already covers most of what a compiled knowledge base needs.
 | Store structured facts | RDF triples in PostgreSQL VP storage |
 | Query relationships | SPARQL 1.1 with full property paths and aggregates |
 | Natural-language queries | `sparql_from_nl()` — English to SPARQL |
-| LLM-ready context | `rag_context()` — graph facts formatted for a prompt |
+| LLM-ready context | `rag_context()` — graph facts formatted for a prompt; `rag_retrieve()` — end-to-end RAG pipeline |
 | Source attribution | Named graphs and PROV-O provenance |
 | Facts about facts | RDF-star annotations for confidence, evidence, timestamps |
 | Assign extraction confidence | `load_triples_with_confidence()`, `pg:confidence()` (v0.87) |
 | Propagate source trust | `pg:sourceTrust` predicate, automatic PROV-O Datalog rules (v0.87) |
 | Probabilistic inference | Datalog rules with `@weight` and noisy-OR combination (v0.87) |
-| Fuzzy entity matching | `pg:fuzzy_match()`, `pg:token_set_ratio()`, GIN trigram index (v0.87) |
+| Fuzzy entity matching | `pg:fuzzy_match()`, `pg:token_set_ratio()`, GIN trigram index (v0.87) — in-database fuzzy matching without external Python libraries |
 | Numeric data quality scores | `shacl_score()`, `sh:severityWeight`, `shacl_report_scored()` (v0.87) |
 | Validate knowledge quality | SHACL shapes as data quality contracts |
 | Infer new knowledge | Datalog and RDFS/OWL 2 RL rules |
-| Resolve duplicate entities | `owl:sameAs` canonicalization |
+| Auto-derive on data change | CONSTRUCT writeback rules — auto-fire when source triples change (v0.63–v0.65); no external scheduler needed for derived facts |
+| Resolve duplicate entities | `owl:sameAs` canonicalization; `suggest_sameas()` vector-based candidates (v0.49); `find_alignments()` KGE-based cross-graph matching (v0.57); `pagerank_find_duplicates()` centrality-guided entity dedup (v0.88) |
 | Rank entities by importance | PageRank, topic-sensitive scoring, temporal decay (v0.88) |
 | Detect bridge concepts | Betweenness centrality, eigenvector centrality (v0.88) |
 | Find recent authorities | Katz centrality with time-aware edge weights (v0.88) |
+| Explain importance scores | `explain_pagerank()` score-explanation tree with depth/contributor/contribution/path (v0.88) |
 | Incremental importance updates | pg-trickle K-hop rank propagation in milliseconds (v0.88) |
 | Hybrid graph + vector retrieval | pgvector integration and graph-contextualized embeddings |
 | GraphRAG export | GraphRAG Parquet export and community detection |
+| Export compiled knowledge | `export_pagerank()` in CSV, Turtle, N-Triples, JSON-LD (v0.88); `export_turtle_with_confidence()` with RDF-star annotations (v0.87) |
+| JSON↔RDF mapping | `register_json_mapping()` bidirectional JSON↔RDF mapping registry (v0.73) — maps structured LLM output directly to RDF without custom conversion code |
 | Bi-temporal fact management | Named-graph time-travel + RDF-star valid/transaction time |
+| Bidirectional integration | Conflict policies (`source_priority`, `latest_wins`, `reject_on_conflict`, `union`), outbox/inbox wiring, dead-letter queue, reconciliation toolkit (v0.77–v0.78) — enables the human correction loop to flow back into the graph with conflict resolution |
+| Live subscriptions | SPARQL live subscriptions via SSE for real-time downstream notification (v0.73) |
 | Prioritize human review | Centrality × confidence review queue — maximum leverage per review hour |
-| Stream knowledge changes | CDC subscriptions and JSON-LD event output |
+| Stream knowledge changes | CDC subscriptions and JSON-LD event output; CDC bridge triggers for pg-trickle relay integration (v0.52) |
+| Vocabulary alignment | Built-in Datalog rule templates for cross-domain ontology mapping: Schema.org↔SAREF, Schema.org↔FHIR, Schema.org↔PROV-O, generic-JSON↔Schema.org (v0.52) |
+| Multi-tenant isolation | Per-tenant named graphs with RLS, quota enforcement, tenant lifecycle API (v0.57) |
+| Privacy and compliance | `erase_subject()` GDPR right-to-erasure across all tables (v0.61); per-graph access control and RLS policies |
 
 The missing product layer is the step that takes raw human-readable sources and
 reliably turns them into that compiled artifact. That is `riverbed`.
@@ -135,16 +144,94 @@ reliably turns them into that compiled artifact. That is `riverbed`.
 The article treats incremental compilation as a hard problem. pg_trickle gives
 us a practical solution.
 
-pg_trickle can:
+### 4.1 Stream tables with incremental view maintenance
 
-- **Ingest** new source material from Kafka, NATS, HTTP, SQS, Redis Streams, and
-  similar systems into PostgreSQL as stream tables.
-- **Propagate changes** through derived views using Z-set differential dataflow,
-  updating only what actually changed.
-- **Publish outbound events** when compiled knowledge changes, so downstream
-  agents and systems react immediately.
-- **Share transactions** with graph writes, validation, and messaging — all in
-  one PostgreSQL transaction, with no partial updates.
+pg_trickle's core primitive is the **stream table**: a SQL view that maintains
+itself incrementally using DBSP-inspired differential dataflow. Stream tables
+support full SQL coverage — JOINs, GROUP BY, WINDOW functions, EXISTS, WITH
+RECURSIVE, CTEs, LATERAL, and TopK — so any derived artifact (summary counts,
+entity page aggregates, topic indices, quality scores) can be expressed as
+standard SQL and maintained incrementally as the underlying data changes.
+
+Four refresh modes serve different compilation needs:
+
+| Mode | Use case in riverbed |
+|---|---|
+| `AUTO` | Default for most derived views; pg_trickle decides optimal timing |
+| `DIFFERENTIAL` | Force Z-set differential dataflow; best for high-change entity pages |
+| `FULL` | Force complete recomputation; use for coverage maps or nightly lint passes |
+| `IMMEDIATE` | Maintain within the same transaction; use for SHACL score gates that must reflect the just-written triples |
+
+**IMMEDIATE mode** is especially important for the ingest gate: when
+`load_triples_with_confidence()` writes facts, stream tables tracking SHACL
+scores and entity counts can update in the same transaction, so the publication
+gate decision is always based on current state.
+
+**Watermark gating** aligns multi-source compiles: when a source arrives in
+fragments from different connectors (e.g., a Confluence page with embedded
+images and linked attachments), watermark gating ensures derived views only
+refresh after all related fragments have landed — preventing partial-state
+artifacts from reaching the trusted graph.
+
+**Tiered scheduling** (Hot/Warm/Cold/Frozen) lets the system allocate
+incremental refresh budgets by importance. High-centrality entity pages refresh
+on Hot schedules; rarely-queried archive pages refresh on Cold schedules. This
+aligns incremental compilation cost with structural importance, echoing the
+PageRank-based cost-aware scheduling from §7.6.
+
+**Change buffer compaction** reduces propagation work by 50–90% through
+batching and deduplication of intermediate deltas, which matters when a large
+source produces hundreds of triples that all need to flow through the dependency
+graph.
+
+### 4.2 pgtrickle-relay: external system integration
+
+The [pgtrickle-relay](https://github.com/grove/pg-trickle/tree/main/pgtrickle-relay)
+is a standalone Rust CLI binary that bridges pg_trickle outbox and inbox tables
+with external messaging systems. It supports seven backends:
+
+| Backend | Forward (outbox→sink) | Reverse (source→inbox) |
+|---|---|---|
+| NATS JetStream | ✅ | ✅ |
+| Apache Kafka | ✅ | ✅ |
+| Redis Streams | ✅ | ✅ |
+| AWS SQS | ✅ | ✅ |
+| RabbitMQ | ✅ | ✅ |
+| HTTP webhook | ✅ | ✅ |
+| PostgreSQL inbox | ✅ | — |
+| stdout / file | ✅ | — |
+
+**All pipelines are configured via SQL** — no YAML files required:
+
+```sql
+-- Forward: publish compiled-knowledge change events to NATS
+SELECT pgtrickle.set_relay_outbox('knowledge-events',
+    config => '{"stream_table": "entity_updates",
+                "sink_type": "nats",
+                "nats_url": "nats://localhost:4222",
+                "subject_template": "riverbed.{stream_table}.{op}"}'::jsonb);
+
+-- Reverse: consume source documents from a Kafka topic
+SELECT pgtrickle.set_relay_inbox('source-ingest',
+    config => '{"source_type": "kafka",
+                "kafka_brokers": "localhost:9092",
+                "kafka_topic": "documents",
+                "inbox_table": "source_inbox"}'::jsonb);
+```
+
+**Hot reload:** config changes take effect without restart — the relay listens
+on the `pgtrickle_relay_config` PostgreSQL notification channel.
+
+**High availability:** multiple relay instances run against the same database
+with pipeline ownership distributed via PostgreSQL advisory locks — no external
+coordinator (ZooKeeper, etcd) required.
+
+This means many scenarios that would otherwise require custom Singer taps or
+connector code are already handled by the relay. Singer taps remain useful for
+SaaS-specific integrations (GitHub Issues, Slack, Jira) not covered by
+message-queue backends.
+
+### 4.3 What this means for the compilation pipeline
 
 With pg_trickle, the pipeline becomes:
 
@@ -152,6 +239,19 @@ With pg_trickle, the pipeline becomes:
 source changes -> recompile only affected fragments -> validate -> update graph
                -> refresh importance rankings (K-hop) -> publish semantic events
 ```
+
+pg_trickle provides the transactional guarantees that make this safe:
+
+- **Ingest** new source material from Kafka, NATS, HTTP, SQS, Redis Streams via
+  the relay's reverse mode into PostgreSQL inbox stream tables.
+- **Propagate changes** through derived views using Z-set differential dataflow,
+  updating only what actually changed.
+- **Publish outbound events** when compiled knowledge changes via the relay's
+  forward mode, so downstream agents and systems react immediately.
+- **Share transactions** with graph writes, validation, and messaging — all in
+  one PostgreSQL transaction, with no partial updates.
+- **Integrate with dbt** via the `stream_table` materialization — teams already
+  using dbt can define derived knowledge views in familiar SQL.
 
 That transforms the design from a batch re-indexer into a **build system for
 living knowledge**.
@@ -164,9 +264,10 @@ The compiler layer is a distinct concern from storage and transport.
 
 | Component | Responsibility |
 |---|---|
-| **pg_ripple** | Database truth: graph writes, validation, rules, provenance, queries |
+| **pg_ripple** | Database truth: graph writes, validation, rules, provenance, queries, entity resolution, uncertain knowledge, PageRank & centrality analytics |
 | **riverbed** | Long-running AI work: document fetching, chunking, LLM calls, structured output, retries |
-| **pg_trickle** | Event transport: inbound feeds, change propagation, outboxes, downstream delivery |
+| **pg_trickle** | Event transport: inbound feeds, change propagation, outboxes, downstream delivery, IMMEDIATE-mode transactional consistency |
+| **pgtrickle-relay** | External system bridge: forward mode (compiled knowledge→NATS/Kafka/Redis/SQS/RabbitMQ/webhooks), reverse mode (source feeds→inbox), HA via advisory locks |
 
 The product promise:
 
@@ -188,6 +289,8 @@ queryable, auditable, and operationally safe.
        |                  |                    |
        | direct load      | pg_trickle          | scheduled fetch
        |                  | reverse relay       |
+       |                  | (Kafka, NATS,       |
+       |                  |  Redis, SQS, …)     |
        v                  v                    v
   +---------------------------------------------------+
   |  Source registry and inbox tables                 |
@@ -218,11 +321,13 @@ queryable, auditable, and operationally safe.
              |                         |
              v                         v
   RUNTIME QUERY                  CHANGE OUTPUT
-  SPARQL, rag_context(),         pg_trickle outbox:
+  SPARQL, rag_context(),         pg_trickle outbox +
+  rag_retrieve(),                pgtrickle-relay:
   sparql_from_nl(),              entity.updated,
   GraphRAG summaries,            policy.contradiction.detected,
   agent navigation               summary.invalidated,
                                  source.needs_review
+                                 → NATS/Kafka/Redis/webhooks
 ```
 
 The **source registry** is the key enabler of incremental compilation. The

@@ -40,7 +40,9 @@
                                        │ source events
                               ┌────────▼────────┐
                               │   pg_trickle    │   inbox stream tables
-                              │   (existing)     │
+                              │   (existing)     │   + pgtrickle-relay for
+                              │                  │   Kafka, NATS, Redis, SQS,
+                              │                  │   RabbitMQ, webhooks
                               └────────┬────────┘
                                        │
 ┌──────────────────────────────────────▼───────────────────────────────────────┐
@@ -75,9 +77,11 @@
                                                                  │ outbox events
                                                 ┌────────────────▼────────────────┐
                                                 │     pg_trickle outbox            │
+                                                │  + pgtrickle-relay (Rust)        │
                                                 │  → review queue (Label Studio)  │
                                                 │  → downstream subscribers        │
                                                 │  → render service (Markdown)     │
+                                                │  → NATS / Kafka / Redis / SQS   │
                                                 └─────────────────────────────────┘
 
   ┌─────────────────────────────────┐         ┌─────────────────────────────────┐
@@ -105,8 +109,8 @@ All choices are open-source with permissive licences. Versions are minimum-suppo
 | OpenTelemetry | [opentelemetry-python](https://github.com/open-telemetry/opentelemetry-python) | Apache 2.0 | Phase 1 | Traces/metrics for the worker; exports to Langfuse and any OTLP collector |
 | Embeddings | [sentence-transformers](https://github.com/UKPLab/sentence-transformers) | Apache 2.0 | Phase 2 | CPU-friendly local embedding models (e.g., `all-MiniLM-L6-v2`, `bge-small-en-v1.5`); no API call required for vector indices |
 | Entity NER | [spaCy](https://github.com/explosion/spaCy) ≥ 3.8 | MIT | Phase 2 | Pre-resolves named entities before LLM extraction; reduces token usage and noise (the same pattern used in production by Kompl and others) |
-| Fuzzy matching | [RapidFuzz](https://github.com/rapidfuzz/RapidFuzz) | MIT | Phase 2 | Fast Rust-backed token-set ratio for entity resolution candidates |
-| Probabilistic entity matching | [dedupe](https://github.com/dedupeio/dedupe) | MIT | Phase 4 | Active-learning entity-matching trained on review corrections; closes the loop with §10.16 |
+| Fuzzy matching | [RapidFuzz](https://github.com/rapidfuzz/RapidFuzz) | MIT | Phase 2 | Fast Rust-backed token-set ratio for Python-side entity pre-resolution before DB writes. Note: pg-ripple provides `pg:fuzzy_match()` and `pg:token_set_ratio()` with a GIN trigram index directly in SPARQL (v0.87) — use the in-database functions for query-time matching and RapidFuzz only for pre-LLM entity context preparation |
+| Probabilistic entity matching | [dedupe](https://github.com/dedupeio/dedupe) | MIT | Phase 4 | Active-learning entity-matching trained on review corrections. Note: pg-ripple provides three in-database dedup methods — `suggest_sameas()` (vector-based, v0.49), `find_alignments()` (KGE cross-graph, v0.57), and `pagerank_find_duplicates()` (centrality-guided, v0.88) — which handle most scenarios without a Python dependency. Use dedupe only when active-learning from Label Studio corrections requires a Python-native training loop |
 | Source connectors | [Singer SDK](https://github.com/meltano/sdk) (Meltano) | Apache 2.0 | Phase 2 | 600+ existing taps with a uniform output schema; lighter than Airbyte for self-hosting |
 | Human review | [Label Studio](https://github.com/HumanSignal/label-studio) ≥ 1.13 | Apache 2.0 | Phase 3 | Pre-labeling, span annotation, ensemble arbitration, webhook-driven correction loop |
 | Hybrid text search | [pg_search / ParadeDB](https://github.com/paradedb/paradedb) | AGPL/PostgreSQL | Phase 3 | Tantivy BM25 inside PostgreSQL for keyword search over compiled artifacts. Optional — `tsvector` is sufficient for small corpora |
@@ -170,8 +174,9 @@ Dependencies on sibling projects:
 
 | Dependency | Role in riverbed |
 |---|---|
-| **pg-ripple** | Graph storage, SPARQL, SHACL validation, Datalog inference, provenance, pgvector |
-| **pg-trickle** | Inbound stream tables, differential change propagation, outbox event delivery |
+| **pg-ripple** | Graph storage, SPARQL, SHACL validation, Datalog inference, provenance, pgvector, fuzzy matching (`pg:fuzzy_match`, `pg:token_set_ratio`), entity resolution (`suggest_sameas`, `find_alignments`, `pagerank_find_duplicates`), JSON↔RDF mapping registry, CONSTRUCT writeback rules, CDC bridge triggers, bidirectional integration (conflict policies, outbox/inbox), SPARQL live subscriptions (SSE), uncertain knowledge engine, PageRank & centrality analytics |
+| **pg-trickle** | Inbound stream tables (with IMMEDIATE mode for transactional consistency), differential change propagation, outbox event delivery, tiered scheduling, watermark gating, change buffer compaction, dbt integration |
+| **pgtrickle-relay** | External system integration: forward mode (outbox→NATS/Kafka/Redis/SQS/RabbitMQ/webhooks), reverse mode (external→inbox), SQL-configured pipelines, hot reload, HA via advisory locks |
 
 ---
 
@@ -367,7 +372,7 @@ Goal: a runnable empty pipeline with all the scaffolding in place.
 3. Catalog schema migrations (Alembic) for the §4.1 tables.
 4. CI workflow that runs `pytest` against an ephemeral PostgreSQL with pg_ripple installed (via `testcontainers-python`).
 5. A no-op extractor that records a run, emits a span, and writes nothing to the graph — verifying the orchestration plumbing end-to-end.
-6. `docker compose up` brings up: PostgreSQL with pg_ripple, the worker, Prefect server, and Langfuse. All four services are reachable on `localhost`.
+6. `docker compose up` brings up: PostgreSQL with pg_ripple and pg_trickle, the pgtrickle-relay, the worker, Prefect server, and Langfuse. All services are reachable on `localhost`.
 
 ### Acceptance
 
@@ -466,7 +471,8 @@ Fragment ─▶ editorial policy score ─▶ if below threshold: insert into _r
 
 | Service | Image | Ports |
 |---|---|---|
-| postgres | `postgres:18` with pg_ripple installed | 5432 |
+| postgres | `postgres:18` with pg_ripple and pg_trickle installed | 5432 |
+| pgtrickle-relay | `ghcr.io/grove/pgtrickle-relay:0.29.0` | 9090 (metrics) |
 | worker | `riverbed:latest` | — |
 | prefect | `prefecthq/prefect:3.6` | 4200 |
 | langfuse-web | `langfuse/langfuse:3` | 3000 |
@@ -497,9 +503,9 @@ Goal: prove that the system rebuilds *only* what changed when a source updates.
 3. **Recompile flow.** When a source updates: identify changed fragments → identify dependent artifacts → invalidate them → re-extract changed fragments → re-derive dependent artifacts → emit semantic diff event.
 4. **Docling integration.** PDF, DOCX, PPTX, HTML, and image OCR. The `Docling` parser becomes the default for non-Markdown sources.
 5. **spaCy NER pre-resolution.** Named entities are extracted before the LLM call and passed as a structured context block. The Instructor schema can reference pre-resolved entity IRIs, reducing both token usage and entity-confusion errors.
-6. **Fuzzy entity matching.** `RapidFuzz` token-set ratio plus pg_ripple's GIN trigram index produces candidate `owl:sameAs` edges with confidence scores. Above-threshold matches are written automatically; borderline matches are flagged for Phase 3 review.
+6. **Fuzzy entity matching.** pg-ripple provides `pg:fuzzy_match()` and `pg:token_set_ratio()` directly in SPARQL (v0.87), backed by a GIN trigram index on `_pg_ripple.confidence`. These produce candidate `owl:sameAs` edges with confidence scores without leaving the database. For Python-side pre-resolution before LLM calls, `RapidFuzz` token-set ratio provides the same matching in the extraction pipeline. Above-threshold matches are written automatically; borderline matches are flagged for Phase 3 review. Additionally, pg-ripple's `suggest_sameas()` (v0.49) provides vector-based entity candidates and `pagerank_find_duplicates()` (v0.88) provides centrality-guided entity deduplication.
 7. **Embedding generation.** Sentence-transformers locally produce embeddings for each compiled summary. Embeddings are written to a pgvector column on the entity-page artifact.
-8. **Singer-tap connector.** A `singer` connector wraps any Singer tap; the MVP includes `tap-github` for issues and `tap-slack-search` for channel exports.
+8. **Singer-tap connector.** A `singer` connector wraps any Singer tap; the MVP includes `tap-github` for issues and `tap-slack-search` for channel exports. Note: for message-queue sources (Kafka, NATS, Redis Streams, SQS, RabbitMQ), pgtrickle-relay's reverse mode is the preferred ingest path — it writes directly to pg-trickle inbox tables with no Python code required. Singer taps remain the best choice for SaaS-specific integrations not covered by relay backends.
 
 ### Acceptance
 
@@ -624,6 +630,7 @@ For organisational deployments: the Helm chart from Phase 4. Components:
 |---|---|---|
 | pg_ripple (PostgreSQL with extension) | 1 primary + 2 replicas | CloudNativePG operator recommended |
 | pg_ripple_http | 2+ | Existing companion |
+| pgtrickle-relay | 2+ | HA via advisory locks; no external coordinator needed |
 | riverbed worker | 3+ | Horizontal autoscaling on queue depth |
 | Prefect server | 1 | State in PostgreSQL |
 | Langfuse web + worker | 2 + 1 | Requires PostgreSQL (shared) and ClickHouse for traces |
@@ -689,6 +696,19 @@ jira = "my_company.riverbed_jira:JiraConnector"
 ```
 
 `pip install my-company-riverbed-jira` and the connector is available — no fork of riverbed required.
+
+**Alternative: pgtrickle-relay for message-queue sources.** If the source system publishes to Kafka, NATS, Redis Streams, SQS, or RabbitMQ, configure a relay reverse pipeline via SQL instead of writing a Python connector:
+
+```sql
+SELECT pgtrickle.set_relay_inbox('jira-events',
+    config => '{"source_type": "kafka",
+                "kafka_brokers": "localhost:9092",
+                "kafka_topic": "jira-changes",
+                "inbox_table": "source_inbox"}'::jsonb);
+SELECT pgtrickle.enable_relay('jira-events');
+```
+
+The relay writes directly to a pg-trickle inbox stream table. A riverbed flow watches the inbox and triggers compilation. No Python connector code is required.
 
 ### 15.2 Adding a new compiler profile
 
