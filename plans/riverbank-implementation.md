@@ -2,7 +2,7 @@
 
 > **Date:** 2026-05-03  
 > **Status:** Implementation plan — companion to [riverbank.md](riverbank.md)  
-> **Scope:** Engineering blueprint for riverbank — a standalone project built on top of [pg-ripple](https://github.com/trickle-labs/pg-ripple) and [pg-trickle](https://github.com/trickle-labs/pg-trickle), from MVP through production hardening  
+> **Scope:** Engineering blueprint for riverbank — a standalone project built on top of [pg-ripple](https://github.com/trickle-labs/pg-ripple), [pg-trickle](https://github.com/trickle-labs/pg-trickle), and [pg-tide](https://github.com/trickle-labs/pg-tide), from MVP through production hardening  
 > **Constraint:** Open-source software only (permissive licences preferred: MIT, Apache 2.0, BSD)
 
 ---
@@ -41,7 +41,7 @@
                                        │ source events
                               ┌────────▼────────┐
                               │   pg_trickle    │   inbox stream tables
-                              │   (existing)     │   + pgtrickle-relay for
+                              │   (existing)     │   + pg-tide for
                               │                  │   Kafka, NATS, Redis, SQS,
                               │                  │   RabbitMQ, webhooks, Singer
                               └────────┬────────┘
@@ -78,7 +78,7 @@
                                                                  │ outbox events
                                                 ┌────────────────▼────────────────┐
                                                 │     pg_trickle outbox            │
-                                                │  + pgtrickle-relay (Rust)        │
+                                                │  + pg-tide (Rust)                │
                                                 │  → review queue (Label Studio)  │
                                                 │  → downstream subscribers        │
                                                 │  → render service (Markdown)     │
@@ -114,8 +114,9 @@ All choices are open-source with permissive licences. Versions are minimum-suppo
 | Probabilistic entity matching | [dedupe](https://github.com/dedupeio/dedupe) | MIT | Phase 4 | Active-learning entity-matching trained on review corrections. Note: pg-ripple provides three in-database dedup methods — `suggest_sameas()` (vector-based, v0.49), `find_alignments()` (KGE cross-graph, v0.57), and `pagerank_find_duplicates()` (centrality-guided, v0.88) — which handle most scenarios without a Python dependency. Use dedupe only when active-learning from Label Studio corrections requires a Python-native training loop |
 | Source connectors | [Singer SDK](https://github.com/meltano/sdk) (Meltano) | Apache 2.0 | Phase 2 | 600+ existing taps with a uniform output schema; lighter than Airbyte for self-hosting |
 | Human review | [Label Studio](https://github.com/HumanSignal/label-studio) ≥ 1.13 | Apache 2.0 | Phase 3 | Pre-labeling, span annotation, ensemble arbitration, webhook-driven correction loop |
-| Hybrid text search | PostgreSQL `tsvector` (built-in) | PostgreSQL (BSD) | Phase 1 | GIN-indexed full-text search over compiled artifact text. Sufficient for most corpora; pg-ripple's GIN trigram index provides fuzzy matching on top. No additional dependency required |
-| Vector search | pgvector (already in pg_ripple) | PostgreSQL | Phase 1 | Embeddings co-located with compiled artifacts |
+| BM25 text search | PostgreSQL `tsvector` + `ts_rank_cd` (built-in) | PostgreSQL (BSD) | Phase 1 | GIN-indexed full-text search with BM25-style ranking over compiled artifact text. `ts_rank_cd` applies cover-density weighting. pg-ripple's GIN trigram index adds fuzzy-match on top. No additional dependency required |
+| Vector search | pgvector (already in pg_ripple) | PostgreSQL | Phase 1 | Cosine-similarity search over compiled artifact embeddings; co-located with structured facts |
+| Hybrid search fusion | RRF SQL function (in-repo) | — | Phase 2 | Reciprocal rank fusion (`Σ 1/(60 + rank_i)`) combines BM25, vector, and graph-traversal result sets. Implemented as a small SQL helper — no external dependency, no tuning parameters. Scores from each stream are normalised before fusion so relative ranking order, not raw score magnitude, determines the final result |
 | Container packaging | Docker / Compose | Apache 2.0 | Phase 0 | Standard. Single Dockerfile per worker variant |
 | Kubernetes packaging | Helm chart | Apache 2.0 | Phase 4 | Production deployments. Built on the existing pg_ripple chart |
 | Metrics & dashboards | [Prometheus](https://github.com/prometheus/prometheus) + [Perses](https://github.com/perses/perses) | Apache 2.0 | Phase 4 | Compiler run rates, cost trends, queue depth, SHACL score over time. Perses is a CNCF Apache 2.0 dashboard tool designed for Prometheus |
@@ -177,7 +178,7 @@ Dependencies on sibling projects:
 |---|---|
 | **pg-ripple** | Graph storage, SPARQL, SHACL validation, Datalog inference, provenance, pgvector, fuzzy matching (`pg:fuzzy_match`, `pg:token_set_ratio`), entity resolution (`suggest_sameas`, `find_alignments`, `pagerank_find_duplicates`), JSON↔RDF mapping registry, CONSTRUCT writeback rules, CDC bridge triggers, bidirectional integration (conflict policies, outbox/inbox), SPARQL live subscriptions (SSE), uncertain knowledge engine, PageRank & centrality analytics |
 | **pg-trickle** | Inbound stream tables (with IMMEDIATE mode for transactional consistency), differential change propagation, outbox event delivery, tiered scheduling, watermark gating, change buffer compaction, dbt integration |
-| **pgtrickle-relay** | External system integration: forward mode (outbox→NATS/Kafka/Redis/SQS/RabbitMQ/webhooks), reverse mode (external→inbox), Singer target mode (Singer taps→inbox via standard Singer protocol), SQL-configured pipelines, hot reload, HA via advisory locks |
+| **pg-tide** | External system integration: forward mode (outbox→NATS/Kafka/Redis/SQS/RabbitMQ/webhooks), reverse mode (external→inbox), Singer target mode (Singer taps→inbox via standard Singer protocol), SQL-configured pipelines, hot reload, HA via advisory locks |
 
 ---
 
@@ -373,7 +374,7 @@ Goal: a runnable empty pipeline with all the scaffolding in place.
 3. Catalog schema migrations (Alembic) for the §4.1 tables.
 4. CI workflow that runs `pytest` against an ephemeral PostgreSQL with pg_ripple installed (via `testcontainers-python`).
 5. A no-op extractor that records a run, emits a span, and writes nothing to the graph — verifying the orchestration plumbing end-to-end.
-6. `docker compose up` brings up: PostgreSQL with pg_ripple and pg_trickle, the pgtrickle-relay, the worker, Prefect server, and Langfuse. All services are reachable on `localhost`.
+6. `docker compose up` brings up: PostgreSQL with pg_ripple and pg_trickle, pg-tide, the worker, Prefect server, and Langfuse. All services are reachable on `localhost`.
 
 ### Acceptance
 
@@ -473,7 +474,7 @@ Fragment ─▶ editorial policy score ─▶ if below threshold: insert into _r
 | Service | Image | Ports |
 |---|---|---|
 | postgres | `postgres:18` with pg_ripple and pg_trickle installed | 5432 |
-| pgtrickle-relay | `ghcr.io/grove/pgtrickle-relay:0.29.0` | 9090 (metrics) |
+| pg-tide | `ghcr.io/trickle-labs/pg-tide:latest` | 9090 (metrics) |
 | worker | `riverbank:latest` | — |
 | prefect | `prefecthq/prefect:3.6` | 4200 |
 | langfuse-web | `langfuse/langfuse:3` | 3000 |
@@ -506,15 +507,15 @@ Goal: prove that the system rebuilds *only* what changed when a source updates.
 5. **spaCy NER pre-resolution.** Named entities are extracted before the LLM call and passed as a structured context block. The Instructor schema can reference pre-resolved entity IRIs, reducing both token usage and entity-confusion errors.
 6. **Fuzzy entity matching.** pg-ripple provides `pg:fuzzy_match()` and `pg:token_set_ratio()` directly in SPARQL (v0.87), backed by a GIN trigram index on `_pg_ripple.confidence`. These produce candidate `owl:sameAs` edges with confidence scores without leaving the database. For Python-side pre-resolution before LLM calls, `RapidFuzz` token-set ratio provides the same matching in the extraction pipeline. Above-threshold matches are written automatically; borderline matches are flagged for Phase 3 review. Additionally, pg-ripple's `suggest_sameas()` (v0.49) provides vector-based entity candidates and `pagerank_find_duplicates()` (v0.88) provides centrality-guided entity deduplication.
 7. **Embedding generation.** Sentence-transformers locally produce embeddings for each compiled summary. Embeddings are written to a pgvector column on the entity-page artifact.
-8. **Singer-tap connector.** A `singer` connector wraps any Singer tap; the MVP includes `tap-github` for issues and `tap-slack-search` for channel exports. Alternatively, configure pgtrickle-relay as a Singer target:
+8. **Singer-tap connector.** A `singer` connector wraps any Singer tap; the MVP includes `tap-github` for issues and `tap-slack-search` for channel exports. Alternatively, configure pg-tide as a Singer target:
 
 ```bash
 # In a Meltano project or standalone
-tap-github | pgtrickle-relay --target singer --config relay-singer-config.json
-# The relay writes RECORD messages directly to the pg-trickle inbox table
+tap-github | pg-tide --target singer --config tide-singer-config.json
+# pg-tide writes RECORD messages directly to the pg-trickle inbox table
 ```
 
-This bypasses the Python connector wrapper entirely. For SaaS-specific integrations not covered by relay backends, the Python wrapper remains the best choice; for standard Singer taps, piping directly to the relay target is simpler.
+This bypasses the Python connector wrapper entirely. For SaaS-specific integrations not covered by tide backends, the Python wrapper remains the best choice; for standard Singer taps, piping directly to the pg-tide target is simpler.
 
 ### Acceptance
 
@@ -639,7 +640,7 @@ For organisational deployments: the Helm chart from Phase 4. Components:
 |---|---|---|
 | pg_ripple (PostgreSQL with extension) | 1 primary + 2 replicas | CloudNativePG operator recommended |
 | pg_ripple_http | 2+ | Existing companion |
-| pgtrickle-relay | 2+ | HA via advisory locks; no external coordinator needed |
+| pg-tide | 2+ | HA via advisory locks; no external coordinator needed |
 | riverbank worker | 3+ | Horizontal autoscaling on queue depth |
 | Prefect server | 1 | State in PostgreSQL |
 | Langfuse web + worker | 2 + 1 | Requires PostgreSQL (shared) and ClickHouse for traces |
@@ -705,26 +706,26 @@ jira = "my_company.riverbank_jira:JiraConnector"
 
 `pip install my-company-riverbank-jira` and the connector is available — no fork of riverbank required.
 
-**Alternative 1: pgtrickle-relay for message-queue sources.** If the source system publishes to Kafka, NATS, Redis Streams, SQS, or RabbitMQ, configure a relay reverse pipeline via SQL instead of writing a Python connector:
+**Alternative 1: pg-tide for message-queue sources.** If the source system publishes to Kafka, NATS, Redis Streams, SQS, or RabbitMQ, configure a pg-tide reverse pipeline via SQL instead of writing a Python connector:
 
 ```sql
-SELECT pgtrickle.set_relay_inbox('jira-events',
+SELECT pgtide.set_inbox('jira-events',
     config => '{"source_type": "kafka",
                 "kafka_brokers": "localhost:9092",
                 "kafka_topic": "jira-changes",
                 "inbox_table": "source_inbox"}'::jsonb);
-SELECT pgtrickle.enable_relay('jira-events');
+SELECT pgtide.enable('jira-events');
 ```
 
-The relay writes directly to a pg-trickle inbox stream table. A riverbank flow watches the inbox and triggers compilation. No Python connector code is required.
+The pg-tide binary writes directly to a pg-trickle inbox stream table. A riverbank flow watches the inbox and triggers compilation. No Python connector code is required.
 
-**Alternative 2: pgtrickle-relay as a Singer target.** If a Singer tap already exists (e.g., `tap-jira` from Meltano Hub), pipe it directly to pgtrickle-relay as a Singer target instead of writing a Python wrapper:
+**Alternative 2: pg-tide as a Singer target.** If a Singer tap already exists (e.g., `tap-jira` from Meltano Hub), pipe it directly to pg-tide as a Singer target instead of writing a Python wrapper:
 
 ```bash
-tap-jira --config jira-config.json | pgtrickle-relay --target singer --config relay-singer.json
+tap-jira --config jira-config.json | pg-tide --target singer --config tide-singer.json
 ```
 
-The relay ingests the Singer protocol RECORD messages and writes directly to the pg-trickle inbox table. Ideal for leveraging existing Meltano taps without additional Python code.
+The pg-tide binary ingests the Singer protocol RECORD messages and writes directly to the pg-trickle inbox table. Ideal for leveraging existing Meltano taps without additional Python code.
 
 ### 15.2 Adding a new compiler profile
 

@@ -4,7 +4,7 @@
 > **Status:** Strategy document — not a committed roadmap item  
 > **Project:** [riverbank](https://github.com/trickle-labs/riverbank) — standalone, builds on [pg-ripple](https://github.com/trickle-labs/pg-ripple) and [pg-trickle](https://github.com/trickle-labs/pg-trickle)  
 > **Inspiration:** [Karpathy's LLM Wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) · [companion blog post](https://www.mindstudio.ai/blog/karpathy-llm-knowledge-base-architecture-compiler-analogy)  
-> **Related plans:** [GraphRAG synergy](graphrag.md) · [pg-trickle relay](pg_trickle_relay_integration.md) · [future directions](future-directions.md) · [ROADMAP](../ROADMAP.md)
+> **Related plans:** [GraphRAG synergy](graphrag.md) · [pg-tide](pg_trickle_relay_integration.md) · [future directions](future-directions.md) · [ROADMAP](../ROADMAP.md)
 
 ---
 
@@ -129,7 +129,7 @@ pg_ripple already covers most of what a compiled knowledge base needs.
 | Bidirectional integration | Conflict policies (`source_priority`, `latest_wins`, `reject_on_conflict`, `union`), outbox/inbox wiring, dead-letter queue, reconciliation toolkit (v0.77–v0.78) — enables the human correction loop to flow back into the graph with conflict resolution |
 | Live subscriptions | SPARQL live subscriptions via SSE for real-time downstream notification (v0.73) |
 | Prioritize human review | Centrality × confidence review queue — maximum leverage per review hour |
-| Stream knowledge changes | CDC subscriptions and JSON-LD event output; CDC bridge triggers for pg-trickle relay integration (v0.52) |
+| Stream knowledge changes | CDC subscriptions and JSON-LD event output; CDC bridge triggers for pg-tide integration (v0.52) |
 | Vocabulary alignment | Built-in Datalog rule templates for cross-domain ontology mapping: Schema.org↔SAREF, Schema.org↔FHIR, Schema.org↔PROV-O, generic-JSON↔Schema.org (v0.52) |
 | Multi-tenant isolation | Per-tenant named graphs with RLS, quota enforcement, tenant lifecycle API (v0.57) |
 | Privacy and compliance | `erase_subject()` GDPR right-to-erasure across all tables (v0.61); per-graph access control and RLS policies |
@@ -184,10 +184,10 @@ batching and deduplication of intermediate deltas, which matters when a large
 source produces hundreds of triples that all need to flow through the dependency
 graph.
 
-### 4.2 pgtrickle-relay: external system integration
+### 4.2 pg-tide: external system integration
 
-The [pgtrickle-relay](https://github.com/grove/pg-trickle/tree/main/pgtrickle-relay)
-is a standalone Rust CLI binary that bridges pg_trickle outbox and inbox tables
+[pg-tide](https://github.com/trickle-labs/pg-tide)
+is a standalone Rust CLI binary (extracted from pg-trickle as of v0.46.0) that bridges pg_trickle outbox and inbox tables
 with external messaging systems. It supports seven backends:
 
 | Backend | Forward (outbox→sink) | Reverse (source→inbox) |
@@ -205,22 +205,22 @@ with external messaging systems. It supports seven backends:
 
 ```sql
 -- Forward: publish compiled-knowledge change events to NATS
-SELECT pgtrickle.set_relay_outbox('knowledge-events',
+SELECT pgtide.set_outbox('knowledge-events',
     config => '{"stream_table": "entity_updates",
                 "sink_type": "nats",
                 "nats_url": "nats://localhost:4222",
                 "subject_template": "riverbank.{stream_table}.{op}"}'::jsonb);
 
 -- Reverse: consume source documents from a Kafka topic
-SELECT pgtrickle.set_relay_inbox('source-ingest',
+SELECT pgtide.set_inbox('source-ingest',
     config => '{"source_type": "kafka",
                 "kafka_brokers": "localhost:9092",
                 "kafka_topic": "documents",
                 "inbox_table": "source_inbox"}'::jsonb);
 ```
 
-**Hot reload:** config changes take effect without restart — the relay listens
-on the `pgtrickle_relay_config` PostgreSQL notification channel.
+**Hot reload:** config changes take effect without restart — pg-tide listens
+on the `pgtide_config` PostgreSQL notification channel.
 
 **High availability:** multiple relay instances run against the same database
 with pipeline ownership distributed via PostgreSQL advisory locks — no external
@@ -267,7 +267,7 @@ The compiler layer is a distinct concern from storage and transport.
 | **pg_ripple** | Database truth: graph writes, validation, rules, provenance, queries, entity resolution, uncertain knowledge, PageRank & centrality analytics |
 | **riverbank** | Long-running AI work: document fetching, chunking, LLM calls, structured output, retries |
 | **pg_trickle** | Event transport: inbound feeds, change propagation, outboxes, downstream delivery, IMMEDIATE-mode transactional consistency |
-| **pgtrickle-relay** | External system bridge: forward mode (compiled knowledge→NATS/Kafka/Redis/SQS/RabbitMQ/webhooks), reverse mode (external feeds→inbox), Singer target mode (Singer taps→inbox), HA via advisory locks |
+| **pg-tide** | External system bridge: forward mode (compiled knowledge→NATS/Kafka/Redis/SQS/RabbitMQ/webhooks), reverse mode (external feeds→inbox), Singer target mode (Singer taps→inbox), HA via advisory locks |
 
 The product promise:
 
@@ -322,7 +322,7 @@ queryable, auditable, and operationally safe.
              v                         v
   RUNTIME QUERY                  CHANGE OUTPUT
   SPARQL, rag_context(),         pg_trickle outbox +
-  rag_retrieve(),                pgtrickle-relay:
+  rag_retrieve(),                pg-tide:
   sparql_from_nl(),              entity.updated,
   GraphRAG summaries,            policy.contradiction.detected,
   agent navigation               summary.invalidated,
@@ -724,12 +724,33 @@ evidence. `pg:topN_approx()` returns approximate top-K entities sub-millisecond
 for interactive sensemaking queries. Topic-sensitive scoring ensures the ranking
 reflects the agent's domain, not a global average.
 
-### 9.3 Hybrid fallback
+### 9.3 Hybrid search
 
-Vector search remains useful but should search over cleaner artifacts —
-summaries, entity descriptions, evidence spans, generated Q&A — rather than raw
-chunks. When a vector search finds something relevant, it returns graph artifact
-identifiers that resolve to structured facts, provenance, and confidence.
+No single retrieval mechanism is sufficient at scale. Three streams run in
+parallel and their results are fused:
+
+| Stream | Mechanism | Catches |
+|---|---|---|
+| **BM25** | PostgreSQL `tsvector` + `ts_rank_cd` with synonym expansion | Exact terms, product names, identifiers, quoted phrases |
+| **Vector** | pgvector cosine similarity over compiled artifact embeddings | Semantic similarity, paraphrase, cross-language equivalences |
+| **Graph traversal** | SPARQL property-path walk from seed entities outward through typed relationship edges | Structural connections, multi-hop dependencies, impact radius |
+
+Results from all three streams are combined using **reciprocal rank fusion
+(RRF)**: each document's score is `Σ 1/(k + rank_i)` where `k = 60` (the
+standard constant) and `rank_i` is its position in each stream's ranked list.
+Documents not retrieved by a stream contribute zero. RRF is implemented as a
+small SQL function — no additional dependency, no tuning parameters.
+
+The three streams are complementary by design. BM25 finds "Redis" when the user
+asks about Redis. Vectors find Redis-related content when the user asks about
+"caching layer" without using the word. Graph traversal finds everything that
+*depends on* the Redis node — services, deployment configs, runbooks, ADRs —
+that neither keyword nor vector search would surface.
+
+Search targets are compiled artifacts — summaries, entity descriptions, evidence
+spans, generated Q&A pairs — not raw source chunks. This matters: a chunk can
+lose context; a compiled artifact has provenance, confidence, and graph edges
+already attached.
 
 `pg:fuzzy_match(a, b)` and `pg:token_set_ratio(a, b)`, backed by a GIN trigram
 index, enable fuzzy entity-name matching so a query for "SSO" finds
@@ -737,6 +758,11 @@ index, enable fuzzy entity-name matching so a query for "SSO" finds
 `pg:confPath(predicate, min_confidence)` traverses the compiled graph along
 confidence-gated paths, preventing low-confidence edges from contaminating
 multi-hop reasoning chains fed to the LLM.
+
+The index.md catalog (§8.7 coverage map) remains useful as a human-readable
+entity directory but is not the primary runtime search mechanism. Past roughly
+200 entity pages the index is too large for a single-pass LLM read; the
+three-stream + RRF layer handles scale without that constraint.
 
 ### 9.4 Counterfactual and explanatory queries
 
