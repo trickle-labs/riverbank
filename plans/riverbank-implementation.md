@@ -178,8 +178,8 @@ Dependencies on sibling projects:
 | Dependency | Role in riverbank |
 |---|---|
 | **pg-ripple** | Graph storage, SPARQL, SHACL validation, Datalog inference, provenance, pgvector, fuzzy matching (`pg:fuzzy_match`, `pg:token_set_ratio`), entity resolution (`suggest_sameas`, `find_alignments`, `pagerank_find_duplicates`), JSON↔RDF mapping registry, CONSTRUCT writeback rules, CDC bridge triggers, bidirectional integration (conflict policies, outbox/inbox), SPARQL live subscriptions (SSE), uncertain knowledge engine, PageRank & centrality analytics |
-| **pg-trickle** | Inbound stream tables (with IMMEDIATE mode for transactional consistency), differential change propagation, outbox event delivery, tiered scheduling, watermark gating, change buffer compaction, dbt integration |
-| **pg-tide** | External system integration: forward mode (outbox→NATS/Kafka/Redis/SQS/RabbitMQ/webhooks), reverse mode (external→inbox), Singer target mode (Singer taps→inbox via standard Singer protocol), SQL-configured pipelines, hot reload, HA via advisory locks |
+| **pg-trickle** | Incremental view maintenance (IVM-only since v0.46.0): inbound stream tables, IMMEDIATE mode for transactional consistency, differential change propagation, tiered scheduling, watermark gating, change buffer compaction, dbt integration, pgVector incremental aggregates (`avg(embedding)::vector` / `sum(embedding)` maintained without full scans), W3C trace propagation through CDC→DVM pipeline, `attach_outbox()` integration point with pg-tide |
+| **pg-tide** | External system integration (v0.6.0+): forward mode (outbox→15 backends: NATS, Kafka, Redis, SQS, RabbitMQ, webhooks, PG inbox, GCP Pub/Sub, Kinesis, Azure Service Bus, Elasticsearch/OpenSearch, MQTT, Azure Event Hubs, Object Storage S3/GCS/Azure), reverse mode (external→inbox), Singer target mode, SQL-configured pipelines via `tide.relay_outbox_config` / `tide.relay_inbox_config`, hot reload via NOTIFY on `tide_relay_config`, secret interpolation (`${env:VAR}`, `${file:/path}`), HA via advisory locks |
 
 ---
 
@@ -385,7 +385,10 @@ docker compose up -d
 riverbank health   # → "all systems nominal"
 ```
 
-No LLM call is made yet. This phase exists to prove the deployment story.
+`riverbank health` calls `pgtrickle.preflight()` (7 system checks: scheduler,
+worker budget, WAL level, replication slots, shared_preload_libraries) and
+`pg_ripple.pg_tide_available()` to verify the full extension stack is wired
+correctly before any ingest attempt.
 
 ---
 
@@ -474,8 +477,8 @@ Fragment ─▶ editorial policy score ─▶ if below threshold: insert into _r
 
 | Service | Image | Ports |
 |---|---|---|
-| postgres | `postgres:18` with pg_ripple and pg_trickle installed | 5432 |
-| pg-tide | `ghcr.io/trickle-labs/pg-tide:latest` | 9090 (metrics) |
+| postgres | `postgres:18` with pg_ripple ≥ 0.93.0 and pg_trickle ≥ 0.46.0 installed | 5432 |
+| pg-tide | `ghcr.io/trickle-labs/pg-tide:v0.6.0` | 9090 (metrics) |
 | worker | `riverbank:latest` | — |
 | langfuse-web | `langfuse/langfuse:3` | 3000 |
 | langfuse-worker | `langfuse/langfuse-worker:3` | — |
@@ -508,7 +511,7 @@ Goal: prove that the system rebuilds *only* what changed when a source updates.
 4. **Docling integration.** PDF, DOCX, PPTX, HTML, and image OCR. The `Docling` parser becomes the default for non-Markdown sources.
 5. **spaCy NER pre-resolution.** Named entities are extracted before the LLM call and passed as a structured context block. The Instructor schema can reference pre-resolved entity IRIs, reducing both token usage and entity-confusion errors.
 6. **Fuzzy entity matching.** pg-ripple provides `pg:fuzzy_match()` and `pg:token_set_ratio()` directly in SPARQL (v0.87), backed by a GIN trigram index on `_pg_ripple.confidence`. These produce candidate `owl:sameAs` edges with confidence scores without leaving the database. For Python-side pre-resolution before LLM calls, `RapidFuzz` token-set ratio provides the same matching in the extraction pipeline. Above-threshold matches are written automatically; borderline matches are flagged for Phase 3 review. Additionally, pg-ripple's `suggest_sameas()` (v0.49) provides vector-based entity candidates and `pagerank_find_duplicates()` (v0.88) provides centrality-guided entity deduplication.
-7. **Embedding generation.** Sentence-transformers locally produce embeddings for each compiled summary. Embeddings are written to a pgvector column on the entity-page artifact.
+7. **Embedding generation.** Sentence-transformers locally produce embeddings for each compiled summary. Embeddings are written to a pgvector column on the entity-page artifact. Topic-cluster centroid views are maintained as `avg(embedding)::vector` stream tables via pg-trickle's native pgVector IVM (v0.37+): the centroid updates incrementally when a new fact arrives without a full scan, giving `rag_retrieve()` a sub-millisecond starting point for entity-cluster lookup before fetching individual facts.
 8. **Singer-tap connector.** A `singer` connector wraps any Singer tap; the MVP includes `tap-github` for issues and `tap-slack-search` for channel exports. Alternatively, configure pg-tide as a Singer target:
 
 ```bash

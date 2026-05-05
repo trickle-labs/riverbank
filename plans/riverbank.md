@@ -133,6 +133,12 @@ pg_ripple already covers most of what a compiled knowledge base needs.
 | Vocabulary alignment | Built-in Datalog rule templates for cross-domain ontology mapping: Schema.org↔SAREF, Schema.org↔FHIR, Schema.org↔PROV-O, generic-JSON↔Schema.org (v0.52) |
 | Multi-tenant isolation | Per-tenant named graphs with RLS, quota enforcement, tenant lifecycle API (v0.57) |
 | Privacy and compliance | `erase_subject()` GDPR right-to-erasure across all tables (v0.61); per-graph access control and RLS policies |
+| JSONB PageRank explanation | `explain_pagerank_json(node_iri, top_k)` — machine-readable JSONB explanation tree; complements `explain_pagerank()` for programmatic consumption and API integration (v0.91) |
+| SHACL score history management | `vacuum_shacl_score_log()` removes entries older than `pg_ripple.shacl_score_log_retention_days` (default 30 days); keeps quality-trend history bounded in long-running deployments (v0.91) |
+| Implicit SPARQL `pg:` prefix | `pg:` prefix auto-declared in `sparql()` and `sparql_ask()` when used without an explicit `PREFIX` declaration — no boilerplate needed in riverbank SPARQL queries (v0.91) |
+| Concurrent PageRank safety | Per-topic advisory lock on `pagerank_run()`; `pagerank_partition` defaults to `true`, auto-tuning across CPUs and named-graph count — safe for parallel compilation workers without external coordination (v0.90–v0.92) |
+| Parallel-safe fuzzy matching | `pg:fuzzy_match()` and `pg:token_set_ratio()` reclassified `STABLE parallel_safe` — usable in parallel query plans and views without function-volatility barriers (v0.92) |
+| Detect pg_tide availability | `pg_ripple.pg_tide_available()` runtime detection; relay API calls emit a `PGTIDE_HINT` diagnostic when pg_tide is not installed — supports `riverbank health` integration check (v0.93) |
 
 The missing product layer is the step that takes raw human-readable sources and
 reliably turns them into that compiled artifact. That is `riverbank`.
@@ -143,6 +149,45 @@ reliably turns them into that compiled artifact. That is `riverbank`.
 
 The article treats incremental compilation as a hard problem. pg_trickle gives
 us a practical solution.
+
+**Architecture note (v0.46.0).** pg_trickle is now IVM-only. The full
+transactional outbox, inbox, and relay subsystem was extracted to the standalone
+`pg_tide` extension. The only remaining integration point is
+`pgtrickle.attach_outbox(stream_table)`, which registers a pg_tide outbox for
+a stream table so that every non-empty IVM refresh delivers a delta-summary
+event inside the same transaction — preserving the ADR-001/ADR-002
+single-transaction atomicity guarantee.
+
+**New capabilities since the plans were last updated:**
+
+- **pgVector incremental aggregates (v0.37).** Stream tables can maintain
+  `avg(embedding)::vector` and `sum(embedding)` over `vector`, `halfvec`, and
+  `sparsevec` columns incrementally, with no full scan on INSERT. riverbank can
+  maintain live per-entity-cluster centroid views that update in milliseconds
+  when a new compiled fact arrives — used by `rag_retrieve()` to find the most
+  relevant entity cluster before fetching individual facts.
+- **W3C Trace Context propagation (v0.37).** Set `pg_trickle.trace_id` to a W3C
+  `traceparent` string before a DML operation and pg_trickle captures it in the
+  change buffer, then emits an OTLP span covering the full CDC→DVM→merge cycle.
+  This links every compilation refresh to its originating LLM call in Langfuse,
+  enabling precise end-to-end latency and cost attribution per source fragment.
+- **`preflight()` health check (v0.45).** `pgtrickle.preflight()` returns a JSON
+  report with 7 system checks (shared_preload_libraries, scheduler running,
+  worker budget, WAL level, replication slots). Called by `riverbank health` to
+  catch misconfigured deployments before the first ingest.
+- **Lag-aware scheduling (v0.45).** `pg_trickle.lag_aware_scheduling = on`
+  boosts the per-database refresh quota proportionally to refresh lag (up to 2×),
+  accelerating catch-up during large initial ingests without starving other
+  databases.
+- **`repair_stream_table()` (v0.42).** Rebuilds missing CDC triggers, recreates
+  change buffer tables, and resets error-fuse state after a PITR restore or
+  partial failure — part of the production disaster-recovery runbook.
+- **`wal_source_status()` (v0.43).** Per-source WAL diagnostic view showing CDC
+  mode, slot lag, and any blocked reason — surfaced by `riverbank runs --health`.
+- **D+I change-buffer schema (v0.43).** UPDATEs are decomposed into a D-row
+  (old values) + I-row (new values) at write time, eliminating the previous
+  UNION ALL decomposition at read time. Simpler scan SQL, constant write
+  amplification, and standard SQL tooling compatibility.
 
 ### 4.1 Stream tables with incremental view maintenance
 
@@ -188,7 +233,7 @@ graph.
 
 [pg-tide](https://github.com/trickle-labs/pg-tide)
 is a standalone Rust CLI binary (extracted from pg-trickle as of v0.46.0) that bridges pg_trickle outbox and inbox tables
-with external messaging systems. It supports seven backends:
+with external messaging systems. As of v0.6.0 it supports fifteen backends:
 
 | Backend | Forward (outbox→sink) | Reverse (source→inbox) |
 |---|---|---|
@@ -199,28 +244,50 @@ with external messaging systems. It supports seven backends:
 | RabbitMQ | ✅ | ✅ |
 | HTTP webhook | ✅ | ✅ |
 | PostgreSQL inbox | ✅ | — |
-| stdout / file | ✅ | — |
+| stdout / file | ✅ | ✅ |
+| GCP Pub/Sub | ✅ | ✅ |
+| Amazon Kinesis | ✅ | ✅ |
+| Azure Service Bus | ✅ | ✅ |
+| Elasticsearch / OpenSearch | ✅ | — |
+| MQTT v5 | ✅ | ✅ |
+| Azure Event Hubs | ✅ | ✅ |
+| Object Storage (S3, GCS, Azure Blob) | ✅ | — |
 
 **All pipelines are configured via SQL** — no YAML files required:
 
 ```sql
--- Forward: publish compiled-knowledge change events to NATS
-SELECT pgtide.set_outbox('knowledge-events',
-    config => '{"stream_table": "entity_updates",
-                "sink_type": "nats",
-                "nats_url": "nats://localhost:4222",
-                "subject_template": "riverbank.{stream_table}.{op}"}'::jsonb);
+-- Attach a pg_tide outbox to a pg_trickle stream table; every non-empty
+-- IVM refresh publishes a delta-summary event in the same transaction.
+SELECT pgtrickle.attach_outbox('entity_updates');
 
--- Reverse: consume source documents from a Kafka topic
-SELECT pgtide.set_inbox('source-ingest',
-    config => '{"source_type": "kafka",
-                "kafka_brokers": "localhost:9092",
-                "kafka_topic": "documents",
-                "inbox_table": "source_inbox"}'::jsonb);
+-- Configure the relay: forward compiled-knowledge change events to NATS.
+-- Secrets interpolated at runtime via ${env:VAR} tokens.
+INSERT INTO tide.relay_outbox_config (pipeline_name, enabled, config)
+VALUES ('knowledge-events', true,
+    '{"stream_table": "entity_updates",
+      "sink_type": "nats",
+      "nats_url": "${env:NATS_URL}",
+      "subject_template": "riverbank.{stream_table}.{op}"}'::jsonb);
+
+-- Reverse: consume source documents from a Kafka topic into the inbox.
+INSERT INTO tide.relay_inbox_config (pipeline_name, enabled, config)
+VALUES ('source-ingest', true,
+    '{"source_type": "kafka",
+      "kafka_brokers": "${env:KAFKA_BROKERS}",
+      "kafka_topic": "documents",
+      "inbox_table": "source_inbox"}'::jsonb);
 ```
 
 **Hot reload:** config changes take effect without restart — pg-tide listens
-on the `pgtide_config` PostgreSQL notification channel.
+on the `tide_relay_config` PostgreSQL notification channel and reconciles
+pipelines immediately on any `INSERT`, `UPDATE`, or `DELETE` to the config
+tables.
+
+**Secret interpolation.** String values in config JSONB are scanned for
+`${env:VAR_NAME}` and `${file:/run/secrets/apikey}` tokens at startup and on
+every hot-reload. Unknown variables disable only the affected pipeline; all
+others continue running. Values are never written to logs or Prometheus metric
+labels — important for LLM API keys stored as Kubernetes secrets.
 
 **High availability:** multiple relay instances run against the same database
 with pipeline ownership distributed via PostgreSQL advisory locks — no external
@@ -266,8 +333,8 @@ The compiler layer is a distinct concern from storage and transport.
 |---|---|
 | **pg_ripple** | Database truth: graph writes, validation, rules, provenance, queries, entity resolution, uncertain knowledge, PageRank & centrality analytics |
 | **riverbank** | Long-running AI work: document fetching, chunking, LLM calls, structured output, retries |
-| **pg_trickle** | Event transport: inbound feeds, change propagation, outboxes, downstream delivery, IMMEDIATE-mode transactional consistency |
-| **pg-tide** | External system bridge: forward mode (compiled knowledge→NATS/Kafka/Redis/SQS/RabbitMQ/webhooks), reverse mode (external feeds→inbox), Singer target mode (Singer taps→inbox), HA via advisory locks |
+| **pg_trickle** | Incremental view maintenance only (v0.46.0+): stream tables, differential change propagation, IMMEDIATE-mode transactional consistency, watermark gating, tiered scheduling, pgVector incremental aggregates, W3C trace propagation; `attach_outbox()` integration point with pg-tide |
+| **pg-tide** | External system bridge (v0.6.0+): forward mode (compiled knowledge→15 backends), reverse mode (external feeds→inbox), Singer target mode (Singer taps→inbox), SQL-configured pipelines, hot reload, secret interpolation, HA via advisory locks; Object Storage sink for knowledge archiving; Elasticsearch/OpenSearch sink for search index publishing |
 
 The product promise:
 
