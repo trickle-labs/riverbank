@@ -2,7 +2,7 @@
 
 riverbank is a knowledge compiler — a Python worker and CLI that turns raw documents into a governed, queryable knowledge graph stored entirely inside PostgreSQL. Feed it a corpus of Markdown files, PDFs, tickets, or API feeds; it parses and fragments the content, runs an LLM extraction pipeline to pull out structured facts and relationships, validates the output against quality contracts, and writes the results as a cited RDF knowledge graph that you can query with SPARQL or retrieve with plain English. The end state is not a search index you re-query every time — it is a compiled artifact you can interrogate directly and trust.
 
-The project is at an early stage. v0.1.0 ships the deployment skeleton: the CLI, catalog schema migrations, local Docker stack, and plugin architecture. The ingestion pipeline and graph writes come next. This README describes both what exists today and where the project is headed.
+The project is at the MVP completion stage (v0.3.0). The ingestion pipeline, graph writes, query surface, run inspection, and governance commands are all working. This README describes both what exists today and where the project is headed.
 
 ---
 
@@ -22,9 +22,9 @@ The plan is organized into a sequence of concrete, testable releases that each e
 
 **The first milestone (v0.1.0, done)** proves the deployment story. A single `docker compose up` brings up PostgreSQL with all required extensions, a local Ollama model runtime, Langfuse for LLM observability, and a riverbank worker container. The `riverbank health` command verifies the full extension stack is wired correctly. The catalog schema is initialized by `riverbank init`. Nothing is compiled yet, but the scaffolding that later stages depend on is in place and tested.
 
-**The second milestone (v0.2.0)** delivers the core ingestion pipeline against Markdown corpora. A source is parsed, split into fragments by heading structure, and passed to an LLM extractor that produces typed facts with confidence scores and citation evidence. Each fact must carry a `prov:wasDerivedFrom` edge pointing back to its character range in the source — fabricated quotes are rejected at the type-system level. A SHACL quality gate routes low-confidence output to a draft graph rather than the trusted one. Fragment hashing means that re-ingesting an unchanged file costs zero LLM calls. This is the release where the compiler analogy becomes concrete.
+**The second milestone (v0.2.0, done)** delivers the core ingestion pipeline against Markdown corpora. A source is parsed, split into fragments by heading structure, and passed to an LLM extractor that produces typed facts with confidence scores and citation evidence. Each fact must carry a `prov:wasDerivedFrom` edge pointing back to its character range in the source — fabricated quotes are rejected at the type-system level. A SHACL quality gate routes low-confidence output to a draft graph rather than the trusted one. Fragment hashing means that re-ingesting an unchanged file costs zero LLM calls. This is the release where the compiler analogy becomes concrete.
 
-**The third milestone (v0.3.0)** closes out the MVP with the query surface, run inspection, cost accounting, and a golden corpus CI gate. The golden corpus is a fixed set of Markdown files with SPARQL assertions that the compiled graph must answer correctly — a regression test for knowledge quality, not just code correctness. `riverbank lint --shacl-only` runs a SHACL quality report against the trusted graph and exits non-zero if the score falls below the profile threshold, making governance a first-class operation from day one.
+**The third milestone (v0.3.0, done)** closes out the MVP with the query surface, run inspection, cost accounting, and a golden corpus CI gate. `riverbank query` executes SPARQL SELECT or ASK queries directly against the compiled graph. `riverbank runs` shows recent compiler runs with outcome, token counts, cost, and Langfuse trace deep-links. `riverbank lint --shacl-only` runs a SHACL quality report against the trusted graph and exits non-zero if the score falls below the profile threshold, making governance a first-class operation from day one. Each compiler profile now carries a `competency_questions` array of SPARQL assertions that CI validates automatically — a regression test for knowledge quality, not just code correctness.
 
 **Later milestones (v0.4.0 and beyond)** extend the system in several directions. The artifact dependency graph makes the incremental recompilation story complete: when a source changes, exactly the downstream artifacts that depend on it rebuild, and `riverbank explain` can show you the full dependency tree for any compiled fact. A vocabulary pass introduces SKOS concept extraction as a prerequisite step before relationship extraction, so entity references snap to canonical preferred-label IRIs rather than being deduplicated after the fact. Additional document formats arrive through Docling integration. A human review loop connects to Label Studio, where low-confidence extractions are routed to reviewers whose corrections flow back into the graph and enrich the example bank for future compilation runs. Production hardening brings Kubernetes deployment, multi-replica workers with fragment-level advisory locking to prevent duplicate work, and Prometheus metrics dashboards.
 
@@ -46,17 +46,21 @@ riverbank delegates its most demanding responsibilities to three PostgreSQL exte
 
 ## Current status
 
-riverbank is in the skeleton phase (v0.1.0). The repository ships the infrastructure the compiler will run on, not the compiler itself yet.
+riverbank is at MVP completion (v0.3.0). The full ingestion pipeline, query surface, and governance commands are working.
 
 What is fully working today:
 
-- `riverbank version` prints the installed package version.
-- `riverbank config` shows the resolved runtime settings from environment variables and the optional TOML config file.
-- `riverbank init` applies the `_riverbank` catalog schema via Alembic migrations, creating the tables for sources, fragments, compiler profiles, runs, artifact dependencies, and audit log entries.
-- `riverbank health` verifies the full extension stack is alive by calling `pgtrickle.preflight()` (seven system checks) and `pg_ripple.pg_tide_available()`.
-- Plugin discovery loads parsers, fragmenters, extractors, connectors, and reviewers via Python entry points, which is the mechanism later ingestion stages will build on.
-
-The commands `riverbank ingest` and `riverbank query` exist as placeholders that signal where the v0.2.0 and v0.3.0 pipeline stages will land.
+- `riverbank version` — prints the installed package version.
+- `riverbank config` — shows the resolved runtime settings from environment variables and the optional TOML config file.
+- `riverbank init` — applies the `_riverbank` catalog schema via Alembic migrations, creating the tables for sources, fragments, compiler profiles, runs, artifact dependencies, and audit log entries.
+- `riverbank health` — verifies the full extension stack is alive by calling `pgtrickle.preflight()` (seven system checks) and `pg_ripple.pg_tide_available()`.
+- `riverbank ingest <path>` — parses and fragments Markdown files, applies the editorial policy gate, extracts triples with the configured extractor, validates them against SHACL quality contracts, and writes them to pg_ripple with confidence scores and PROV-O provenance edges. Unchanged fragments (same xxh3_128 hash) are skipped automatically — re-ingesting an unchanged corpus produces zero LLM calls.
+- `riverbank query <sparql>` — executes a SPARQL SELECT or ASK query against the compiled graph via pg_ripple, with output as a rich table, JSON, or CSV.
+- `riverbank runs --since <duration>` — lists recent compiler runs with outcome, token counts, estimated cost, and Langfuse trace deep-links.
+- `riverbank profile register <yaml>` — registers a compiler profile from a YAML file into the catalog.
+- `riverbank source set-profile <iri> <profile>` — associates a registered source with a compiler profile.
+- `riverbank lint --shacl-only` — runs a SHACL quality report against a named graph and exits non-zero if the score falls below the profile threshold.
+- Plugin discovery loads parsers, fragmenters, extractors, connectors, and reviewers via Python entry points.
 
 Forward-looking work is tracked in [ROADMAP.md](ROADMAP.md), [plans/riverbank.md](plans/riverbank.md), and [plans/riverbank-implementation.md](plans/riverbank-implementation.md).
 
@@ -84,7 +88,7 @@ uv venv && source .venv/bin/activate
 uv pip install -e ".[dev]"
 ```
 
-The `[dev]` extras install pytest, ruff, mypy, and testcontainers. The `[ingest]` extras install Docling, Instructor, spaCy, and sentence-transformers, which are only needed when the ingestion pipeline lands in v0.2.0.
+The `[dev]` extras install pytest, ruff, mypy, and testcontainers. The `[ingest]` extras install Docling, Instructor, spaCy, and sentence-transformers, which are needed for real LLM extraction (the default CI profile uses the no-op extractor and requires only `[dev]`).
 
 ---
 
@@ -141,8 +145,6 @@ sources
 
 The `_riverbank` PostgreSQL schema holds the catalog: one row per source, one row per fragment, one row per compiler profile, and one row per compilation run. Every run records its fragment hash, LLM token counts, cost, and a Langfuse trace ID so you can trace any compiled fact back to the exact LLM call that produced it.
 
-Today the repository implements the catalog, CLI, and service wiring. The extraction and graph-writing stages are the next work items.
-
 ---
 
 ## Plugins
@@ -164,8 +166,8 @@ The built-in plugins shipped today:
 ## Roadmap summary
 
 - **v0.1.x** — skeleton: CLI, catalog schema, local stack, plugin architecture (done)
-- **v0.2.x** — MVP ingestion: Markdown corpus → pg-ripple triples with confidence scores and citation provenance; fragment-level skip on re-ingest
-- **v0.3.x** — MVP completion: `riverbank query`, `riverbank lint --shacl-only`, run inspection, cost accounting, golden corpus CI gate
+- **v0.2.x** — MVP ingestion: Markdown corpus → pg-ripple triples with confidence scores and citation provenance; fragment-level skip on re-ingest (done)
+- **v0.3.x** — MVP completion: `riverbank query`, `riverbank lint --shacl-only`, run inspection, cost accounting, golden corpus CI gate (done)
 - **v0.4.x** — incremental compilation: artifact dependency graph, `riverbank explain`, vocabulary pass, Docling multi-format parser, Singer connector, embedding generation
 - **v0.5.x** — quality gates and review: Label Studio integration, active-learning review queue, Langfuse evaluations, full lint flow, Prefect orchestration
 - **v0.6.x** — production hardening: Helm chart, multi-replica workers, Prometheus metrics, audit trail, bulk reprocessing
@@ -181,6 +183,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete setup, test, and code-qu
 ```bash
 # Unit tests (no Docker required)
 pytest tests/unit/
+
+# Golden corpus tests — corpus structure + competency question CI gate
+pytest tests/golden/
 
 # Integration tests (uses testcontainers to spin up PostgreSQL automatically)
 pytest tests/integration/
