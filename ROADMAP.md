@@ -20,7 +20,7 @@
 
 | Version | Description | Status | Size |
 |---|---|---|---|
-| v0.1.0 | Skeleton — `docker compose up` proves the deployment story: CLI scaffolding, catalog migrations, no-op extractor, Langfuse wired | Planned | Small |
+| v0.1.0 | Skeleton — `docker compose up` proves the deployment story: CLI scaffolding, catalog migrations, no-op extractor, Langfuse wired | **Done** | Small |
 | v0.2.0 | MVP ingestion — Markdown corpus → triples with citation grounding, confidence scores, and fragment-level skip on re-ingest | Planned | Large |
 | v0.3.0 | MVP completion — `riverbank query`, `riverbank runs`, cost accounting, Langfuse traces, golden corpus CI gate | Planned | Medium |
 
@@ -68,18 +68,18 @@
 
 Goal: prove the deployment story end-to-end with no LLM calls.
 
-- `riverbank/` repo with `pyproject.toml`, `Dockerfile`, `docker-compose.yml`
-- `riverbank` CLI with `init`, `version`, `health` subcommands
-- `health` calls `pgtrickle.preflight()` (7 system checks) and
+- [x] `riverbank/` repo with `pyproject.toml`, `Dockerfile`, `docker-compose.yml`
+- [x] `riverbank` CLI with `init`, `version`, `health` subcommands
+- [x] `health` calls `pgtrickle.preflight()` (7 system checks) and
   `pg_ripple.pg_tide_available()` to verify the full extension stack before
   any ingest attempt
-- Catalog schema migrations (Alembic) for `sources`, `fragments`, `profiles`,
+- [x] Catalog schema migrations (Alembic) for `sources`, `fragments`, `profiles`,
   `runs`, `artifact_deps`, `log` tables in `_riverbank`
-- CI workflow: `pytest` against an ephemeral PostgreSQL with pg_ripple,
+- [x] CI workflow: `pytest` against an ephemeral PostgreSQL with pg_ripple,
   pg_trickle, and pg_tide installed via `testcontainers-python`
-- No-op extractor: records a run, emits an OTel span, writes nothing to the
+- [x] No-op extractor: records a run, emits an OTel span, writes nothing to the
   graph — verifying orchestration plumbing end-to-end
-- `docker compose up` brings up: PostgreSQL with pg_ripple ≥ 0.93 + pg_trickle
+- [x] `docker compose up` brings up: PostgreSQL with pg_ripple ≥ 0.93 + pg_trickle
   ≥ 0.46, pg-tide v0.6, riverbank worker, Langfuse, Ollama
 
 **Exit criterion:** `docker compose up -d && riverbank health` prints
@@ -222,6 +222,13 @@ extractions into reviewed, high-confidence facts.
   evaluations on every recompile; regressions surface as alerts.
 - **Lint flow.** `riverbank lint` runs a full lint pass and writes findings to
   `pgc:LintFinding` triples; Prefect schedules it nightly.
+- **Thesaurus layer activation.** `riverbank query` expands query terms via the
+  `<thesaurus>` named graph before dispatching BM25, vector, and graph traversal
+  streams. `skos:altLabel` provides synonym coverage; `skos:related` provides
+  associative coverage; `skos:exactMatch` / `skos:closeMatch` provide cross-corpus
+  alignment. The expansion is a SPARQL lookup — sub-millisecond, no LLM call.
+  This is the release where the thesaurus layer transitions from a compilation
+  artifact to an active query-time asset.
 
 **Exit criterion:** reviewer receives a Label Studio task within 60 seconds of
 a low-confidence extraction; correction is reflected in the next SPARQL query;
@@ -244,10 +251,14 @@ workers, secret management, backups, and SLOs.
 - **Prometheus metrics + Perses dashboard.** `/metrics` exposes
   `riverbank_runs_total`, `riverbank_run_duration_seconds`,
   `riverbank_llm_cost_usd_total`, `riverbank_shacl_score`,
-  `riverbank_review_queue_depth`. Perses panels ship in `riverbank/perses/`
-  and import the pg-tide relay health sub-dashboard (relay throughput, error
-  rate, DLQ depth, circuit breaker state, forward latency) from pg-tide's own
-  Perses definition — relay metrics are not re-implemented in riverbank.
+  `riverbank_review_queue_depth`, `riverbank_context_efficiency_ratio` (graph
+  tokens vs estimated naive-RAG tokens per `rag_context()` call). Perses panels
+  ship in `riverbank/perses/` and import the pg-tide relay health sub-dashboard
+  (relay throughput, error rate, DLQ depth, circuit breaker state, forward
+  latency) from pg-tide's own Perses definition — relay metrics are not
+  re-implemented in riverbank. The context efficiency panel shows the running
+  ratio trend per profile, making the token-cost justification for graph-based
+  retrieval quantitatively visible to operators and stakeholders.
 - **Secret management.** LLM API keys from environment variables, Kubernetes
   Secrets, or HashiCorp Vault (`hvac`). Keys route through pg-tide's
   `${env:VAR}` / `${file:/path}` secret interpolation for relay credentials;
@@ -311,6 +322,17 @@ explicit absence, structured reasoning, and ensemble verification.
   `_riverbank.profiles.competency_questions` to compute the unanswered-question
   count (the one join that requires riverbank's catalog), then writes enriched
   `pgc:CoverageMap` triples surfaced by `rag_context()`.
+- **Procedural knowledge compiler profile.** A built-in profile template
+  (`procedural-v1`) for runbooks, SOPs, incident-response guides, and onboarding
+  flows. The vocabulary pass extracts step names and tool/resource names;
+  the full pass extracts step sequences (`pko:nextStep`, `pko:previousStep`),
+  decision points (`pko:nextAlternativeStep`), preconditions, required expertise
+  levels, and error-handling paths — aligned with the Procedural Knowledge
+  Ontology (PKO) from Cefriel. Standard competency questions are generated
+  automatically: "What happens if step X fails?", "Which steps require admin
+  access?", "What is the rollback path?". This expands riverbank's applicability
+  to operational knowledge that currently lives as tribal practice in undocumented
+  runbooks.
 
 **Exit criterion:** an argument graph in Label Studio produces a
 `pgc:ArgumentRecord` with claim, two evidence nodes, one objection, and one

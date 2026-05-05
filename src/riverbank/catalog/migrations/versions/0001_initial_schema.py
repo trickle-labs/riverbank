@@ -36,7 +36,7 @@ def upgrade() -> None:
         sa.Column("model_provider", sa.Text, nullable=False),
         sa.Column("model_name", sa.Text, nullable=False),
         sa.Column("embedding_model", sa.Text),
-        sa.Column("max_fragment_tokens", sa.Integer, nullable=False, server_default="2000"),
+        sa.Column("max_fragment_tokens", sa.Integer, nullable=False, server_default=sa.text("2000")),
         sa.Column(
             "created_at",
             sa.TIMESTAMP(timezone=True),
@@ -63,8 +63,8 @@ def upgrade() -> None:
         sa.Column("content_hash", sa.LargeBinary, nullable=False),
         sa.Column("last_seen_at", sa.TIMESTAMP(timezone=True), nullable=False),
         sa.Column("last_compiled_at", sa.TIMESTAMP(timezone=True)),
-        sa.Column("status", sa.Text, nullable=False, server_default="'pending'"),
-        sa.Column("metadata", JSONB, nullable=False, server_default="'{}'"),
+        sa.Column("status", sa.Text, nullable=False, server_default=sa.text("'pending'")),
+        sa.Column("metadata", JSONB, nullable=False, server_default=sa.text("'{}'")),
         schema="_riverbank",
     )
 
@@ -170,4 +170,6 @@ def downgrade() -> None:
     op.drop_table("fragments", schema="_riverbank")
     op.drop_table("sources", schema="_riverbank")
     op.drop_table("profiles", schema="_riverbank")
-    op.execute("DROP SCHEMA IF EXISTS _riverbank")
+    # Note: the _riverbank schema is intentionally NOT dropped here.
+    # Alembic stores its version table in _riverbank.alembic_version and
+    # needs it to exist until after this function returns.

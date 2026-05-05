@@ -4,7 +4,9 @@ import pytest
 from testcontainers.postgres import PostgresContainer
 
 # The pg-ripple image ships with pg_ripple, pg_trickle, and all required extensions.
-POSTGRES_IMAGE = "ghcr.io/trickle-labs/pg-ripple:0.93.0"
+# Until the image is published, integration tests run against standard PostgreSQL
+# (sufficient for catalog migration tests that do not exercise pg-ripple SQL functions).
+POSTGRES_IMAGE = "postgres:17-alpine"
 
 
 @pytest.fixture(scope="session")

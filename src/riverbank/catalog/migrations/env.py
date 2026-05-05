@@ -3,7 +3,7 @@ from __future__ import annotations
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import create_engine, pool
+from sqlalchemy import create_engine, pool, text
 
 from riverbank.catalog import Base
 from riverbank.catalog import models  # noqa: F401 — imports register all ORM models
@@ -41,6 +41,11 @@ def run_migrations_online() -> None:
     url = get_url()
     connectable = create_engine(url, poolclass=pool.NullPool)
     with connectable.connect() as connection:
+        # Ensure the schema exists before Alembic tries to create the version
+        # table inside it.  This is idempotent and runs outside the migration
+        # transaction so the schema is visible immediately.
+        connection.execute(text("CREATE SCHEMA IF NOT EXISTS _riverbank"))
+        connection.commit()
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
