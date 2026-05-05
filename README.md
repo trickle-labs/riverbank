@@ -1,135 +1,172 @@
 # riverbank
 
-**Turn raw documents into a governed, living knowledge graph — inside PostgreSQL.**
+riverbank is a Python worker and CLI for building a document-to-knowledge-graph pipeline on top of PostgreSQL. The project is aimed at a "knowledge compiler" workflow: parse source material, fragment it, run extraction, validate the result, and write governed graph data into pg-ripple while pg-trickle and pg-tide handle change propagation.
 
-riverbank is a knowledge compilation system. It takes messy human-readable sources — Markdown files, PDFs, tickets, transcripts, API feeds — runs them through an LLM pipeline that extracts structured facts, relationships, and summaries, then stores the result as a validated RDF knowledge graph. From that point on, you query compiled knowledge rather than re-reading raw text on every request.
+The repository is no longer just a plan. The current release, v0.1.0, ships the skeleton needed to stand up the local stack, initialize the catalog schema, verify the extension dependencies, and exercise the plugin architecture that later ingestion stages build on.
 
-The key insight, borrowed from [Andrej Karpathy's LLM Wiki proposal](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f): *documents are source code, and the knowledge graph is the compiled binary*. riverbank is the compiler.
+## Current status
 
----
+riverbank is in the skeleton phase.
 
-## Why a compiler, not just RAG?
+- Shipped in v0.1.0: Python package metadata, Docker-based local stack, Alembic migrations, catalog models, plugin entry points, configuration loading, and the initial CLI.
+- Not shipped yet: end-to-end corpus ingest, graph writes, SPARQL query execution, review flows, and the incremental recompilation pipeline.
+- Forward-looking work is tracked in [ROADMAP.md](ROADMAP.md), [plans/riverbank.md](plans/riverbank.md), and [plans/riverbank-implementation.md](plans/riverbank-implementation.md).
 
-Standard RAG (retrieval-augmented generation) is fast to set up but has well-known limits. Chunks lose context. Similarity is not the same as correctness. Multi-document reasoning is fragile. Every query re-interprets the same raw prose.
+## What works today
 
-Compilation does more work upfront so runtime is faster and more reliable:
+The repository currently provides these concrete capabilities:
 
-| Compilation phase | What riverbank does |
-|---|---|
-| **Parse** | Read documents in any format (Markdown, PDF, HTML) |
-| **Fragment** | Split into semantically coherent units |
-| **Extract** | LLM workflow turns prose into structured entities, relationships, and confidence scores |
-| **Validate** | SHACL shapes check quality; contradictions surface as first-class findings |
-| **Write** | Facts land in a governed RDF graph with provenance and citations |
-| **Maintain** | Only changed fragments recompile — not the whole corpus |
-| **Publish** | Downstream systems receive structured change events the moment knowledge updates |
+- `riverbank version` prints the installed package version.
+- `riverbank config` shows resolved runtime settings from environment variables and optional TOML config.
+- `riverbank init` applies the `_riverbank` catalog schema via Alembic migrations.
+- `riverbank health` checks the local PostgreSQL stack by calling `pgtrickle.preflight()` and `pg_ripple.pg_tide_available()`.
+- Plugin discovery is wired through Python entry points for parsers, fragmenters, extractors, connectors, and reviewers.
 
-The incremental maintenance step is what makes the difference. riverbank doesn't re-index everything on a schedule. When a source document changes, only the knowledge derived from that document rebuilds — and only the downstream artifacts that depend on it refresh.
+The shipped CLI also reserves the future command surface:
 
----
+- `riverbank ingest` exists as a placeholder for the v0.2.0 ingestion pipeline.
+- `riverbank query` exists as a placeholder for the v0.3.0 graph query interface.
 
-## What it is built on
+## Local stack
 
-riverbank is a Python project but its heavy lifting lives in two PostgreSQL extensions:
+The development stack in `docker-compose.yml` brings up the services riverbank depends on locally:
 
-**[pg-ripple](https://github.com/trickle-labs/pg-ripple)** is the knowledge store. It provides a full RDF triple store with SPARQL 1.1, SHACL validation, Datalog inference, OWL 2 RL reasoning, vector search via pgvector, and GraphRAG export — all inside PostgreSQL. Highlights that riverbank relies on heavily:
+- PostgreSQL with pg-ripple preinstalled
+- pg-tide as a relay sidecar
+- Ollama for local OpenAI-compatible model access
+- Langfuse for observability
+- A `worker` container that runs the riverbank image
 
-- `load_triples_with_confidence()` — writes facts with extraction confidence scores
-- `shacl_score()` / `shacl_report_scored()` — numeric quality gates, not just pass/fail
-- `rag_context()` / `rag_retrieve()` — formats graph facts into LLM prompts; runs end-to-end RAG
-- `sparql_from_nl()` — natural-language to SPARQL translation
-- `suggest_sameas()`, `find_alignments()`, `pagerank_find_duplicates()` — entity deduplication without leaving the database
-- `explain_pagerank()` — shows *why* an entity is considered important
-- `erase_subject()` — GDPR right-to-erasure across all tables
-- CONSTRUCT writeback rules — derived facts update automatically when source triples change
-
-**[pg-trickle](https://github.com/trickle-labs/pg-trickle)** handles change propagation. It maintains SQL views incrementally using DBSP-inspired differential dataflow, so derived artifacts (entity pages, quality scores, topic indices) update in milliseconds rather than requiring full recomputation. Its `IMMEDIATE` refresh mode keeps SHACL score gates in sync within the same transaction as the write — the ingest gate decision is always based on current state.
-
-**[pgtrickle-relay](https://github.com/trickle-labs/pg-trickle/tree/main/pgtrickle-relay)** is a standalone Rust binary that bridges pg-trickle with the outside world. It supports Kafka, NATS JetStream, Redis Streams, SQS, RabbitMQ, and HTTP webhooks — all configured via SQL. It also speaks the **Singer protocol** as a target, so any Singer tap can pipe directly to a pg-trickle inbox table without writing a Python connector:
-
-```bash
-tap-github --config github.json | pgtrickle-relay --target singer --config relay.json
-```
-
----
-
-## The three things you can do with a compiled knowledge graph
-
-Once your documents are compiled, the full pg-ripple query layer is available:
-
-**Query.** Ask structured questions with SPARQL, retrieve LLM-ready context with `rag_context()`, or use `sparql_from_nl()` to translate plain English to a graph query. Graph facts are grounded in cited sources — no hallucination about where a claim came from.
-
-**Lint.** Run a scheduled health check across the compiled graph: find contradictions, stale claims, orphan entities, missing cross-references, and coverage gaps. Lint findings are first-class graph nodes, not log lines.
-
-**Rank.** PageRank and centrality scoring (betweenness, eigenvector, Katz) tell you which entities are most important to your corpus. The review queue is sorted by `centrality × confidence` — you fix the highest-leverage entries first.
-
----
+This gives the project a runnable deployment story before the higher-level ingestion features land.
 
 ## Quick start
 
 ```bash
-git clone https://github.com/trickle-labs/riverbank
+git clone https://github.com/trickle-labs/riverbank.git
 cd riverbank
-docker compose up          # Postgres + pg-ripple + pg-trickle + relay + worker + Langfuse
 
-riverbank init my-corpus
-riverbank source add filesystem --path ./docs
-riverbank run               # Compiles all sources
-riverbank query "What are the main entities in this corpus?"
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+
+docker compose up -d postgres pg_tide ollama langfuse
+riverbank init
+riverbank health
+riverbank version
 ```
 
-Everything runs locally. PostgreSQL is the only required dependency. Cloud LLM endpoints are optional — Ollama works out of the box for development.
+If you use `uv`, the equivalent install flow is:
 
----
-
-## Project status
-
-riverbank is at the **planning stage**. The plan documents in [`plans/`](plans/) describe the full architecture, phased implementation roadmap, and detailed engineering decisions. Implementation begins with the MVP phase (single-command corpus ingest, fragment-level incremental recompilation, SHACL quality gate, review queue).
-
----
-
-## Plans
-
-- [`plans/riverbank.md`](plans/riverbank.md) — Strategy document: the knowledge compiler analogy, what pg-ripple and pg-trickle provide, and the full feature vision
-- [`plans/riverbank-implementation.md`](plans/riverbank-implementation.md) — Engineering blueprint: architecture diagram, phased roadmap, tech stack, extensibility recipes, and operational decisions
-
----
-
-## Architecture overview
-
-```
-Sources (files, APIs, Kafka, NATS, Singer taps)
-        │
-  Connector plane (plugin or Singer tap → pgtrickle-relay)
-        │
-  pg-trickle inbox stream tables
-        │
-  riverbank worker
-  ├── Parser → Fragmenter → Ingest gate
-  └── LLM extraction → SHACL validation → Graph writer
-        │
-  pg-ripple (RDF graph, SPARQL, Datalog, PageRank, pgvector)
-        │
-  pg-trickle outbox → pgtrickle-relay
-                       ├── NATS / Kafka / Redis / SQS
-                       └── HTTP webhooks / downstream agents
+```bash
+uv venv
+source .venv/bin/activate
+uv pip install -e ".[dev]"
 ```
 
----
+## Configuration
 
-## Built on the shoulders of
+Settings are loaded with this precedence:
 
-- [pg-ripple](https://github.com/trickle-labs/pg-ripple) — PostgreSQL RDF triple store (v0.88)
-- [pg-trickle](https://github.com/trickle-labs/pg-trickle) — Incremental stream tables and event relay (v0.44)
-- [Docling](https://github.com/DS4SD/docling) — Document parsing
-- [Instructor](https://github.com/jxnl/instructor) — Structured LLM output
-- [tenacity](https://github.com/jd/tenacity) + [APScheduler](https://github.com/agronholm/apscheduler) — Retry and scheduling (Phase 1); [Prefect](https://github.com/PrefectHQ/prefect) replaces these in Phase 2 for full flow orchestration
-- [Langfuse](https://github.com/langfuse/langfuse) — LLM observability
-- [Label Studio](https://github.com/HumanSignal/label-studio) — Human review
-- [Meltano Singer SDK](https://github.com/meltano/sdk) — Tap ecosystem
+1. Explicit initialization arguments
+2. Environment variables with the `RIVERBANK_` prefix
+3. `~/.riverbank/config.toml`, or the file pointed to by `RIVERBANK_CONFIG_FILE`
 
----
+Example TOML configuration:
+
+```toml
+[db]
+dsn = "postgresql+psycopg://riverbank:riverbank@localhost:5432/riverbank"
+
+[llm]
+provider = "ollama"
+api_base = "http://localhost:11434/v1"
+model = "llama3.2"
+embed_model = "nomic-embed-text"
+
+[langfuse]
+enabled = false
+host = "http://localhost:3000"
+```
+
+Example environment overrides:
+
+```bash
+export RIVERBANK_DB__DSN="postgresql+psycopg://riverbank:riverbank@localhost:5432/riverbank"
+export RIVERBANK_LLM__PROVIDER="openai"
+export RIVERBANK_LLM__MODEL="gpt-4o-mini"
+```
+
+## Project layout
+
+The repository already includes the foundational pieces for later compiler stages:
+
+- `src/riverbank/cli.py` contains the Typer-based CLI.
+- `src/riverbank/config.py` defines nested runtime settings for database, LLM, and Langfuse configuration.
+- `src/riverbank/catalog/models.py` defines the `_riverbank` catalog tables for profiles, sources, fragments, runs, artifact dependencies, and audit log entries.
+- `src/riverbank/plugin.py` loads registered plugins from Python entry points.
+- `src/riverbank/parsers`, `fragmenters`, `extractors`, `connectors`, and `reviewers` provide the initial built-in plugins.
+- `tests/unit` and `tests/integration` cover configuration, plugin loading, no-op extraction, and migrations.
+
+## Architecture direction
+
+riverbank is being built around the idea that documents are source material and the graph is the compiled artifact. The intended runtime shape is:
+
+```text
+sources -> connectors -> parsers -> fragmenters -> extractors -> validation -> graph writes
+                                      |
+                                      v
+                           _riverbank catalog + run metadata
+
+PostgreSQL hosts the knowledge graph, validation, and change propagation layer.
+```
+
+Today, the repository implements the catalog, CLI, and service wiring for that architecture. The extraction, validation, and graph-writing stages are planned work rather than present functionality.
+
+## Plugins
+
+riverbank uses Python entry points so extension packages can register new components without patching the core package. The built-in groups are:
+
+| Group | Built-in example |
+|---|---|
+| `riverbank.parsers` | `markdown` |
+| `riverbank.fragmenters` | `heading` |
+| `riverbank.extractors` | `noop` |
+| `riverbank.connectors` | `filesystem` |
+| `riverbank.reviewers` | `file` |
+
+Install the package in editable mode with `pip install -e .` or `uv pip install -e .` if you want entry-point discovery to work in tests and local development.
+
+## Roadmap
+
+The short version of the roadmap is:
+
+- v0.1.x: skeleton and deployment story
+- v0.2.x: Markdown ingestion into pg-ripple with confidence and provenance
+- v0.3.x: query surface, run inspection, and golden corpus gates
+- v0.4.x+: incremental compilation, review workflows, and production hardening
+
+For the detailed release plan, see [ROADMAP.md](ROADMAP.md).
+
+## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full setup, test, and code-quality workflow.
+
+Common commands:
+
+```bash
+pytest tests/unit/
+pytest tests/integration/
+ruff check src/ tests/
+mypy src/
+```
+
+## Core dependencies
+
+- [pg-ripple](https://github.com/trickle-labs/pg-ripple) for RDF storage and graph-side capabilities inside PostgreSQL
+- [pg-trickle](https://github.com/trickle-labs/pg-trickle) for incremental dataflow infrastructure that later pipeline stages will rely on
+- [pg-tide](https://github.com/trickle-labs/pg-tide) for relay and change-stream integration
+- [Typer](https://github.com/fastapi/typer), [Pydantic](https://github.com/pydantic/pydantic), [SQLAlchemy](https://github.com/sqlalchemy/sqlalchemy), and [Alembic](https://github.com/sqlalchemy/alembic) for the current Python application layer
 
 ## License
 
-[Apache 2.0](LICENSE)
+[MIT](LICENSE)
