@@ -20,7 +20,7 @@
 
 | Version | Description | Status | Size |
 |---|---|---|---|
-| v0.1.0 | Skeleton — `docker compose up` proves the deployment story: CLI scaffolding, catalog migrations, no-op extractor, Langfuse wired | Planned | Small |
+| v0.1.0 | Skeleton — `docker compose up` proves the deployment story: CLI scaffolding, catalog migrations, no-op extractor, Langfuse wired | **Done** | Small |
 | v0.2.0 | MVP ingestion — Markdown corpus → triples with citation grounding, confidence scores, and fragment-level skip on re-ingest | Planned | Large |
 | v0.3.0 | MVP completion — `riverbank query`, `riverbank runs`, cost accounting, Langfuse traces, golden corpus CI gate | Planned | Medium |
 
@@ -68,18 +68,18 @@
 
 Goal: prove the deployment story end-to-end with no LLM calls.
 
-- `riverbank/` repo with `pyproject.toml`, `Dockerfile`, `docker-compose.yml`
-- `riverbank` CLI with `init`, `version`, `health` subcommands
-- `health` calls `pgtrickle.preflight()` (7 system checks) and
+- [x] `riverbank/` repo with `pyproject.toml`, `Dockerfile`, `docker-compose.yml`
+- [x] `riverbank` CLI with `init`, `version`, `health` subcommands
+- [x] `health` calls `pgtrickle.preflight()` (7 system checks) and
   `pg_ripple.pg_tide_available()` to verify the full extension stack before
   any ingest attempt
-- Catalog schema migrations (Alembic) for `sources`, `fragments`, `profiles`,
+- [x] Catalog schema migrations (Alembic) for `sources`, `fragments`, `profiles`,
   `runs`, `artifact_deps`, `log` tables in `_riverbank`
-- CI workflow: `pytest` against an ephemeral PostgreSQL with pg_ripple,
+- [x] CI workflow: `pytest` against an ephemeral PostgreSQL with pg_ripple,
   pg_trickle, and pg_tide installed via `testcontainers-python`
-- No-op extractor: records a run, emits an OTel span, writes nothing to the
+- [x] No-op extractor: records a run, emits an OTel span, writes nothing to the
   graph — verifying orchestration plumbing end-to-end
-- `docker compose up` brings up: PostgreSQL with pg_ripple ≥ 0.93 + pg_trickle
+- [x] `docker compose up` brings up: PostgreSQL with pg_ripple ≥ 0.93 + pg_trickle
   ≥ 0.46, pg-tide v0.6, riverbank worker, Langfuse, Ollama
 
 **Exit criterion:** `docker compose up -d && riverbank health` prints

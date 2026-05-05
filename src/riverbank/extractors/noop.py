@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
+from opentelemetry import trace as otel_trace
+
 
 @dataclass
 class ExtractionResult:
@@ -30,4 +32,6 @@ class NoOpExtractor:
     name: ClassVar[str] = "noop"
 
     def extract(self, fragment: object, profile: object, trace: object) -> ExtractionResult:
-        return ExtractionResult()
+        tracer = otel_trace.get_tracer(__name__)
+        with tracer.start_as_current_span("noop_extractor.extract"):
+            return ExtractionResult()
