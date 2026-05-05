@@ -28,7 +28,7 @@
 
 | Version | Description | Status | Size |
 |---|---|---|---|
-| v0.4.0 | Incremental compilation — artifact dependency graph, `riverbank explain`, Docling multi-format parser, spaCy NER, Singer connector, embedding generation | Planned | Very Large |
+| v0.4.0 | Incremental compilation — artifact dependency graph, `riverbank explain`, vocabulary pass, SKOS integrity shape library, Docling multi-format parser, spaCy NER + vocabulary lookup, Singer connector, embedding generation | Planned | Very Large |
 
 ### Quality Gates and Review (v0.5.x)
 
@@ -144,7 +144,7 @@ spans, full compile cost < $5 with `gpt-4o-mini` or $0 with Ollama.
 
 ### v0.4.0 — Incremental Compilation
 
-Goal: prove the system rebuilds *only* what changed when a source updates.
+Goal: prove the system rebuilds *only* what changed when a source updates, and establish vocabulary hygiene as an upstream constraint before relationship extraction.
 
 - **Artifact dependency graph.** Every compiled artifact records
   `(fragment, profile_version, rule_set)` dependencies in
@@ -154,11 +154,29 @@ Goal: prove the system rebuilds *only* what changed when a source updates.
 - **Recompile flow.** Changed fragments → invalidate dependent artifacts →
   re-extract → re-derive → emit semantic diff event via pg-trickle +
   `pgtrickle.attach_outbox()`.
+- **Vocabulary pass.** `riverbank ingest --mode vocabulary` (or
+  `run_mode_sequence: ['vocabulary', 'full']` in the profile) processes the
+  corpus with the `ExtractedEntity` schema first, writing `skos:Concept`
+  triples (preferred label, alternate labels, scope note) into `<vocab>` before
+  any relationship extraction. Subsequent full passes are given the compiled
+  vocabulary as a structured context constraint, snapping entity references to
+  canonical preferred-label IRIs before writing facts — upstream vocabulary
+  hygiene rather than downstream deduplication.
+- **SKOS structural integrity shape bundle.** `riverbank init` activates the
+  built-in `pg:skos-integrity` shape bundle via
+  `pg_ripple.load_shape_bundle('skos-integrity')`. The six shapes (prefLabel
+  required, scopeNote recommended, broader-cycle detection, conflicting
+  match-type check, orphan concept warning, altLabel collision check) are
+  defined and maintained in pg-ripple — riverbank ships no Turtle files for
+  these rules. `riverbank lint --layer vocab` runs the bundle against the
+  `<vocab>` named graph. This is the machine-executable form of the Ontology
+  Pipeline output quality contract.
 - **Docling integration.** PDF, DOCX, PPTX, HTML, and image OCR via Docling ≥
   2.92. `Docling` becomes the default parser for non-Markdown sources.
-- **spaCy NER pre-resolution.** Named entities extracted before the LLM call;
-  pre-resolved IRIs passed as structured context to reduce token usage and
-  entity-confusion errors.
+- **spaCy NER pre-resolution + vocabulary lookup.** Named entities extracted
+  before the LLM call; when a vocabulary pass has run, the pre-resolution step
+  also queries the `skos:prefLabel` / `skos:altLabel` index and injects matched
+  preferred-label IRIs into the structured context block.
 - **Fuzzy entity matching.** pg_ripple `pg:fuzzy_match()` and
   `pg:token_set_ratio()` (GIN trigram index) for query-time matching;
   `suggest_sameas()` and `pagerank_find_duplicates()` for dedup; RapidFuzz for
@@ -170,7 +188,10 @@ Goal: prove the system rebuilds *only* what changed when a source updates.
 - **Singer-tap connector.** A `singer` connector wraps any Singer tap; ships
   with `tap-github` and `tap-slack-search`. Alternative: pipe any tap directly
   to pg-tide as a Singer target (`tap-github | pg-tide --target singer ...`),
-  writing RECORD messages straight to the pg_trickle inbox table.
+  writing RECORD messages straight to the pg_trickle inbox table. Singer STATE
+  checkpoint persistence (resumable taps across restarts) and SCHEMA drift
+  detection are handled by pg-tide; the Python connector wrapper requires no
+  STATE management code.
 
 **Exit criterion:** modify one paragraph in one Markdown file, re-run
 `riverbank ingest`, exactly one fragment re-extracted, semantic diff event
@@ -223,14 +244,22 @@ workers, secret management, backups, and SLOs.
 - **Prometheus metrics + Perses dashboard.** `/metrics` exposes
   `riverbank_runs_total`, `riverbank_run_duration_seconds`,
   `riverbank_llm_cost_usd_total`, `riverbank_shacl_score`,
-  `riverbank_review_queue_depth`. Perses panels ship in `riverbank/perses/`.
+  `riverbank_review_queue_depth`. Perses panels ship in `riverbank/perses/`
+  and import the pg-tide relay health sub-dashboard (relay throughput, error
+  rate, DLQ depth, circuit breaker state, forward latency) from pg-tide's own
+  Perses definition — relay metrics are not re-implemented in riverbank.
 - **Secret management.** LLM API keys from environment variables, Kubernetes
   Secrets, or HashiCorp Vault (`hvac`). Keys route through pg-tide's
   `${env:VAR}` / `${file:/path}` secret interpolation for relay credentials;
   no secret is ever logged.
 - **Rate limiting + circuit breakers.** Per-provider concurrency limits and a
   circuit breaker (`aiobreaker`) protect against runaway LLM costs during API
-  misbehaviour.
+  misbehaviour — this covers OpenAI, Anthropic, and Ollama provider calls only.
+  Relay pipeline circuit breakers (pg-tide transport layer) are configured via
+  `tide.relay_outbox_config` and do not require Python code in riverbank.
+  `riverbank health` surfaces open relay circuits from
+  `tide.relay_circuit_breaker_status` alongside the existing extension stack
+  checks.
 - **Audit trail.** Every graph-mutating operation writes to `_riverbank.log`;
   append-only at the database level (`REVOKE UPDATE, DELETE`).
 - **Bulk reprocessing.** `riverbank recompile --profile docs-policy-v1
@@ -272,10 +301,15 @@ explicit absence, structured reasoning, and ensemble verification.
   and routes disagreements to Label Studio with a side-by-side template. Hard
   cost cap configurable per profile.
 - **Minimal contradiction explanation.** `riverbank explain-conflict <iri>`
-  computes the smallest set of facts and rules producing a contradiction using
-  a SAT-style minimal-cause algorithm over the inference dependency graph.
-- **Coverage maps.** Daily Prefect flow computes per-topic source density,
-  mean confidence, and unanswered-question count; results write to
+  is a CLI wrapper around `pg_ripple.explain_contradiction()` — the
+  minimal-cause reasoning engine (SAT-style hitting-set over the inference
+  dependency graph) lives in pg-ripple and requires no Python implementation
+  in riverbank.
+- **Coverage maps.** `pg_ripple.refresh_coverage_map()` computes per-topic
+  source density, mean confidence, contradiction count, and recency into the
+  `<coverage>` named graph. A Prefect flow joins the result against
+  `_riverbank.profiles.competency_questions` to compute the unanswered-question
+  count (the one join that requires riverbank's catalog), then writes enriched
   `pgc:CoverageMap` triples surfaced by `rag_context()`.
 
 **Exit criterion:** an argument graph in Label Studio produces a
@@ -298,7 +332,10 @@ compiled knowledge back to prose.
   reviewer assignments respect tenant boundaries.
 - **Federated compilation.** A "remote profile" type pulls SERVICE-federated
   triples from a peer pg_ripple instance into a local compilation context,
-  applies confidence weighting, and writes the result locally.
+  applies confidence weighting, and writes the result locally. The SPARQL
+  `SERVICE` keyword is implemented in pg-ripple's query engine; riverbank
+  configures a `federation_endpoints` entry via SQL and issues a standard
+  SPARQL query — no federation protocol code lives in riverbank.
 - **Markdown / JSON-LD page rendering.** `riverbank render` generates entity
   pages, topic surveys, comparison tables, and change digests from compiled
   artifacts. Output formats: Markdown (Obsidian/MkDocs), JSON-LD, HTML.
@@ -389,7 +426,9 @@ v0.6.0 is the production gate. Nothing before v0.6.0 is appropriate for
 a regulated production environment. The Helm chart, multi-replica workers,
 audit trail, and secret management form the minimum deployable production unit.
 This release is deliberately large; every item in it is non-negotiable for
-production readiness.
+production readiness. LLM provider circuit breakers (aiobreaker) protect
+against runaway API costs; relay pipeline circuit breakers, DLQ, and backpressure
+are configured in pg-tide and do not add Python code to riverbank.
 
 v0.7.0 addresses the epistemic features that distinguish riverbank from a
 generic RAG pipeline. Negative knowledge (explicit absences), argument graphs

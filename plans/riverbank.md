@@ -3,7 +3,7 @@
 > **Date:** 2026-05-02  
 > **Status:** Strategy document — not a committed roadmap item  
 > **Project:** [riverbank](https://github.com/trickle-labs/riverbank) — standalone, builds on [pg-ripple](https://github.com/trickle-labs/pg-ripple) and [pg-trickle](https://github.com/trickle-labs/pg-trickle)  
-> **Inspiration:** [Karpathy's LLM Wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) · [companion blog post](https://www.mindstudio.ai/blog/karpathy-llm-knowledge-base-architecture-compiler-analogy)  
+> **Inspiration:** [Karpathy's LLM Wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) · [companion blog post](https://www.mindstudio.ai/blog/karpathy-llm-knowledge-base-architecture-compiler-analogy) · [Talisman — The Ontology Pipeline®](https://jessicatalisman.substack.com/p/the-ontology-pipeline)  
 > **Related plans:** [GraphRAG synergy](graphrag.md) · [pg-tide](pg_trickle_relay_integration.md) · [future directions](future-directions.md) · [ROADMAP](../ROADMAP.md)
 
 ---
@@ -92,6 +92,27 @@ primitives:
 The lint operation in particular is underweighted in most RAG and compiled-wiki
 implementations. It is not a background diagnostic — it is a first-class
 operation that domain experts should be able to initiate, review, and act on.
+
+---
+
+## 2.2 The Ontology Pipeline as output quality contract
+
+Karpathy describes the *process*: how to compile knowledge, what the three layers are, and what the three operations do. He says nothing about the quality standards the compiled output must meet to be trustworthy.
+
+Jessica Talisman's [Ontology Pipeline®](https://jessicatalisman.substack.com/p/the-ontology-pipeline) fills that gap. It specifies, stage by stage, what a knowledge graph must contain before it can reliably support inference and retrieval:
+
+| Ontology Pipeline stage | What it enforces | riverbank mechanism |
+|---|---|---|
+| Controlled vocabulary | Deduplicated terms; one preferred label per concept; scope note as required definition | `skos:Concept` extraction via vocabulary pass; `skos:prefLabel` SHACL Violation; `skos:scopeNote` SHACL Warning |
+| Metadata standards | Structural, descriptive, and administrative fields declared and typed | Compiler profile `schema_json`; SHACL shapes enforcing required predicates |
+| Taxonomy | Hierarchical `skos:broader` / `skos:narrower` relations; structural integrity (no cycles, no conflicting matches) | `pg:skos-integrity` built-in shape bundle (pg-ripple); `skos-transitive` Datalog bundle |
+| Thesaurus | Associative relations (`skos:related`); equivalence links (`skos:exactMatch`, `skos:closeMatch`) | Full extraction pass with vocabulary context; Datalog transitive closure |
+| Ontology | Domain classes; OWL property constraints; Datalog rules with `@weight` | Compiler profile `datalog_rules`; pg_ripple RDFS/OWL 2 RL inference |
+| Knowledge graph | Compiled atomic facts, entity pages, summaries — the runtime query target | `<trusted>` named graph |
+
+The critical difference between riverbank and a human-constructed knowledge system is *who does the extraction*. Talisman's pipeline assumes semantic engineers making deliberate modelling decisions at each stage. Riverbank assumes LLMs doing the extraction, with humans reviewing outputs rather than authoring them. Her framework is the standard for the *output quality* riverbank must produce. It is not the workflow riverbank follows to produce it — that is Karpathy's compiler pattern.
+
+The two frameworks are complementary. Karpathy without Talisman produces a compiled artifact of unknown structural quality. Talisman without Karpathy produces a methodology that does not scale to LLM-speed ingestion. Together they define both the engineering pattern and the quality contract.
 
 ---
 
@@ -475,12 +496,13 @@ Different domains need different extraction instructions. A compiler profile
 defines:
 
 - Prompt template and expected output schema
-- SHACL validation rules, with `sh:severityWeight` annotations so critical
-  rules weigh more in the numeric quality score
+- SHACL validation rules, with `sh:severityWeight` annotations so critical rules weigh more in the numeric quality score. Standard profiles include entity-completeness shapes: `skos:prefLabel` is required (`sh:Violation`) on every `skos:Concept`; `skos:scopeNote` is recommended (`sh:Warning`) — a concept without a definition routes to `<review>` rather than `<trusted>`. Taxonomy structural-integrity shapes catch cycles in `skos:broader` chains and conflicting `skos:exactMatch` / `skos:broadMatch` pairs on the same concept pair.
 - Optional Datalog rules with `@weight` annotations for probabilistic
   confidence propagation through derived facts
 - Default extraction confidence level assigned at ingest time
 - Preferred LLM and embedding models, and maximum fragment size
+- **`run_mode_sequence`**: ordered list of extraction passes the profile runs against each source. The standard sequence is `['vocabulary', 'full']` — the vocabulary pass first establishes a clean, disambiguated controlled vocabulary (entity preferred labels, alternate labels, scope notes encoded as `skos:Concept` triples), and the full pass then extracts relationships with the compiled vocabulary available as a context constraint. Profiles that skip the vocabulary pass and jump directly to `'full'` trade vocabulary hygiene for speed — acceptable for small corpora with well-controlled source language, problematic for large corpora with mixed authorship where synonym fragmentation accumulates.
+- **Standard Datalog rule bundles**: profiles activate named rule bundles rather than writing ad-hoc Datalog from scratch. `skos-transitive` (included by default) derives transitive `skos:broader` closures, symmetric `skos:related`, and transitive `skos:exactMatch` — standard SKOS semantics pg_ripple's Datalog engine handles natively, removing the need to extract every hierarchical relationship explicitly. `prov-o-basic` and `rdfs-subclass` are additional standard bundles.
 - **Competency questions**: the SPARQL `ASK` and `SELECT` assertions the compiled graph is designed to answer. These are the questions you write before you write a single extraction rule — if the profile cannot state them, the extraction schema is not ready. The CI golden corpus gate runs each competency question against the compiled graph and fails if the result does not match. `riverbank lint --check-coverage` surfaces unanswered questions at runtime.
 
 Profile versioning matters. Changing the prompt is changing the compiler. The
@@ -511,9 +533,21 @@ changes, the system asks: which facts came from this ticket? Which entity pages
 used those facts? Which summaries mentioned those entities? Only those artifacts
 rebuild.
 
-### 7.6 Compiler cost accounting
+### 7.5.1 Semantic-depth named graph layers
 
-Every compiler run leaves a cost record alongside its diagnostics:
+The operational quality layers (`<trusted>`, `<draft>`, `<quarantine>`, `<review>`) govern which facts are safe to query. But a mature deployment also has **semantic-depth layers** that correspond to Ontology Pipeline stages — each one a named graph that feeds the next via Datalog CONSTRUCT rules:
+
+| Named graph | Contents | Ontology Pipeline stage |
+|---|---|---|
+| `<vocab>` | `skos:Concept` triples: preferred labels, alternate labels, scope notes | Controlled vocabulary |
+| `<taxonomy>` | `skos:broader` / `skos:narrower` hierarchy, derived transitive closures | Taxonomy |
+| `<thesaurus>` | `skos:related`, `skos:exactMatch`, `skos:closeMatch` associative relations | Thesaurus |
+| `<ontology>` | Domain classes, OWL properties, range/domain constraints, rule weights | Ontology |
+| `<trusted>` | Compiled atomic facts, entity pages, summaries — the runtime query target | Knowledge graph |
+
+Each layer is independently queryable and lintable (`riverbank lint --layer vocab`, `--layer taxonomy`). A CONSTRUCT writeback rule automatically derives `skos:broader` transitive closures in `<taxonomy>` whenever a new direct `skos:broader` triple lands in `<vocab>`. The `skos-transitive` Datalog bundle (§7.3) handles this without additional worker code. This layered architecture is what makes broken logic easy to troubleshoot: a bad inference in `<trusted>` can be traced through the layer chain to the exact vocabulary term or hierarchy edge that caused it.
+
+### 7.6 Compiler cost accounting
 
 - Token counts (prompt and completion), the model name, and the estimated dollar
   cost for each LLM call
@@ -617,6 +651,23 @@ The log feeds the cost trend dashboards (§7.6) directly. It also powers the
 quality regression view: plot mean extraction confidence, contradiction rate,
 and SHACL score over time, and a drop after a model upgrade becomes a visible
 signal rather than a user complaint.
+
+### 7.10.1 System-centric vs people-centric governance
+
+Talisman's governance model is people-centric: named owners, change approval boards, documented review workflows, explicit human sign-off at each pipeline stage. That model is correct when humans are authoring the graph, because the rate of change is bounded by human attention and the decisions are too judgment-heavy to automate.
+
+Riverbank's governance model is system-centric, because the compilation rate is LLM-speed and no human review board can track it directly:
+
+| Governance concern | Talisman's approach | Riverbank's mechanism |
+|---|---|---|
+| Who may change what | Named owners; approval workflow | Append-only audit log (`REVOKE UPDATE, DELETE`); operator id on every log entry |
+| Quality gates before publication | Human review at each stage | Ingest gate + SHACL gate before any write to `<trusted>` |
+| Drift detection | Periodic human review | `riverbank lint --shacl-only` (v0.3.0+); daily SHACL score snapshot; CONSTRUCT writeback rules detect inconsistency on write |
+| Correction loop | Human corrections to source documents | Label Studio review queue; corrections enter `<human-review>` named graph at higher confidence than LLM-extracted facts |
+| Rollback | Document versioning | Bi-temporal named graphs; `erase_subject()` GDPR erasure; branch/merge pattern |
+| Accountability | Human sign-off trail | pg_trickle outbox events + pg-tide forwarding; every semantic change is a trackable event |
+
+The difference is not a trade-off of rigour for speed. The system-centric model enforces the *same constraints* Talisman describes — vocabulary hygiene, structural integrity, provenance — but enforces them automatically on every write, at machine speed, rather than at human-review cadence. The `pg:skos-integrity` shape bundle in pg-ripple (activated at `riverbank init` via `pg_ripple.load_shape_bundle('skos-integrity')`) is the machine-executable form of the structural standards she cites (ISO 25964-1, ANSI/NISO Z39.19).
 
 ---
 
@@ -1307,7 +1358,13 @@ and actionable.
 The coverage map is a compiled artifact updated alongside the main graph:
 topic clusters annotated with source density, mean confidence, recency,
 contradiction rate, and unanswered-question count. It is queryable in SPARQL,
-includable in `rag_context()`, and renderable as a dashboard.
+includable in `rag_context()`, and renderable as a dashboard. The source
+density, mean confidence, contradiction count, and recency metrics are computed
+by `pg_ripple.refresh_coverage_map()` (a pg-ripple SQL function operating
+entirely inside the database). The unanswered-question count requires joining
+the coverage result against `_riverbank.profiles.competency_questions` — a
+riverbank catalog join that a Prefect flow performs before writing the enriched
+`pgc:CoverageMap` triples.
 
 Three operational uses follow. **Documentation targeting**: coverage gaps surface
 as a prioritized list — the topics where adding one good source would reduce the

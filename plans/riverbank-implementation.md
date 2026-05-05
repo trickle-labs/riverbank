@@ -142,6 +142,8 @@ riverbank/                       (this repo)
 ├── docker-compose.yml          one-command MVP launcher (includes pg-ripple + pg-trickle)
 ├── helm/                       Phase 4
 ├── plans/                      strategy and implementation docs
+├── shapes/                     SHACL shape libraries (Turtle)
+│   └── pgc-core.ttl            shapes for pgc: vocabulary classes (Fragment, Run, Synthesis, LintFinding)
 ├── src/riverbank/
 │   ├── __init__.py
 │   ├── cli.py                  `riverbank` command
@@ -177,9 +179,9 @@ Dependencies on sibling projects:
 
 | Dependency | Role in riverbank |
 |---|---|
-| **pg-ripple** | Graph storage, SPARQL, SHACL validation, Datalog inference, provenance, pgvector, fuzzy matching (`pg:fuzzy_match`, `pg:token_set_ratio`), entity resolution (`suggest_sameas`, `find_alignments`, `pagerank_find_duplicates`), JSON↔RDF mapping registry, CONSTRUCT writeback rules, CDC bridge triggers, bidirectional integration (conflict policies, outbox/inbox), SPARQL live subscriptions (SSE), uncertain knowledge engine, PageRank & centrality analytics |
+| **pg-ripple** | Graph storage, SPARQL, SHACL validation, Datalog inference, provenance, pgvector, fuzzy matching (`pg:fuzzy_match`, `pg:token_set_ratio`), entity resolution (`suggest_sameas`, `find_alignments`, `pagerank_find_duplicates`), JSON↔RDF mapping registry, CONSTRUCT writeback rules, CDC bridge triggers, bidirectional integration (conflict policies, outbox/inbox), SPARQL live subscriptions (SSE), uncertain knowledge engine, PageRank & centrality analytics; built-in SKOS integrity shape bundle (`pg_ripple.load_shape_bundle('skos-integrity')`); `explain_contradiction()` / `explain_contradiction_json()` for minimal-cause contradiction analysis; SPARQL `SERVICE` keyword for federated queries (SQL-configured `pg_ripple.federation_endpoints`); `coverage_map()` / `refresh_coverage_map()` for per-topic source density and confidence aggregates; `skos-transitive` named Datalog bundle (formal, versioned, activatable by name) |
 | **pg-trickle** | Incremental view maintenance (IVM-only since v0.46.0): inbound stream tables, IMMEDIATE mode for transactional consistency, differential change propagation, tiered scheduling, watermark gating, change buffer compaction, dbt integration, pgVector incremental aggregates (`avg(embedding)::vector` / `sum(embedding)` maintained without full scans), W3C trace propagation through CDC→DVM pipeline, `attach_outbox()` integration point with pg-tide |
-| **pg-tide** | External system integration (v0.6.0+): forward mode (outbox→15 backends: NATS, Kafka, Redis, SQS, RabbitMQ, webhooks, PG inbox, GCP Pub/Sub, Kinesis, Azure Service Bus, Elasticsearch/OpenSearch, MQTT, Azure Event Hubs, Object Storage S3/GCS/Azure), reverse mode (external→inbox), Singer target mode, SQL-configured pipelines via `tide.relay_outbox_config` / `tide.relay_inbox_config`, hot reload via NOTIFY on `tide_relay_config`, secret interpolation (`${env:VAR}`, `${file:/path}`), HA via advisory locks |
+| **pg-tide** | External system integration (v0.6.0+): forward mode (outbox→15 backends: NATS, Kafka, Redis, SQS, RabbitMQ, webhooks, PG inbox, GCP Pub/Sub, Kinesis, Azure Service Bus, Elasticsearch/OpenSearch, MQTT, Azure Event Hubs, Object Storage S3/GCS/Azure), reverse mode (external→inbox), Singer target mode, SQL-configured pipelines via `tide.relay_outbox_config` / `tide.relay_inbox_config`, hot reload via NOTIFY on `tide_relay_config`, secret interpolation (`${env:VAR}`, `${file:/path}`), HA via advisory locks; content-based payload routing (`payload_filter` JSONB field — enables typed event fan-out from a single stream table); per-pipeline circuit breakers and retry policies (`tide.relay_circuit_breaker_status`); dead letter queue (Object Storage or PG table, `tide.relay_dlq_summary`, `tide.replay_dlq()`); per-pipeline Prometheus metrics (`pgtide_relay_*`) with Perses relay health dashboard; Singer STATE checkpoint persistence (`tide.singer_state`) and SCHEMA drift logging (`tide.singer_schema_log`); inbox rate limiting and backpressure (`max_backlog_rows`, `on_backlog_exceeded`) |
 
 ---
 
@@ -523,10 +525,11 @@ Goal: prove that the system rebuilds *only* what changed when a source updates.
 2. **`riverbank explain <artifact-iri>`** — dumps the dependency tree of any compiled artifact: which fragments it came from, which profile version, which rules contributed.
 3. **Recompile flow.** When a source updates: identify changed fragments → identify dependent artifacts → invalidate them → re-extract changed fragments → re-derive dependent artifacts → emit semantic diff event.
 4. **Docling integration.** PDF, DOCX, PPTX, HTML, and image OCR. The `Docling` parser becomes the default for non-Markdown sources.
-5. **spaCy NER pre-resolution + vocabulary lookup.** Named entities are extracted before the LLM call. When a vocabulary pass has already run for the corpus, the pre-resolution step also performs a vocabulary lookup against the compiled `skos:prefLabel` / `skos:altLabel` index, injecting matched preferred-label IRIs into the structured context block. This means the LLM receives both spaCy-detected entity spans *and* their canonical vocabulary forms before writing a single fact — upstream vocabulary constraint, not downstream deduplication.
-6. **Fuzzy entity matching.** pg-ripple provides `pg:fuzzy_match()` and `pg:token_set_ratio()` directly in SPARQL (v0.87), backed by a GIN trigram index on `_pg_ripple.confidence`. These produce candidate `owl:sameAs` edges with confidence scores without leaving the database. For Python-side pre-resolution before LLM calls, `RapidFuzz` token-set ratio provides the same matching in the extraction pipeline. Above-threshold matches are written automatically; borderline matches are flagged for Phase 3 review. Additionally, pg-ripple's `suggest_sameas()` (v0.49) provides vector-based entity candidates and `pagerank_find_duplicates()` (v0.88) provides centrality-guided entity deduplication.
-7. **Embedding generation.** Sentence-transformers locally produce embeddings for each compiled summary. Embeddings are written to a pgvector column on the entity-page artifact. Topic-cluster centroid views are maintained as `avg(embedding)::vector` stream tables via pg-trickle's native pgVector IVM (v0.37+): the centroid updates incrementally when a new fact arrives without a full scan, giving `rag_retrieve()` a sub-millisecond starting point for entity-cluster lookup before fetching individual facts.
-8. **Singer-tap connector.** A `singer` connector wraps any Singer tap; the MVP includes `tap-github` for issues and `tap-slack-search` for channel exports. Alternatively, configure pg-tide as a Singer target:
+5. **Vocabulary pass.** A `run_mode = 'vocabulary'` compiler run processes the corpus with the `ExtractedEntity` schema (§7.2), writing `skos:Concept` triples (`skos:prefLabel`, `skos:altLabel`, `skos:scopeNote`) into the named graph before any relationship extraction begins. This establishes the domain's controlled vocabulary — deduplicated, labeled, and defined — in the same incremental, hash-skipping pipeline as full extraction. `riverbank ingest --mode vocabulary` triggers this pass explicitly; it can also be set as the default first pass in a profile with `run_mode_sequence: ['vocabulary', 'full']`. A SHACL shape requiring `skos:prefLabel` and `skos:scopeNote` on every `skos:Concept` is included in the standard profile shape set; a missing scope note routes the entity to `<review>` rather than `<trusted>`.
+6. **spaCy NER pre-resolution + vocabulary lookup.** Named entities are extracted before the LLM call. When a vocabulary pass has already run for the corpus, the pre-resolution step also performs a vocabulary lookup against the compiled `skos:prefLabel` / `skos:altLabel` index, injecting matched preferred-label IRIs into the structured context block. This means the LLM receives both spaCy-detected entity spans *and* their canonical vocabulary forms before writing a single fact — upstream vocabulary constraint, not downstream deduplication.
+7. **Fuzzy entity matching.** pg-ripple provides `pg:fuzzy_match()` and `pg:token_set_ratio()` directly in SPARQL (v0.87), backed by a GIN trigram index on `_pg_ripple.confidence`. These produce candidate `owl:sameAs` edges with confidence scores without leaving the database. For Python-side pre-resolution before LLM calls, `RapidFuzz` token-set ratio provides the same matching in the extraction pipeline. Above-threshold matches are written automatically; borderline matches are flagged for Phase 3 review. Additionally, pg-ripple's `suggest_sameas()` (v0.49) provides vector-based entity candidates and `pagerank_find_duplicates()` (v0.88) provides centrality-guided entity deduplication.
+8. **Embedding generation.** Sentence-transformers locally produce embeddings for each compiled summary. Embeddings are written to a pgvector column on the entity-page artifact. Topic-cluster centroid views are maintained as `avg(embedding)::vector` stream tables via pg-trickle's native pgVector IVM (v0.37+): the centroid updates incrementally when a new fact arrives without a full scan, giving `rag_retrieve()` a sub-millisecond starting point for entity-cluster lookup before fetching individual facts.
+9. **Singer-tap connector.** A `singer` connector wraps any Singer tap; the MVP includes `tap-github` for issues and `tap-slack-search` for channel exports. Alternatively, configure pg-tide as a Singer target:
 
 ```bash
 # In a Meltano project or standalone
@@ -534,7 +537,29 @@ tap-github | pg-tide --target singer --config tide-singer-config.json
 # pg-tide writes RECORD messages directly to the pg-trickle inbox table
 ```
 
-This bypasses the Python connector wrapper entirely. For SaaS-specific integrations not covered by tide backends, the Python wrapper remains the best choice; for standard Singer taps, piping directly to the pg-tide target is simpler.
+This bypasses the Python connector wrapper entirely. For SaaS-specific integrations not covered by tide backends, the Python wrapper remains the best choice; for standard Singer taps, piping directly to the pg-tide target is simpler. Singer STATE checkpoint persistence (`tide.singer_state`) and SCHEMA drift detection (`tide.singer_schema_log`) are handled by pg-tide; the Python connector wrapper requires no STATE management code. Schema drift events arrive on the outbox and are handled by the existing event routing in the worker.
+
+10. **SKOS structural integrity shape bundle.** `riverbank init` activates the
+    built-in `pg:skos-integrity` shape bundle via
+    `pg_ripple.load_shape_bundle('skos-integrity')`. The six shapes are defined
+    and maintained in pg-ripple; riverbank ships no Turtle files for these
+    rules. Shapes enforced:
+
+    | Shape name | What it checks | Severity |
+    |---|---|---|
+    | `skos:prefLabelRequired` | Every `skos:Concept` has exactly one `skos:prefLabel` per language | `sh:Violation` |
+    | `skos:scopeNoteRequired` | Every `skos:Concept` in `<trusted>` has a `skos:scopeNote` | `sh:Warning` (routes to `<review>`) |
+    | `skos:broaderCycleCheck` | No concept is its own broader ancestor (transitive cycle) | `sh:Violation` |
+    | `skos:conflictingMatchCheck` | A concept pair does not hold both `skos:exactMatch` and `skos:broadMatch` | `sh:Violation` |
+    | `skos:orphanConceptCheck` | Every `skos:Concept` has at least one `skos:broader`, `skos:narrower`, or `skos:related` link | `sh:Warning` |
+    | `skos:altLabelCollisionCheck` | No `skos:altLabel` on concept A matches the `skos:prefLabel` of a different concept B without an explicit `skos:exactMatch` | `sh:Violation` |
+
+    The bundle is active on every ingest after `riverbank init`. `riverbank lint --layer vocab` runs the bundle in isolation against the `<vocab>` named graph. The `skos-transitive` Datalog bundle (a formal named bundle in pg-ripple, activatable by name) derives the transitive facts that `skos:broaderCycleCheck` reasons over and is implicitly activated when `skos-integrity` is loaded. The shape bundle is the machine-executable form of Talisman's structural standards (ISO 25964-1, ANSI/NISO Z39.19); the migration from `riverbank/shapes/skos-integrity.ttl` (now removed from this repo) to the pg-ripple built-in is:
+
+    ```python
+    # riverbank/catalog/migrations/versions/0004_init_shapes.py
+    conn.execute("SELECT pg_ripple.load_shape_bundle('skos-integrity')")
+    ```
 
 ### Acceptance
 
@@ -579,10 +604,10 @@ Goal: deployable in a regulated production environment with multi-replica worker
 
 1. **Helm chart.** `riverbank/helm/` deploys the worker, Prefect server, Langfuse, and Label Studio onto Kubernetes. The chart depends on the existing `pg_ripple` chart.
 2. **Multi-replica workers.** Workers acquire fragment-level advisory locks via PostgreSQL (`pg_try_advisory_lock(hashtext(fragment_iri)::bigint)`) and skip locked fragments. Combined with the `runs` idempotency key (fragment_id + profile_id + content_hash), this prevents duplicate work without a separate coordinator.
-3. **Prometheus metrics.** A `/metrics` endpoint exposes: `riverbank_runs_total{outcome=...}`, `riverbank_run_duration_seconds`, `riverbank_llm_cost_usd_total`, `riverbank_shacl_score{graph=...}`, `riverbank_review_queue_depth`. A Perses dashboard ships in `riverbank/perses/`.
+3. **Prometheus metrics.** A `/metrics` endpoint exposes: `riverbank_runs_total{outcome=...}`, `riverbank_run_duration_seconds`, `riverbank_llm_cost_usd_total`, `riverbank_shacl_score{graph=...}`, `riverbank_review_queue_depth`. A Perses dashboard ships in `riverbank/perses/` and imports the pg-tide relay health sub-dashboard (relay throughput, error rate, DLQ depth, circuit breaker state) from pg-tide's Perses definition — relay metrics are not re-implemented in riverbank.
 4. **Backups.** The catalog tables back up via standard PostgreSQL `pg_dump` along with the existing pg_ripple data. The `_riverbank.log` table is the recovery key — replaying it reconstructs the compilation state.
 5. **Secret management.** LLM API keys load from environment variables, Kubernetes Secrets, or HashiCorp Vault (via `hvac`). No secret is ever logged.
-6. **Rate limiting & circuit breakers.** Per-provider concurrency limits and a circuit breaker (using `aiobreaker`) protect against runaway LLM costs when an upstream API misbehaves.
+6. **Rate limiting & circuit breakers.** Per-provider concurrency limits and a circuit breaker (using `aiobreaker`) protect against runaway LLM costs when an upstream API misbehaves. This covers LLM provider calls (OpenAI, Anthropic, Ollama) only. Relay pipeline circuit breakers are configured in pg-tide via `tide.relay_outbox_config` and `tide.relay_inbox_config`; riverbank does not implement relay resilience in Python. `riverbank health` adds a check against `tide.relay_circuit_breaker_status` and `tide.relay_dlq_summary` to surface open relay circuits and DLQ depth alongside the existing stack checks.
 7. **Audit trail.** Every operation that mutates the compiled graph writes to `_riverbank.log` with operator/agent identifier. The log is append-only at the database level (`REVOKE UPDATE, DELETE`).
 8. **Bulk reprocessing.** `riverbank recompile --profile docs-policy-v1 --version 2` scans all sources compiled with v1, queues them for recompilation against v2, and produces a semantic diff report when complete.
 9. **Cost dashboard.** Perses panels for cost per source, cost per profile, cost trend over time, and projected monthly spend at current rate.
@@ -607,8 +632,8 @@ Goal: implement the §10.12, §10.13, §10.17, §10.18 features from the parent 
 3. **Assumption registry.** Extracted assumptions attached as RDF-star annotations to facts; surfaced by `rag_context()`.
 4. **Epistemic status layer.** Every fact gets a `pgc:epistemicStatus` annotation: `observed`, `extracted`, `inferred`, `verified`, `deprecated`, `normative`, `predicted`, `disputed`, `speculative`. Status flows from compiler outcome (`extracted`), Datalog inference (`inferred`), and Label Studio decisions (`verified`).
 5. **Model ensemble compilation.** Per-profile opt-in; runs N model variants and routes disagreements to Label Studio with a side-by-side template. Hard cost cap configurable per profile.
-6. **Minimal contradiction explanation.** A `riverbank explain-conflict <iri>` command computes the smallest set of facts and rules producing a contradiction, using a SAT-style minimal-cause algorithm over the inference dependency graph.
-7. **Coverage maps.** A daily flow computes per-topic source density, mean confidence, and unanswered-question count; results write to `pgc:CoverageMap` triples surfaced by `rag_context()`.
+6. **Minimal contradiction explanation.** A `riverbank explain-conflict <iri>` command is a CLI wrapper around `pg_ripple.explain_contradiction()`. The minimal-cause reasoning engine (greedy hitting-set over the inference dependency graph, with an optional exact SAT-style mode) lives in pg-ripple. riverbank provides the CLI interface and display formatter; no algorithm is implemented in Python.
+7. **Coverage maps.** `pg_ripple.refresh_coverage_map('<coverage>', ARRAY['<trusted>'])` computes per-topic source density, mean confidence, contradiction count, and recency into the `<coverage>` named graph. A Prefect flow calls this function, then joins the result against `_riverbank.profiles.competency_questions` to compute unanswered-question count per topic (the join that requires riverbank's catalog), and writes enriched `pgc:CoverageMap` triples back to the graph. `rag_context()` surfaces these triples.
 
 ### Acceptance
 
@@ -626,7 +651,7 @@ Goal: deploy as shared infrastructure across multiple knowledge bases; render co
 
 1. **Multi-tenant catalog.** All catalog tables gain a `tenant_id` column with row-level security. Per-tenant editorial policies, profiles, and named graphs.
 2. **Tenant-scoped Label Studio.** One Label Studio organisation per tenant; reviewer assignments respect tenant boundaries.
-3. **Federated compilation.** A "remote profile" type pulls SERVICE-federated triples from a peer pg_ripple instance into a local compilation context, applies confidence weighting, and writes the result locally.
+3. **Federated compilation.** A "remote profile" type pulls SERVICE-federated triples from a peer pg_ripple instance into a local compilation context, applies confidence weighting, and writes the result locally. The SPARQL `SERVICE` keyword is implemented in pg-ripple's query engine; riverbank registers a `pg_ripple.federation_endpoints` entry via SQL migration and issues standard SPARQL queries with `SERVICE` clauses — no federation protocol code lives in riverbank Python. Remote triples inherit the endpoint's configured `min_confidence` as their `pg:sourceTrust` value.
 4. **Markdown / JSON-LD page rendering.** A `pgc render` command generates entity pages, topic surveys, comparison tables, and change digests from compiled artifacts. Output formats: Markdown (for Obsidian/MkDocs), JSON-LD (for downstream graphs), HTML (for direct hosting).
 5. **Render scheduling.** Pages are stored as `pgc:RenderedPage` artifacts with dependency edges to their source facts. When facts change, pages are flagged stale and regenerated in the next render flow.
 6. **Streaming render.** SSE endpoint that emits page updates as the underlying graph changes, for live documentation sites.
@@ -707,7 +732,7 @@ Hypothesis-based property tests for the fragmenter (round-trip stability of `con
 
 ### 14.6 Chaos tests
 
-A Phase 4 scenario kills the LLM endpoint mid-run; the worker should recover, the circuit breaker should engage, and queued fragments should resume on recovery.
+A Phase 4 scenario kills the LLM endpoint mid-run; the worker should recover, the circuit breaker (aiobreaker, LLM provider only) should engage, and queued fragments should resume on recovery. A separate scenario verifies that a pg-tide relay circuit breaker transitioning to `open` during a NATS outage results in events written to the DLQ, with automatic flush on circuit close.
 
 ---
 
@@ -729,14 +754,17 @@ jira = "my_company.riverbank_jira:JiraConnector"
 
 `pip install my-company-riverbank-jira` and the connector is available — no fork of riverbank required.
 
-**Alternative 1: pg-tide for message-queue sources.** If the source system publishes to Kafka, NATS, Redis Streams, SQS, or RabbitMQ, configure a pg-tide reverse pipeline via SQL instead of writing a Python connector:
+**Alternative 1: pg-tide for message-queue sources.** If the source system publishes to Kafka, NATS, Redis Streams, SQS, or RabbitMQ, configure a pg-tide reverse pipeline via SQL instead of writing a Python connector. Add a `rate_limit` block to protect the worker from backlog spikes:
 
 ```sql
 SELECT pgtide.set_inbox('jira-events',
     config => '{"source_type": "kafka",
                 "kafka_brokers": "localhost:9092",
                 "kafka_topic": "jira-changes",
-                "inbox_table": "source_inbox"}'::jsonb);
+                "inbox_table": "source_inbox",
+                "rate_limit": {"max_rows_per_second": 50,
+                               "max_backlog_rows": 5000,
+                               "on_backlog_exceeded": "pause"}}'::jsonb);
 SELECT pgtide.enable('jira-events');
 ```
 
@@ -748,7 +776,7 @@ The pg-tide binary writes directly to a pg-trickle inbox stream table. A riverba
 tap-jira --config jira-config.json | pg-tide --target singer --config tide-singer.json
 ```
 
-The pg-tide binary ingests the Singer protocol RECORD messages and writes directly to the pg-trickle inbox table. Ideal for leveraging existing Meltano taps without additional Python code.
+The pg-tide binary ingests the Singer protocol RECORD messages and writes directly to the pg-trickle inbox table. STATE checkpoints are persisted in `tide.singer_state`; the tap resumes from the last checkpoint after a restart without re-emitting previously received records. Ideal for leveraging existing Meltano taps without additional Python code.
 
 ### 15.2 Adding a new compiler profile
 
