@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def load_triples_with_confidence(
 
     rows = []
     for t in triples:
-        ev: Optional[Any] = getattr(t, "evidence", None)
+        ev: Any | None = getattr(t, "evidence", None)
         rows.append(
             {
                 "subject": t.subject,
@@ -87,6 +87,44 @@ def shacl_score(
                 exc,
             )
             return 1.0
+        raise
+
+
+def sparql_query(
+    conn: Any,
+    sparql: str,
+    named_graph: str | None = None,
+) -> list[dict]:
+    """Execute a SPARQL SELECT or ASK query via pg_ripple.
+
+    Returns a list of result row dicts for SELECT queries, or a single dict
+    ``{"result": True/False}`` for ASK queries.
+
+    Falls back gracefully (logs a warning, returns ``[]``) when pg_ripple is
+    not installed — this allows the catalog plumbing to be tested against
+    stock PostgreSQL in CI.
+    """
+    sql = (
+        "SELECT * FROM pg_ripple.sparql_query($1, $2)"
+        if named_graph
+        else "SELECT * FROM pg_ripple.sparql_query($1)"
+    )
+    try:
+        params = (sparql, named_graph) if named_graph else (sparql,)
+        rows = conn.execute(sql, params).fetchall()
+        if not rows:
+            return []
+        # Convert each Row to a plain dict
+        return [dict(row._mapping) if hasattr(row, "_mapping") else dict(row) for row in rows]
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc).lower()
+        if _is_missing_extension(msg):
+            logger.warning(
+                "pg_ripple not available — SPARQL query not executed. "
+                "Install pg_ripple to enable graph queries. error=%s",
+                exc,
+            )
+            return []
         raise
 
 
