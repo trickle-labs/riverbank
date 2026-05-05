@@ -39,3 +39,26 @@ editorial_policy:
   confidence_threshold: 0.7
   allowed_languages:
     - en
+
+# Competency questions — SPARQL ASK queries that the compiled graph must answer.
+# Used by the golden corpus CI gate (tests/golden/).
+competency_questions:
+  - id: cq-01
+    description: "The corpus defines a concept called 'Confidence'"
+    sparql: |
+      ASK {
+        ?s ?p "Confidence" .
+      }
+  - id: cq-02
+    description: "The corpus mentions evidence spans with character offsets"
+    sparql: |
+      ASK {
+        ?s ?p ?o .
+        FILTER(CONTAINS(STR(?o), "character"))
+      }
+  - id: cq-03
+    description: "The corpus contains at least one subject–predicate–object triple"
+    sparql: |
+      ASK {
+        ?s ?p ?o .
+      }

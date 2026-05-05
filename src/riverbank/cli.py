@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import sys
-from typing import Optional
-
 import typer
 from rich import print as rprint
 from rich.table import Table
@@ -78,7 +75,10 @@ def health() -> None:
             note = "yes" if available else "no (pg-tide sidecar not detected)"
             rprint(f"  {icon}  pg_ripple   pg_tide_available                {note}")
             if not available:
-                rprint("       [dim]pg-tide is optional — CDC relay features will be unavailable[/dim]")
+                rprint(
+                    "       [dim]pg-tide is optional — CDC relay features will be unavailable"
+                    "[/dim]"
+                )
 
     except Exception as exc:
         rprint(f"  [red]✗[/red]  database connection failed: {exc}")
@@ -152,7 +152,8 @@ def ingest(
 
     table.add_row("Fragments processed", str(stats["fragments_processed"]))
     table.add_row("Fragments skipped (hash)", str(stats["fragments_skipped_hash"]))
-    table.add_row("Fragments skipped (gate)", str(stats["fragments_skipped"] - stats["fragments_skipped_hash"]))
+    gate_skipped = stats["fragments_skipped"] - stats["fragments_skipped_hash"]
+    table.add_row("Fragments skipped (gate)", str(gate_skipped))
     table.add_row("Triples written", str(stats["triples_written"]))
     table.add_row("LLM calls", str(stats["llm_calls"]))
     table.add_row("Prompt tokens", str(stats["prompt_tokens"]))
@@ -171,8 +172,328 @@ def ingest(
 
 @app.command()
 def query(
-    sparql: str = typer.Argument(..., help="SPARQL SELECT or CONSTRUCT query string"),
+    sparql: str = typer.Argument(..., help="SPARQL SELECT or ASK query string"),
+    named_graph: str | None = typer.Option(
+        None, "--graph", "-g", help="Restrict query to this named graph IRI"
+    ),
+    output_format: str = typer.Option(
+        "table", "--format", "-f", help="Output format: table | json | csv"
+    ),
 ) -> None:
-    """Query the compiled knowledge graph (Phase 2 — v0.3.0)."""
-    rprint("[yellow]query not yet implemented — arriving in v0.3.0[/yellow]")
-    raise typer.Exit(code=0)
+    """Execute a SPARQL SELECT or ASK query against the compiled knowledge graph.
+
+    Routes the query through pg_ripple.sparql_query().  Falls back with a
+    warning when pg_ripple is not installed.
+    """
+    import json as _json  # noqa: PLC0415
+
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.catalog.graph import sparql_query  # noqa: PLC0415
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            rows = sparql_query(conn, sparql, named_graph=named_graph)
+    finally:
+        engine.dispose()
+
+    if not rows:
+        rprint("[dim]No results.[/dim]")
+        return
+
+    if output_format == "json":
+        rprint(_json.dumps(rows, default=str, indent=2))
+        return
+
+    if output_format == "csv":
+        import csv  # noqa: PLC0415
+        import sys  # noqa: PLC0415
+
+        writer = csv.DictWriter(sys.stdout, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+        return
+
+    # Default: rich table
+    table = Table(title="SPARQL results", show_header=True, header_style="bold cyan")
+    for col in rows[0]:
+        table.add_column(str(col))
+    for row in rows:
+        table.add_row(*[str(v) for v in row.values()])
+    rprint(table)
+
+
+@app.command()
+def runs(
+    since: str = typer.Option(
+        "24h", "--since", "-s", help="Show runs since this duration (e.g. 1h, 30m, 7d)"
+    ),
+    profile: str | None = typer.Option(
+        None, "--profile", "-p", help="Filter by profile name"
+    ),
+    limit: int = typer.Option(50, "--limit", "-n", help="Maximum rows to return"),
+) -> None:
+    """Inspect recent compiler runs with outcome, token counts, and Langfuse links.
+
+    Shows one row per run with: source IRI, fragment key, profile, outcome,
+    prompt/completion tokens, cost (USD), and Langfuse trace deep-link.
+    """
+    import re  # noqa: PLC0415
+    from datetime import timedelta  # noqa: PLC0415
+
+    from sqlalchemy import create_engine, text  # noqa: PLC0415
+
+    from riverbank.cost_tables import format_cost  # noqa: PLC0415
+
+    # Parse the --since duration
+    match = re.fullmatch(r"(\d+)(h|m|d|s)", since.strip().lower())
+    if not match:
+        rprint(f"[red]Invalid --since value: {since!r}  (expected e.g. 1h, 30m, 7d)[/red]")
+        raise typer.Exit(code=1)
+    amount, unit = int(match.group(1)), match.group(2)
+    delta = {"h": timedelta(hours=amount), "m": timedelta(minutes=amount),
+             "d": timedelta(days=amount), "s": timedelta(seconds=amount)}[unit]
+
+    settings = get_settings()
+    langfuse_host = settings.langfuse.host
+
+    sql = text(
+        "SELECT r.id, s.iri, f.fragment_key, p.name AS profile_name, "
+        "       r.outcome, r.prompt_tokens, r.completion_tokens, "
+        "       r.cost_usd, r.langfuse_trace_id, r.started_at "
+        "FROM _riverbank.runs r "
+        "JOIN _riverbank.fragments f ON f.id = r.fragment_id "
+        "JOIN _riverbank.sources s  ON s.id = f.source_id "
+        "JOIN _riverbank.profiles p ON p.id = r.profile_id "
+        "WHERE r.started_at >= now() - :delta "
+        + ("AND p.name = :profile " if profile else "")
+        + "ORDER BY r.started_at DESC "
+        "LIMIT :limit"
+    )
+    params: dict = {"delta": delta, "limit": limit}
+    if profile:
+        params["profile"] = profile
+
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]Could not query runs: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+    if not rows:
+        rprint(f"[dim]No runs found in the last {since}.[/dim]")
+        return
+
+    table = Table(
+        title=f"Runs — last {since}",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("ID", no_wrap=True)
+    table.add_column("Source")
+    table.add_column("Fragment key")
+    table.add_column("Profile")
+    table.add_column("Outcome")
+    table.add_column("Prompt tok", justify="right")
+    table.add_column("Compl tok", justify="right")
+    table.add_column("Cost", justify="right")
+    table.add_column("Langfuse")
+
+    for row in rows:
+        outcome_fmt = (
+            "[green]success[/green]" if row.outcome == "success"
+            else f"[red]{row.outcome}[/red]"
+        )
+        trace_link = (
+            f"{langfuse_host}/trace/{row.langfuse_trace_id}"
+            if row.langfuse_trace_id else "[dim]—[/dim]"
+        )
+        table.add_row(
+            str(row.id),
+            row.iri,
+            row.fragment_key,
+            row.profile_name,
+            outcome_fmt,
+            str(row.prompt_tokens or 0),
+            str(row.completion_tokens or 0),
+            format_cost(float(row.cost_usd or 0)),
+            trace_link,
+        )
+
+    rprint(table)
+
+
+# ---------------------------------------------------------------------------
+# profile sub-app
+# ---------------------------------------------------------------------------
+
+profile_app = typer.Typer(name="profile", help="Manage compiler profiles.", no_args_is_help=True)
+app.add_typer(profile_app)
+
+
+@profile_app.command("register")
+def profile_register(
+    yaml_path: str = typer.Argument(..., help="Path to the profile YAML file"),
+) -> None:
+    """Register a compiler profile from a YAML file into the catalog.
+
+    The profile is upserted by (name, version).  If the same name+version
+    already exists the existing row is left unchanged.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from riverbank.pipeline import CompilerProfile, IngestPipeline  # noqa: PLC0415
+
+    path = Path(yaml_path)
+    if not path.exists():
+        rprint(f"[red]Profile file not found: {yaml_path}[/red]")
+        raise typer.Exit(code=1)
+
+    profile = CompilerProfile.from_yaml(path)
+    pipeline = IngestPipeline()
+
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    engine = create_engine(pipeline._settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            db_id = pipeline._ensure_profile(conn, profile)
+    finally:
+        engine.dispose()
+
+    rprint(
+        f"[green]✓[/green]  profile [bold]{profile.name}[/bold] v{profile.version} "
+        f"registered (id={db_id})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# source sub-app
+# ---------------------------------------------------------------------------
+
+source_app = typer.Typer(name="source", help="Manage registered sources.", no_args_is_help=True)
+app.add_typer(source_app)
+
+
+@source_app.command("set-profile")
+def source_set_profile(
+    source_iri: str = typer.Argument(..., help="Source IRI to update"),
+    profile_name: str = typer.Argument(..., help="Profile name to associate"),
+    profile_version: int = typer.Option(
+        1, "--version", "-v", help="Profile version"
+    ),
+) -> None:
+    """Associate a registered source with a compiler profile.
+
+    Updates the ``profile_id`` column in ``_riverbank.sources`` for the given
+    source IRI.  The profile must already be registered (use
+    ``riverbank profile register``).
+    """
+    from sqlalchemy import create_engine, text  # noqa: PLC0415
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT id FROM _riverbank.profiles "
+                    "WHERE name = :name AND version = :version"
+                ),
+                {"name": profile_name, "version": profile_version},
+            ).fetchone()
+            if row is None:
+                rprint(
+                    f"[red]Profile '{profile_name}' v{profile_version} not found — "
+                    f"run 'riverbank profile register' first.[/red]"
+                )
+                raise typer.Exit(code=1)
+            profile_id = row[0]
+
+            result = conn.execute(
+                text(
+                    "UPDATE _riverbank.sources SET profile_id = :pid WHERE iri = :iri"
+                ),
+                {"pid": profile_id, "iri": source_iri},
+            )
+            conn.commit()
+
+            if result.rowcount == 0:
+                rprint(f"[yellow]Source IRI not found in catalog: {source_iri}[/yellow]")
+                raise typer.Exit(code=1)
+
+    finally:
+        engine.dispose()
+
+    rprint(
+        f"[green]✓[/green]  source [bold]{source_iri}[/bold] assigned to "
+        f"profile [bold]{profile_name}[/bold] v{profile_version}"
+    )
+
+
+@app.command()
+def lint(
+    named_graph: str = typer.Option(
+        "http://riverbank.example/graph/trusted",
+        "--graph", "-g",
+        help="Named graph IRI to validate",
+    ),
+    shacl_only: bool = typer.Option(
+        False, "--shacl-only",
+        help="Run SHACL quality report only (no other lint checks)",
+    ),
+    threshold: float = typer.Option(
+        0.7, "--threshold", "-t",
+        help="Minimum acceptable SHACL score [0.0–1.0]",
+    ),
+) -> None:
+    """Run a SHACL quality report against a named graph.
+
+    With ``--shacl-only`` (the standard v0.3.0 invocation) this is a thin
+    wrapper around ``pg_ripple.shacl_score()``.  Exits non-zero if the score
+    falls below the profile threshold.
+
+    Example::
+
+        riverbank lint --shacl-only --graph http://riverbank.example/graph/trusted
+    """
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.catalog.graph import shacl_score  # noqa: PLC0415
+
+    if not shacl_only:
+        rprint(
+            "[yellow]Full lint (beyond --shacl-only) is planned for v0.5.0.  "
+            "Pass --shacl-only to run the SHACL quality gate now.[/yellow]"
+        )
+        raise typer.Exit(code=0)
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            score = shacl_score(conn, named_graph)
+    finally:
+        engine.dispose()
+
+    color = "green" if score >= threshold else "red"
+    rprint(
+        f"[bold]riverbank lint[/bold]  graph={named_graph!r}\n\n"
+        f"  SHACL score: [{color}]{score:.4f}[/{color}]  "
+        f"(threshold {threshold:.2f})"
+    )
+
+    if score < threshold:
+        rprint(
+            f"\n[red bold]SHACL quality gate FAILED — "
+            f"score {score:.4f} < threshold {threshold:.2f}[/red bold]"
+        )
+        raise typer.Exit(code=1)
+
+    rprint("\n[green bold]SHACL quality gate passed[/green bold]")

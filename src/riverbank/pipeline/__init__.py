@@ -48,6 +48,7 @@ class CompilerProfile:
         }
     )
     named_graph: str = "http://riverbank.example/graph/trusted"
+    competency_questions: list = field(default_factory=list)
     # id is set after the profile is registered in the catalog DB
     id: Optional[int] = None
 
@@ -515,22 +516,15 @@ class IngestPipeline:
 # Cost estimation helpers
 # ---------------------------------------------------------------------------
 
-# Rough cost table (USD per 1 000 tokens) — Ollama / local models are free
-_COST_TABLE: dict[str, tuple[float, float]] = {
-    "gpt-4o": (0.005, 0.015),
-    "gpt-4o-mini": (0.00015, 0.0006),
-    "gpt-3.5-turbo": (0.001, 0.002),
-}
-
 
 def _estimate_cost(
     prompt_tokens: int,
     completion_tokens: int,
     profile: CompilerProfile,
 ) -> float:
-    model = profile.model_name.lower()
-    input_rate, output_rate = _COST_TABLE.get(model, (0.0, 0.0))
-    return (prompt_tokens / 1000 * input_rate) + (completion_tokens / 1000 * output_rate)
+    from riverbank.cost_tables import estimate_cost  # noqa: PLC0415
+
+    return estimate_cost(prompt_tokens, completion_tokens, profile.model_name)
 
 
 def _estimate_cost_single(

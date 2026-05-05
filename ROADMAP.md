@@ -22,7 +22,7 @@
 |---|---|---|---|
 | v0.1.0 | Skeleton — `docker compose up` proves the deployment story: CLI scaffolding, catalog migrations, no-op extractor, Langfuse wired | **Done** | Small |
 | v0.2.0 | MVP ingestion — Markdown corpus → triples with citation grounding, confidence scores, and fragment-level skip on re-ingest | **Done** | Large |
-| v0.3.0 | MVP completion — `riverbank query`, `riverbank runs`, cost accounting, Langfuse traces, golden corpus CI gate | Planned | Medium |
+| v0.3.0 | MVP completion — `riverbank query`, `riverbank runs`, cost accounting, Langfuse traces, golden corpus CI gate | **Done** | Medium |
 
 ### Incremental Compilation (v0.4.x)
 
@@ -122,19 +122,19 @@ Re-running produces 0 LLM calls.
 Goal: close out the MVP with query access, run inspection, cost visibility, and
 a reproducible CI gate.
 
-- `riverbank query <sparql>` — execute SPARQL against the compiled graph
-- `riverbank runs --since 1h` — inspect recent compiler runs with outcome,
+- [x] `riverbank query <sparql>` — execute SPARQL against the compiled graph
+- [x] `riverbank runs --since 1h` — inspect recent compiler runs with outcome,
   token counts, and Langfuse deep-links
-- Cost accounting: per-source and per-profile cost dashboards via
+- [x] Cost accounting: per-source and per-profile cost dashboards via
   `_riverbank.runs.cost_usd`; cost tables in `riverbank/cost_tables/`
-- Schema rejection and citation enforcement acceptance tests
-- Golden corpus: `tests/golden/` with SPARQL `ASK`/`SELECT` assertions over a
+- [x] Schema rejection and citation enforcement acceptance tests
+- [x] Golden corpus: `tests/golden/` with SPARQL `ASK`/`SELECT` assertions over a
   fixed Markdown corpus; profile or model changes that break a golden assertion
   fail CI
-- Full test suite runs in under 10 minutes in CI against `ollama/llama3.2:3b`
-- `riverbank profile register` and `riverbank source set-profile` commands
-- **`riverbank lint --shacl-only`** — thin SHACL quality report against the trusted named graph; exits non-zero if score falls below the profile threshold. No Prefect required. Establishes governance as a first-class operation from day one, before the full lint pass lands in v0.5.0.
-- **Competency question CI gate** — golden corpus assertions are generated from the `competency_questions` array in each compiler profile. CI validates not just that triples were written, but that the compiled graph answers what the profile was built to answer.
+- [x] Full test suite runs in under 10 minutes in CI against `ollama/llama3.2:3b`
+- [x] `riverbank profile register` and `riverbank source set-profile` commands
+- [x] **`riverbank lint --shacl-only`** — thin SHACL quality report against the trusted named graph; exits non-zero if score falls below the profile threshold. No Prefect required. Establishes governance as a first-class operation from day one, before the full lint pass lands in v0.5.0.
+- [x] **Competency question CI gate** — golden corpus assertions are generated from the `competency_questions` array in each compiler profile. CI validates not just that triples were written, but that the compiled graph answers what the profile was built to answer.
 
 **Exit criterion:** end-to-end demo on pg_ripple's own `docs/src/**/*.md`:
 ≥ 80% fragment skip rate on re-ingest, ≥ 95% of facts with valid evidence
