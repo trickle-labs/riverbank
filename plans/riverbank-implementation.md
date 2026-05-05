@@ -229,6 +229,7 @@ CREATE TABLE _riverbank.profiles (
     prompt_hash     BYTEA NOT NULL,
     prompt_text     TEXT NOT NULL,
     editorial_policy JSONB NOT NULL,                -- ingest gate policy YAML→JSON
+    competency_questions JSONB NOT NULL DEFAULT '[]', -- SPARQL ASK/SELECT assertions this graph must answer; drives golden corpus CI
     model_provider  TEXT NOT NULL,                  -- 'openai-compat', 'ollama', …
     model_name      TEXT NOT NULL,
     embedding_model TEXT,
@@ -444,6 +445,19 @@ class ExtractedFact(BaseModel):
 
 A Pydantic validator confirms `fragment.text[span.char_start:span.char_end] == span.quote`; if not, Instructor's retry loop re-prompts the model. After three failures the fact is rejected and counted in the run diagnostics. This is the §7.0 ingest gate enforced at the type-system level.
 
+**Vocabulary-pass schema.** When a profile's `run_mode` is `'vocabulary'` (see §7.3 of the strategy doc), the extractor uses a lighter schema that produces SKOS-encoded entities instead of relationship triples. This is the first pass that establishes a clean, deduplicated vocabulary before any relationship extraction begins — the same discipline the Ontology Pipeline framework prescribes for building controlled vocabularies before taxonomies:
+
+```python
+class ExtractedEntity(BaseModel):
+    preferred_label: str        # canonical form — the one label to rule them all
+    alternate_labels: list[str] # synonyms and abbreviations found in this fragment
+    scope_note: str             # one-sentence definition drawn from the source text
+    evidence_span: EvidenceSpan # where in the fragment this entity was identified
+    confidence: float = Field(ge=0.0, le=1.0)
+```
+
+The vocabulary-pass output is written as `skos:Concept` triples (`skos:prefLabel`, `skos:altLabel`, `skos:scopeNote`) into the named graph. Subsequent full-extraction passes are given the compiled vocabulary as a structured context block in the prompt, constraining the LLM to snap entity references to existing preferred labels rather than generating novel surface forms. This upstream vocabulary constraint prevents the synonym fragmentation that is the root cause of most entity-resolution failures downstream.
+
 **Ingest gate flow.**
 
 ```
@@ -509,7 +523,7 @@ Goal: prove that the system rebuilds *only* what changed when a source updates.
 2. **`riverbank explain <artifact-iri>`** — dumps the dependency tree of any compiled artifact: which fragments it came from, which profile version, which rules contributed.
 3. **Recompile flow.** When a source updates: identify changed fragments → identify dependent artifacts → invalidate them → re-extract changed fragments → re-derive dependent artifacts → emit semantic diff event.
 4. **Docling integration.** PDF, DOCX, PPTX, HTML, and image OCR. The `Docling` parser becomes the default for non-Markdown sources.
-5. **spaCy NER pre-resolution.** Named entities are extracted before the LLM call and passed as a structured context block. The Instructor schema can reference pre-resolved entity IRIs, reducing both token usage and entity-confusion errors.
+5. **spaCy NER pre-resolution + vocabulary lookup.** Named entities are extracted before the LLM call. When a vocabulary pass has already run for the corpus, the pre-resolution step also performs a vocabulary lookup against the compiled `skos:prefLabel` / `skos:altLabel` index, injecting matched preferred-label IRIs into the structured context block. This means the LLM receives both spaCy-detected entity spans *and* their canonical vocabulary forms before writing a single fact — upstream vocabulary constraint, not downstream deduplication.
 6. **Fuzzy entity matching.** pg-ripple provides `pg:fuzzy_match()` and `pg:token_set_ratio()` directly in SPARQL (v0.87), backed by a GIN trigram index on `_pg_ripple.confidence`. These produce candidate `owl:sameAs` edges with confidence scores without leaving the database. For Python-side pre-resolution before LLM calls, `RapidFuzz` token-set ratio provides the same matching in the extraction pipeline. Above-threshold matches are written automatically; borderline matches are flagged for Phase 3 review. Additionally, pg-ripple's `suggest_sameas()` (v0.49) provides vector-based entity candidates and `pagerank_find_duplicates()` (v0.88) provides centrality-guided entity deduplication.
 7. **Embedding generation.** Sentence-transformers locally produce embeddings for each compiled summary. Embeddings are written to a pgvector column on the entity-page artifact. Topic-cluster centroid views are maintained as `avg(embedding)::vector` stream tables via pg-trickle's native pgVector IVM (v0.37+): the centroid updates incrementally when a new fact arrives without a full scan, giving `rag_retrieve()` a sub-millisecond starting point for entity-cluster lookup before fetching individual facts.
 8. **Singer-tap connector.** A `singer` connector wraps any Singer tap; the MVP includes `tap-github` for issues and `tap-slack-search` for channel exports. Alternatively, configure pg-tide as a Singer target:
@@ -546,7 +560,7 @@ Goal: a running human-in-the-loop pipeline that converts low-confidence extracti
 3. **Editorial policy example bank.** Each Label Studio decision is exported to the profile's example bank. The next compile run uses these as few-shot examples.
 4. **SHACL score history.** A daily Prefect flow snapshots `shacl_score()` per named graph into a Prometheus metric. (Prefect is first introduced here; the APScheduler job from Phase 1 is replaced.)
 5. **Langfuse evaluations.** Generated Q&A pairs (parent §8.4) run as Langfuse dataset evaluations on every recompile; regressions surface as Langfuse alerts.
-6. **Lint flow.** `riverbank lint` runs the §10.21 lint pass and writes findings to `pgc:LintFinding` triples; Prefect schedules it nightly.
+6. **Full lint flow.** `riverbank lint` expands the thin SHACL report introduced in v0.3.0 into the §10.21 full lint pass: contradiction detection, orphan pages, missing cross-references, data gap analysis, stale claim detection, and `--check-coverage` against each profile's `competency_questions`. Findings write to `pgc:LintFinding` triples; Prefect schedules it nightly.
 
 ### Acceptance
 
@@ -678,6 +692,10 @@ Tests run in CI on every PR. Total runtime budget: < 10 minutes.
 ### 14.3 Golden corpus
 
 `tests/golden/` holds a small hand-curated Markdown corpus with expected SPARQL `ASK` and `SELECT` results. A profile change, model upgrade, or pg_ripple version bump that breaks a golden assertion is a CI failure.
+
+Assertions are generated from the `competency_questions` array stored in the compiler profile record (`_riverbank.profiles.competency_questions`). Each entry is a SPARQL `ASK` or `SELECT` query paired with an expected result; the test framework runs every query against the compiled graph after ingest and fails if the result does not match. This validates not just that triples were written, but that the graph answers the questions the profile was designed to answer — the discipline of stating competency questions before writing extraction rules, enforced by the build.
+
+A profile whose `competency_questions` array is empty produces a CI warning: `no competency questions declared; golden gate cannot validate semantic coverage`.
 
 ### 14.4 Property-based tests
 

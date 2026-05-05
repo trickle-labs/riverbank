@@ -1,0 +1,89 @@
+services:
+
+  # ─── PostgreSQL with pg_ripple + pg_trickle extensions ────────────────────
+  postgres:
+    image: ghcr.io/trickle-labs/pg-ripple:0.93.0
+    environment:
+      POSTGRES_USER: riverbank
+      POSTGRES_PASSWORD: riverbank
+      POSTGRES_DB: riverbank
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U riverbank -d riverbank"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # ─── pg-tide relay sidecar ────────────────────────────────────────────────
+  pg_tide:
+    image: ghcr.io/trickle-labs/pg-tide:0.6.0
+    environment:
+      PGTIDE_DATABASE_URL: postgresql://riverbank:riverbank@postgres:5432/riverbank
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: on-failure
+
+  # ─── Ollama (local LLM runtime — no API key required) ────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollamadata:/root/.ollama
+
+  # ─── Langfuse (LLM observability — self-hosted) ───────────────────────────
+  langfuse_db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  langfuse:
+    image: langfuse/langfuse:3
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse_db:5432/langfuse
+      NEXTAUTH_URL: http://localhost:3000
+      # Change these in production — they are dev-only placeholders
+      NEXTAUTH_SECRET: "riverbank-dev-secret-change-in-production"
+      SALT: "riverbank-dev-salt-change-in-production"
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      langfuse_db:
+        condition: service_healthy
+
+  # ─── riverbank worker ─────────────────────────────────────────────────────
+  worker:
+    build:
+      context: .
+      target: runtime
+    environment:
+      RIVERBANK_DB__DSN: postgresql+psycopg://riverbank:riverbank@postgres:5432/riverbank
+      RIVERBANK_LLM__PROVIDER: ollama
+      RIVERBANK_LLM__API_BASE: http://ollama:11434/v1
+      RIVERBANK_LLM__MODEL: llama3.2
+      RIVERBANK_LANGFUSE__ENABLED: "false"
+      RIVERBANK_LANGFUSE__HOST: http://langfuse:3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: on-failure
+    command: ["version"]
+
+volumes:
+  pgdata:
+  ollamadata:
+  langfuse_pgdata:

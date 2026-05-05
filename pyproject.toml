@@ -1,0 +1,92 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "riverbank"
+version = "0.1.0.dev0"
+description = "Compiled knowledge-base worker for pg-ripple, pg-trickle, and pg-tide"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.12",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.2",
+    "rich>=13.7",
+    "opentelemetry-api>=1.24",
+    "opentelemetry-sdk>=1.24",
+    "structlog>=24.1",
+]
+
+[project.optional-dependencies]
+# Heavy NLP / LLM dependencies — installed when you actually want to compile
+ingest = [
+    "docling>=2.92",
+    "instructor>=1.15",
+    "spacy>=3.8",
+    "sentence-transformers>=3.1",
+    "rapidfuzz>=3.9",
+    "tenacity>=8.3",
+]
+# Workflow orchestration — added in Phase 2
+orchestration = [
+    "apscheduler>=4.0",
+    "prefect>=3.6",
+]
+# Developer tooling
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "testcontainers[postgres]>=4.7",
+    "coverage[toml]>=7.5",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+riverbank = "riverbank.cli:app"
+
+[project.entry-points."riverbank.parsers"]
+markdown = "riverbank.parsers.markdown:MarkdownParser"
+
+[project.entry-points."riverbank.fragmenters"]
+heading = "riverbank.fragmenters.heading:HeadingFragmenter"
+
+[project.entry-points."riverbank.extractors"]
+noop = "riverbank.extractors.noop:NoOpExtractor"
+
+[project.entry-points."riverbank.connectors"]
+filesystem = "riverbank.connectors.fs:FilesystemConnector"
+
+[project.entry-points."riverbank.reviewers"]
+file = "riverbank.reviewers.file:FileReviewer"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/riverbank"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["src/riverbank"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true

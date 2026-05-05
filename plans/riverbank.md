@@ -481,6 +481,7 @@ defines:
   confidence propagation through derived facts
 - Default extraction confidence level assigned at ingest time
 - Preferred LLM and embedding models, and maximum fragment size
+- **Competency questions**: the SPARQL `ASK` and `SELECT` assertions the compiled graph is designed to answer. These are the questions you write before you write a single extraction rule — if the profile cannot state them, the extraction schema is not ready. The CI golden corpus gate runs each competency question against the compiled graph and fails if the result does not match. `riverbank lint --check-coverage` surfaces unanswered questions at runtime.
 
 Profile versioning matters. Changing the prompt is changing the compiler. The
 system must know which knowledge was produced by which profile version.

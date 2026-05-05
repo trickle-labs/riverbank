@@ -1,0 +1,105 @@
+@prefix pgc:   <https://pg-ripple.org/compile#> .
+@prefix prov:  <http://www.w3.org/ns/prov#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+
+# ─── Ontology header ─────────────────────────────────────────────────────────
+
+<https://pg-ripple.org/compile>
+    a                owl:Ontology ;
+    rdfs:label       "pgc — riverbank compiler vocabulary" ;
+    rdfs:comment     "Small vocabulary used by the riverbank compiler to annotate compiled artifacts." .
+
+# ─── Classes ─────────────────────────────────────────────────────────────────
+
+pgc:Source
+    a            rdfs:Class ;
+    rdfs:label   "Source" ;
+    rdfs:comment "A registered source document (file, API response, issue, …)." .
+
+pgc:Fragment
+    a            rdfs:Class ;
+    rdfs:label   "Fragment" ;
+    rdfs:comment "A stable section of a source (heading block, page, time segment, …)." .
+
+pgc:Profile
+    a            rdfs:Class ;
+    rdfs:label   "Profile" ;
+    rdfs:comment "A versioned compiler profile: JSON Schema + system prompt + editorial policy." .
+
+pgc:Run
+    a            rdfs:Class ;
+    rdfs:label   "Run" ;
+    rdfs:comment "One compile attempt for a fragment under a profile." .
+
+pgc:Synthesis
+    a            rdfs:Class ;
+    rdfs:subClassOf pgc:Artifact ;
+    rdfs:label   "Synthesis" ;
+    rdfs:comment "An atomic compiled artifact (a triple or named claim) written to the graph." .
+
+pgc:LintFinding
+    a            rdfs:Class ;
+    rdfs:label   "LintFinding" ;
+    rdfs:comment "A quality finding raised by the nightly lint pass." .
+
+# Phase 5 epistemic classes
+
+pgc:ArgumentRecord
+    a            rdfs:Class ;
+    rdfs:label   "ArgumentRecord" ;
+    rdfs:comment "(Phase 5) A structured argument for or against a claim." .
+
+pgc:AssumptionRecord
+    a            rdfs:Class ;
+    rdfs:label   "AssumptionRecord" ;
+    rdfs:comment "(Phase 5) An explicit assumption made during compilation." .
+
+pgc:NegativeKnowledge
+    a            rdfs:Class ;
+    rdfs:label   "NegativeKnowledge" ;
+    rdfs:comment "(Phase 5) A recorded absence of evidence for a claim." .
+
+# ─── Properties ──────────────────────────────────────────────────────────────
+
+pgc:fromFragment
+    a                rdf:Property ;
+    rdfs:subPropertyOf prov:wasDerivedFrom ;
+    rdfs:label       "fromFragment" ;
+    rdfs:comment     "Links a compiled artifact to the fragment it was extracted from." ;
+    rdfs:domain      pgc:Synthesis ;
+    rdfs:range       pgc:Fragment .
+
+pgc:byProfile
+    a                rdf:Property ;
+    rdfs:label       "byProfile" ;
+    rdfs:comment     "The compiler profile used to produce this artifact." ;
+    rdfs:domain      pgc:Synthesis ;
+    rdfs:range       pgc:Profile .
+
+pgc:confidence
+    a                rdf:Property ;
+    rdfs:label       "confidence" ;
+    rdfs:comment     "Confidence score in [0.0, 1.0] assigned by the extractor." ;
+    rdfs:range       xsd:float .
+
+pgc:epistemicStatus
+    a                rdf:Property ;
+    rdfs:label       "epistemicStatus" ;
+    rdfs:comment     "Human-readable epistemic status tag (e.g. 'hypothesis', 'established', 'contested')." ;
+    rdfs:range       xsd:string .
+
+pgc:evidenceSpan
+    a                rdf:Property ;
+    rdfs:label       "evidenceSpan" ;
+    rdfs:comment     "JSON object describing the exact location of supporting text: {char_start, char_end, page_number, excerpt}." ;
+    rdfs:range       xsd:string .
+
+pgc:compiledAt
+    a                rdf:Property ;
+    rdfs:subPropertyOf prov:generatedAtTime ;
+    rdfs:label       "compiledAt" ;
+    rdfs:comment     "Timestamp of the compiler run that produced this artifact." ;
+    rdfs:range       xsd:dateTime .

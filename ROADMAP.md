@@ -133,6 +133,8 @@ a reproducible CI gate.
   fail CI
 - Full test suite runs in under 10 minutes in CI against `ollama/llama3.2:3b`
 - `riverbank profile register` and `riverbank source set-profile` commands
+- **`riverbank lint --shacl-only`** — thin SHACL quality report against the trusted named graph; exits non-zero if score falls below the profile threshold. No Prefect required. Establishes governance as a first-class operation from day one, before the full lint pass lands in v0.5.0.
+- **Competency question CI gate** — golden corpus assertions are generated from the `competency_questions` array in each compiler profile. CI validates not just that triples were written, but that the compiled graph answers what the profile was built to answer.
 
 **Exit criterion:** end-to-end demo on pg_ripple's own `docs/src/**/*.md`:
 ≥ 80% fragment skip rate on re-ingest, ≥ 95% of facts with valid evidence
