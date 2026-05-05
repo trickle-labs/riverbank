@@ -112,7 +112,15 @@ Jessica Talisman's [Ontology Pipeline®](https://jessicatalisman.substack.com/p/
 
 The critical difference between riverbank and a human-constructed knowledge system is *who does the extraction*. Talisman's pipeline assumes semantic engineers making deliberate modelling decisions at each stage. Riverbank assumes LLMs doing the extraction, with humans reviewing outputs rather than authoring them. Her framework is the standard for the *output quality* riverbank must produce. It is not the workflow riverbank follows to produce it — that is Karpathy's compiler pattern.
 
-The two frameworks are complementary. Karpathy without Talisman produces a compiled artifact of unknown structural quality. Talisman without Karpathy produces a methodology that does not scale to LLM-speed ingestion. Together they define both the engineering pattern and the quality contract.
+The two frameworks are complementary, and the Refresh article (2026) makes a third axis explicit:
+
+| Axis | Source | Riverbank role |
+|---|---|---|
+| Engineering pattern | Karpathy (compiler analogy) | Pipeline architecture: ingest → compile → validate → publish |
+| Quality contract | Talisman (Ontology Pipeline) | SHACL shapes, SKOS integrity, layered named graphs, competency questions |
+| Living governance | Talisman (Refresh) | Drift detection, audit trail, provenance enforcement, correction loops |
+
+Karpathy without Talisman produces a compiled artifact of unknown structural quality. Talisman without Karpathy produces a methodology that does not scale to LLM-speed ingestion. Neither addresses the third axis: "the day an ontology is deployed is the day it starts to drift" — governance must be a continuous engineering practice, not a periodic review. Together the three axes define the engineering pattern, the quality contract, and the operational discipline.
 
 ---
 
@@ -501,7 +509,7 @@ defines:
   confidence propagation through derived facts
 - Default extraction confidence level assigned at ingest time
 - Preferred LLM and embedding models, and maximum fragment size
-- **`run_mode_sequence`**: ordered list of extraction passes the profile runs against each source. The standard sequence is `['vocabulary', 'full']` — the vocabulary pass first establishes a clean, disambiguated controlled vocabulary (entity preferred labels, alternate labels, scope notes encoded as `skos:Concept` triples), and the full pass then extracts relationships with the compiled vocabulary available as a context constraint. Profiles that skip the vocabulary pass and jump directly to `'full'` trade vocabulary hygiene for speed — acceptable for small corpora with well-controlled source language, problematic for large corpora with mixed authorship where synonym fragmentation accumulates.
+- **`run_mode_sequence`**: ordered list of extraction passes the profile runs against each source. The standard sequence is `['vocabulary', 'full']` — the vocabulary pass first establishes a clean, disambiguated controlled vocabulary (entity preferred labels, alternate labels, scope notes encoded as `skos:Concept` triples), and the full pass then extracts relationships with the compiled vocabulary available as a context constraint. Profiles that skip the vocabulary pass and jump directly to `'full'` trade vocabulary hygiene for speed — acceptable for small corpora with well-controlled source language, problematic for large corpora with mixed authorship where synonym fragmentation accumulates. Before the LLM vocabulary pass begins, a lightweight corpus pre-analysis step (TF-IDF over fragment text, co-occurrence clustering) produces a ranked list of candidate terms that the LLM is asked to define rather than discover from scratch — grounding the extraction in actual corpus language and reducing hallucinated vocabulary items. Synonym rings (ANSI Z39.19) are captured as `skos:altLabel` triples for every discovered variant; `pg:token_set_ratio()` validates that extracted alt-labels are genuinely synonymous against a configurable threshold before they are written. Terms marked `owl:deprecated true` propagate via a CONSTRUCT rule to any entity still referencing the deprecated label — flagging stale facts for re-extraction automatically.
 - **Standard Datalog rule bundles**: profiles activate named rule bundles rather than writing ad-hoc Datalog from scratch. `skos-transitive` (included by default) derives transitive `skos:broader` closures, symmetric `skos:related`, and transitive `skos:exactMatch` — standard SKOS semantics pg_ripple's Datalog engine handles natively, removing the need to extract every hierarchical relationship explicitly. `prov-o-basic` and `rdfs-subclass` are additional standard bundles.
 - **Competency questions**: the SPARQL `ASK` and `SELECT` assertions the compiled graph is designed to answer. These are the questions you write before you write a single extraction rule — if the profile cannot state them, the extraction schema is not ready. The CI golden corpus gate runs each competency question against the compiled graph and fails if the result does not match. `riverbank lint --check-coverage` surfaces unanswered questions at runtime.
 
@@ -556,7 +564,7 @@ Each layer is independently queryable and lintable (`riverbank lint --layer voca
 - Per-run quality metrics: mean extraction confidence, contradiction count,
   SHACL score, and schema validation failure rate
 
-These records enable three operational capabilities. **Cost dashboards** per
+These records enable four operational capabilities. **Cost dashboards** per
 source, profile, and team reveal when one noisy source is consuming a
 disproportionate share of LLM budget and can be scheduled less aggressively.
 **Quality regression detection** makes a drop in mean extraction confidence or a
@@ -564,7 +572,16 @@ rise in SHACL failures after a prompt version update immediately visible as a
 query over run history — before users notice wrong answers. **Cost-aware
 scheduling** lets the incremental planner deprioritize expensive profiles for
 low-importance sources (ranked by PageRank) and prioritize them for
-high-centrality ones, aligning spend with structural importance.
+high-centrality ones, aligning spend with structural importance. **Context
+efficiency ratio**: for every `rag_context()` call, the run record stores the
+token count of the graph-based context block alongside an estimate of what a
+naive RAG retrieval (raw chunk concatenation) would have consumed for equivalent
+coverage — derived from the fragment sizes of the source artifacts referenced.
+The ratio is surfaced in cost dashboards and in the per-run log. Research
+(GenAIK workshop, 2025) documents an 80% token reduction when graph-based
+retrieval replaces vector RAG for equivalent factual coverage; the context
+efficiency ratio makes this claim measurable and per-corpus rather than a
+global average.
 
 Without this data, costs grow silently and quality regressions are invisible
 until the damage is done.
@@ -860,11 +877,15 @@ standard constant) and `rank_i` is its position in each stream's ranked list.
 Documents not retrieved by a stream contribute zero. RRF is implemented as a
 small SQL function — no additional dependency, no tuning parameters.
 
-The three streams are complementary by design. BM25 finds "Redis" when the user
+A fourth mechanism runs before stream dispatch: **thesaurus query expansion**. The query terms are expanded via the `<thesaurus>` named graph before being handed to all three streams. `skos:altLabel` provides synonym coverage ("SSO" → "Single Sign-On", "sso login"); `skos:related` provides associative coverage ("authentication" → "session management", "token revocation"); `skos:exactMatch` / `skos:closeMatch` provide cross-corpus alignment when multiple source domains are compiled. The expansion is a SPARQL lookup against the thesaurus layer — sub-millisecond, no LLM call required — and the expanded term set is injected into all three stream queries simultaneously. This is the mechanism by which the `<thesaurus>` layer pays operational dividends at query time rather than sitting as a static compilation artifact.
+
+The four mechanisms are complementary by design. BM25 finds "Redis" when the user
 asks about Redis. Vectors find Redis-related content when the user asks about
 "caching layer" without using the word. Graph traversal finds everything that
 *depends on* the Redis node — services, deployment configs, runbooks, ADRs —
-that neither keyword nor vector search would surface.
+that neither keyword nor vector search would surface. Thesaurus expansion finds
+everything the user meant but did not say, grounded in the vocabulary of the
+corpus itself rather than in a generic embedding space.
 
 Search targets are compiled artifacts — summaries, entity descriptions, evidence
 spans, generated Q&A pairs — not raw source chunks. This matters: a chunk can

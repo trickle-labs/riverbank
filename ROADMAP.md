@@ -222,6 +222,13 @@ extractions into reviewed, high-confidence facts.
   evaluations on every recompile; regressions surface as alerts.
 - **Lint flow.** `riverbank lint` runs a full lint pass and writes findings to
   `pgc:LintFinding` triples; Prefect schedules it nightly.
+- **Thesaurus layer activation.** `riverbank query` expands query terms via the
+  `<thesaurus>` named graph before dispatching BM25, vector, and graph traversal
+  streams. `skos:altLabel` provides synonym coverage; `skos:related` provides
+  associative coverage; `skos:exactMatch` / `skos:closeMatch` provide cross-corpus
+  alignment. The expansion is a SPARQL lookup — sub-millisecond, no LLM call.
+  This is the release where the thesaurus layer transitions from a compilation
+  artifact to an active query-time asset.
 
 **Exit criterion:** reviewer receives a Label Studio task within 60 seconds of
 a low-confidence extraction; correction is reflected in the next SPARQL query;
@@ -244,10 +251,14 @@ workers, secret management, backups, and SLOs.
 - **Prometheus metrics + Perses dashboard.** `/metrics` exposes
   `riverbank_runs_total`, `riverbank_run_duration_seconds`,
   `riverbank_llm_cost_usd_total`, `riverbank_shacl_score`,
-  `riverbank_review_queue_depth`. Perses panels ship in `riverbank/perses/`
-  and import the pg-tide relay health sub-dashboard (relay throughput, error
-  rate, DLQ depth, circuit breaker state, forward latency) from pg-tide's own
-  Perses definition — relay metrics are not re-implemented in riverbank.
+  `riverbank_review_queue_depth`, `riverbank_context_efficiency_ratio` (graph
+  tokens vs estimated naive-RAG tokens per `rag_context()` call). Perses panels
+  ship in `riverbank/perses/` and import the pg-tide relay health sub-dashboard
+  (relay throughput, error rate, DLQ depth, circuit breaker state, forward
+  latency) from pg-tide's own Perses definition — relay metrics are not
+  re-implemented in riverbank. The context efficiency panel shows the running
+  ratio trend per profile, making the token-cost justification for graph-based
+  retrieval quantitatively visible to operators and stakeholders.
 - **Secret management.** LLM API keys from environment variables, Kubernetes
   Secrets, or HashiCorp Vault (`hvac`). Keys route through pg-tide's
   `${env:VAR}` / `${file:/path}` secret interpolation for relay credentials;
@@ -311,6 +322,17 @@ explicit absence, structured reasoning, and ensemble verification.
   `_riverbank.profiles.competency_questions` to compute the unanswered-question
   count (the one join that requires riverbank's catalog), then writes enriched
   `pgc:CoverageMap` triples surfaced by `rag_context()`.
+- **Procedural knowledge compiler profile.** A built-in profile template
+  (`procedural-v1`) for runbooks, SOPs, incident-response guides, and onboarding
+  flows. The vocabulary pass extracts step names and tool/resource names;
+  the full pass extracts step sequences (`pko:nextStep`, `pko:previousStep`),
+  decision points (`pko:nextAlternativeStep`), preconditions, required expertise
+  levels, and error-handling paths — aligned with the Procedural Knowledge
+  Ontology (PKO) from Cefriel. Standard competency questions are generated
+  automatically: "What happens if step X fails?", "Which steps require admin
+  access?", "What is the rollback path?". This expands riverbank's applicability
+  to operational knowledge that currently lives as tribal practice in undocumented
+  runbooks.
 
 **Exit criterion:** an argument graph in Label Studio produces a
 `pgc:ArgumentRecord` with claim, two evidence nodes, one objection, and one
