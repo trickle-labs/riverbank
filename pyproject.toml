@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "riverbank"
-version = "0.1.0"
+version = "0.2.0"
 description = "Compiled knowledge-base worker for pg-ripple, pg-trickle, and pg-tide"
 readme = "README.md"
 license = { text = "MIT" }
@@ -20,6 +20,9 @@ dependencies = [
     "opentelemetry-api>=1.24",
     "opentelemetry-sdk>=1.24",
     "structlog>=24.1",
+    "markdown-it-py>=3.0",
+    "xxhash>=3.4",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -58,6 +61,7 @@ heading = "riverbank.fragmenters.heading:HeadingFragmenter"
 
 [project.entry-points."riverbank.extractors"]
 noop = "riverbank.extractors.noop:NoOpExtractor"
+instructor = "riverbank.extractors.instructor_extractor:InstructorExtractor"
 
 [project.entry-points."riverbank.connectors"]
 filesystem = "riverbank.connectors.fs:FilesystemConnector"
