@@ -70,7 +70,7 @@ Once your documents are compiled, the full pg-ripple query layer is available:
 ```bash
 git clone https://github.com/trickle-labs/riverbank
 cd riverbank
-docker compose up          # Postgres + pg-ripple + pg-trickle + relay + worker + Prefect + Langfuse
+docker compose up          # Postgres + pg-ripple + pg-trickle + relay + worker + Langfuse
 
 riverbank init my-corpus
 riverbank source add filesystem --path ./docs
@@ -123,7 +123,7 @@ Sources (files, APIs, Kafka, NATS, Singer taps)
 - [pg-trickle](https://github.com/trickle-labs/pg-trickle) — Incremental stream tables and event relay (v0.44)
 - [Docling](https://github.com/DS4SD/docling) — Document parsing
 - [Instructor](https://github.com/jxnl/instructor) — Structured LLM output
-- [Prefect](https://github.com/PrefectHQ/prefect) — Workflow orchestration
+- [tenacity](https://github.com/jd/tenacity) + [APScheduler](https://github.com/agronholm/apscheduler) — Retry and scheduling (Phase 1); [Prefect](https://github.com/PrefectHQ/prefect) replaces these in Phase 2 for full flow orchestration
 - [Langfuse](https://github.com/langfuse/langfuse) — LLM observability
 - [Label Studio](https://github.com/HumanSignal/label-studio) — Human review
 - [Meltano Singer SDK](https://github.com/meltano/sdk) — Tap ecosystem

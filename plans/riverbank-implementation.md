@@ -105,7 +105,8 @@ All choices are open-source with permissive licences. Versions are minimum-suppo
 | Document parser | [Docling](https://github.com/docling-project/docling) ≥ 2.92 (LF AI & Data) | MIT | Phase 1 | Multi-format (PDF, DOCX, PPTX, XLSX, HTML, audio); unified `DoclingDocument`; produces stable structure metadata. Markdown-only corpora can use [markdown-it-py](https://github.com/executablebooks/markdown-it-py) (MIT) to keep the dependency surface small in CI |
 | Structured LLM output | [Instructor](https://github.com/567-labs/instructor) ≥ 1.15 | MIT | Phase 1 | Pydantic-validated extraction with retry on schema failure; provider-agnostic interface (OpenAI, Anthropic, Ollama, vLLM) |
 | Local model runtime | [Ollama](https://github.com/ollama/ollama) | MIT | Phase 1 | One-binary install of any open-weight model; HTTP API compatible with the OpenAI client. Used for CI mock mode and air-gapped deployments |
-| Workflow orchestration | [Prefect](https://github.com/PrefectHQ/prefect) ≥ 3.6 | Apache 2.0 | Phase 1 | Flows and tasks with retry, scheduling, and a self-hosted UI. No separate broker required for the MVP |
+| Retry / scheduling (Phase 1) | [tenacity](https://github.com/jd/tenacity) + [APScheduler](https://github.com/agronholm/apscheduler) ≥ 4.0 | Apache 2.0 | Phase 1 | `tenacity` handles per-call retry with exponential back-off; `APScheduler` drives the nightly lint and daily SHACL snapshot jobs. No extra service or port required |
+| Workflow orchestration | [Prefect](https://github.com/PrefectHQ/prefect) ≥ 3.6 | Apache 2.0 | Phase 2 | Full flow/task graph, run history, retry UI, and scheduling console. Introduced once the pipeline is stable and operational visibility becomes the priority |
 | LLM observability | [Langfuse](https://github.com/langfuse/langfuse) ≥ 3.x | MIT (core) | Phase 1 | Self-hostable via `docker compose up`; traces every LLM call with cost, latency, prompt/completion. Native Instructor integration |
 | OpenTelemetry | [opentelemetry-python](https://github.com/open-telemetry/opentelemetry-python) | Apache 2.0 | Phase 1 | Traces/metrics for the worker; exports to Langfuse and any OTLP collector |
 | Embeddings | [sentence-transformers](https://github.com/UKPLab/sentence-transformers) | Apache 2.0 | Phase 2 | CPU-friendly local embedding models (e.g., `all-MiniLM-L6-v2`, `bge-small-en-v1.5`); no API call required for vector indices |
@@ -145,7 +146,7 @@ riverbank/                       (this repo)
 │   ├── __init__.py
 │   ├── cli.py                  `riverbank` command
 │   ├── config.py               pydantic-settings; env + YAML
-│   ├── flows/                  Prefect flows
+│   ├── pipeline/               ingest, recompile, and lint pipelines (plain async functions; Prefect wrappers added in Phase 2)
 │   │   ├── ingest.py
 │   │   ├── recompile.py
 │   │   └── lint.py
@@ -374,7 +375,7 @@ Goal: a runnable empty pipeline with all the scaffolding in place.
 3. Catalog schema migrations (Alembic) for the §4.1 tables.
 4. CI workflow that runs `pytest` against an ephemeral PostgreSQL with pg_ripple installed (via `testcontainers-python`).
 5. A no-op extractor that records a run, emits a span, and writes nothing to the graph — verifying the orchestration plumbing end-to-end.
-6. `docker compose up` brings up: PostgreSQL with pg_ripple and pg_trickle, pg-tide, the worker, Prefect server, and Langfuse. All services are reachable on `localhost`.
+6. `docker compose up` brings up: PostgreSQL with pg_ripple and pg_trickle, pg-tide, the worker, and Langfuse. All services are reachable on `localhost`. (Prefect server is deferred to Phase 2.)
 
 ### Acceptance
 
@@ -413,7 +414,7 @@ Goal: ingest a Markdown corpus, extract atomic facts, write them to pg_ripple wi
 - Entity resolution beyond exact match (Phase 2)
 - Argument graphs, negative knowledge (Phase 5)
 - Label Studio review UI (Phase 3)
-- Prefect *deployments* — the MVP runs flows directly via the CLI; Prefect is used only for retry, logging, and the local UI
+- Prefect — deferred to Phase 2. Phase 1 uses `tenacity` for retry and `APScheduler` for scheduling
 
 ### 7.2 Key implementation decisions
 
@@ -465,21 +466,22 @@ Fragment ─▶ editorial policy score ─▶ if below threshold: insert into _r
 
 **Cost accounting.** Token counts come from the Instructor response. Cost-per-token tables are in YAML in `riverbank/cost_tables/`; Ollama models are zero-cost. The `cost_usd` column is the source of truth for §7.6 dashboards.
 
-**Observability.** OpenTelemetry spans wrap every stage (parse, fragment, gate, extract, validate, write). Langfuse receives the LLM call traces with prompt and completion. The Prefect run record links to the Langfuse trace via `langfuse_trace_id`.
+**Observability.** OpenTelemetry spans wrap every stage (parse, fragment, gate, extract, validate, write). Langfuse receives the LLM call traces with prompt and completion. The run record in `_riverbank.runs` carries a `langfuse_trace_id` column for direct deep-link access from the CLI.
 
 ### 7.3 Deployment
 
-`docker-compose.yml` brings up six services:
+`docker-compose.yml` brings up five services:
 
 | Service | Image | Ports |
 |---|---|---|
 | postgres | `postgres:18` with pg_ripple and pg_trickle installed | 5432 |
 | pg-tide | `ghcr.io/trickle-labs/pg-tide:latest` | 9090 (metrics) |
 | worker | `riverbank:latest` | — |
-| prefect | `prefecthq/prefect:3.6` | 4200 |
 | langfuse-web | `langfuse/langfuse:3` | 3000 |
 | langfuse-worker | `langfuse/langfuse-worker:3` | — |
 | ollama (CI/local) | `ollama/ollama:latest` | 11434 |
+
+Prefect server is not part of the Phase 1 stack. Retry is handled by `tenacity`; scheduled jobs (nightly lint, daily SHACL snapshot) run via `APScheduler` inside the worker process. Prefect is introduced in Phase 2 alongside the full scheduling console.
 
 Resource budget: the entire stack runs comfortably on a 4 vCPU / 8 GB laptop for the example corpus.
 
@@ -539,7 +541,7 @@ Goal: a running human-in-the-loop pipeline that converts low-confidence extracti
    - Custom labeling templates for: atomic-fact correction, span-based evidence annotation, ensemble disagreement arbitration.
 2. **Active-learning queue.** `riverbank review queue` runs the SPARQL query from §10.9 of the parent plan (centrality × uncertainty) and refreshes Label Studio task priorities.
 3. **Editorial policy example bank.** Each Label Studio decision is exported to the profile's example bank. The next compile run uses these as few-shot examples.
-4. **SHACL score history.** A daily Prefect flow snapshots `shacl_score()` per named graph into a Prometheus metric.
+4. **SHACL score history.** A daily Prefect flow snapshots `shacl_score()` per named graph into a Prometheus metric. (Prefect is first introduced here; the APScheduler job from Phase 1 is replaced.)
 5. **Langfuse evaluations.** Generated Q&A pairs (parent §8.4) run as Langfuse dataset evaluations on every recompile; regressions surface as Langfuse alerts.
 6. **Lint flow.** `riverbank lint` runs the §10.21 lint pass and writes findings to `pgc:LintFinding` triples; Prefect schedules it nightly.
 
@@ -642,7 +644,7 @@ For organisational deployments: the Helm chart from Phase 4. Components:
 | pg_ripple_http | 2+ | Existing companion |
 | pg-tide | 2+ | HA via advisory locks; no external coordinator needed |
 | riverbank worker | 3+ | Horizontal autoscaling on queue depth |
-| Prefect server | 1 | State in PostgreSQL |
+| Prefect server | 1 | State in PostgreSQL (introduced Phase 2) |
 | Langfuse web + worker | 2 + 1 | Requires PostgreSQL (shared) and ClickHouse for traces |
 | Label Studio | 1 | Backed by PostgreSQL (shared) |
 | Ollama (optional) | 1 with GPU | For local-model deployments; cloud LLM provider also supported |
