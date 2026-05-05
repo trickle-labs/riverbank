@@ -38,3 +38,6 @@ htmlcov/
 
 # Alembic
 *.pyc
+
+# Internal research notes — not for distribution
+plans/ontology-pipeline-ideas.md
