@@ -21,7 +21,7 @@
 | Version | Description | Status | Size |
 |---|---|---|---|
 | v0.1.0 | Skeleton — `docker compose up` proves the deployment story: CLI scaffolding, catalog migrations, no-op extractor, Langfuse wired | **Done** | Small |
-| v0.2.0 | MVP ingestion — Markdown corpus → triples with citation grounding, confidence scores, and fragment-level skip on re-ingest | Planned | Large |
+| v0.2.0 | MVP ingestion — Markdown corpus → triples with citation grounding, confidence scores, and fragment-level skip on re-ingest | **Done** | Large |
 | v0.3.0 | MVP completion — `riverbank query`, `riverbank runs`, cost accounting, Langfuse traces, golden corpus CI gate | Planned | Medium |
 
 ### Incremental Compilation (v0.4.x)
@@ -93,23 +93,23 @@ Goal: ingest a Markdown corpus, extract atomic facts, write them to pg_ripple
 with confidence and provenance, and demonstrate fragment-level skip on
 re-ingest.
 
-- `markdown` parser + `heading` fragmenter plugin
-- `instructor` extractor: OpenAI-compatible endpoint (Ollama for local/CI),
+- [x] `markdown` parser + `heading` fragmenter plugin
+- [x] `instructor` extractor: OpenAI-compatible endpoint (Ollama for local/CI),
   `EvidenceSpan` validator, Pydantic retry loop
-- `docs-policy-v1` example compiler profile (YAML → `_riverbank.profiles`)
-- Editorial policy ingest gate: minimum heading depth, fragment length, language
+- [x] `docs-policy-v1` example compiler profile (YAML → `_riverbank.profiles`)
+- [x] Editorial policy ingest gate: minimum heading depth, fragment length, language
   check
-- Citation grounding: every triple must carry a `prov:wasDerivedFrom` edge with
+- [x] Citation grounding: every triple must carry a `prov:wasDerivedFrom` edge with
   character-range evidence; fabricated quotes rejected by the type system
-- `load_triples_with_confidence()` writes facts to a named graph in pg_ripple
-- `shacl_score()` gate routes low-quality output to `<draft>` graph, not
+- [x] `load_triples_with_confidence()` writes facts to a named graph in pg_ripple
+- [x] `shacl_score()` gate routes low-quality output to `<draft>` graph, not
   `<trusted>`
-- Fragment hash check (`xxh3_128`): re-ingesting an unchanged file produces
+- [x] Fragment hash check (`xxh3_128`): re-ingesting an unchanged file produces
   0 LLM calls
-- Filesystem connector with `watchdog` directory-watcher mode
-- `riverbank ingest <path>` command
-- Token counts and cost estimate recorded in `_riverbank.runs`
-- OTel spans wrap every pipeline stage; Langfuse receives LLM call traces
+- [x] Filesystem connector with `watchdog` directory-watcher mode
+- [x] `riverbank ingest <path>` command
+- [x] Token counts and cost estimate recorded in `_riverbank.runs`
+- [x] OTel spans wrap every pipeline stage; Langfuse receives LLM call traces
 
 **Exit criterion:** `riverbank ingest examples/markdown-corpus/` produces
 triples in pg_ripple, all with `pgc:fromFragment` edges and confidence scores.

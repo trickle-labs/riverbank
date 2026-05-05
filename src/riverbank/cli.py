@@ -106,12 +106,67 @@ def init() -> None:
 @app.command()
 def ingest(
     corpus: str = typer.Argument(..., help="Path to a corpus directory or file"),
-    profile: str = typer.Option("default", "--profile", "-p", help="Compiler profile name"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Parse and fragment only; skip extraction"),
+    profile_name: str = typer.Option(
+        "default", "--profile", "-p", help="Compiler profile name or YAML file path"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Parse and fragment only; skip extraction and graph writes"
+    ),
 ) -> None:
-    """Ingest a document corpus into the knowledge graph (Phase 1 — v0.2.0)."""
-    rprint("[yellow]ingest not yet implemented — arriving in v0.2.0[/yellow]")
-    raise typer.Exit(code=0)
+    """Ingest a document corpus into the knowledge graph.
+
+    Discovers Markdown files under CORPUS, fragments each file at heading
+    boundaries, applies the editorial policy gate, extracts triples (using
+    the extractor declared in the profile), and writes them to pg_ripple with
+    confidence scores and provenance edges.
+
+    Unchanged fragments (same xxh3_128 hash) are skipped automatically —
+    re-ingesting an unchanged corpus produces zero LLM calls.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from riverbank.pipeline import CompilerProfile, IngestPipeline  # noqa: PLC0415
+
+    # Resolve the profile
+    profile_path = Path(profile_name)
+    if profile_path.exists() and profile_path.suffix in {".yaml", ".yml"}:
+        profile = CompilerProfile.from_yaml(profile_path)
+    else:
+        profile = CompilerProfile(name=profile_name)
+
+    pipeline = IngestPipeline()
+
+    rprint(f"[bold]riverbank ingest[/bold]  corpus={corpus!r}  profile={profile.name!r}")
+    if dry_run:
+        rprint("[dim]dry-run mode — extraction and graph writes are skipped[/dim]")
+
+    stats = pipeline.run(corpus_path=corpus, profile=profile, dry_run=dry_run)
+
+    table = Table(
+        title="Ingest summary",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+
+    table.add_row("Fragments processed", str(stats["fragments_processed"]))
+    table.add_row("Fragments skipped (hash)", str(stats["fragments_skipped_hash"]))
+    table.add_row("Fragments skipped (gate)", str(stats["fragments_skipped"] - stats["fragments_skipped_hash"]))
+    table.add_row("Triples written", str(stats["triples_written"]))
+    table.add_row("LLM calls", str(stats["llm_calls"]))
+    table.add_row("Prompt tokens", str(stats["prompt_tokens"]))
+    table.add_row("Completion tokens", str(stats["completion_tokens"]))
+    table.add_row("Estimated cost (USD)", f"{stats['cost_usd']:.6f}")
+    table.add_row("Errors", str(stats["errors"]))
+
+    rprint(table)
+
+    if stats["errors"] > 0:
+        rprint(f"[red bold]{stats['errors']} error(s) — see logs for details[/red bold]")
+        raise typer.Exit(code=1)
+
+    rprint("[green bold]ingest complete[/green bold]")
 
 
 @app.command()

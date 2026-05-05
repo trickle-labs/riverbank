@@ -1,0 +1,41 @@
+---
+# docs-policy-v1 — Example compiler profile for the examples/markdown-corpus
+#
+# This profile extracts factual triples from Markdown documentation using
+# the no-op extractor (safe for CI without an LLM endpoint).  Switch
+# extractor to "instructor" and set model_provider/model_name for real
+# extraction against Ollama or OpenAI.
+name: docs-policy-v1
+version: 1
+
+# Extractor — "noop" for CI; switch to "instructor" for real extraction
+extractor: noop
+
+model_provider: ollama
+model_name: llama3.2
+embed_model: nomic-embed-text
+max_fragment_tokens: 2000
+
+named_graph: "http://riverbank.example/graph/trusted"
+
+prompt_text: |
+  You are a knowledge graph compiler.  Extract factual claims from the
+  following documentation section as RDF triples.
+
+  For each claim provide:
+  - subject: prefixed IRI (e.g. ex:Ariadne)
+  - predicate: prefixed IRI (e.g. ex:createdBy)
+  - object_value: prefixed IRI or literal
+  - confidence: float 0.0–1.0
+  - evidence: exact character offsets and a verbatim excerpt
+
+  Only extract claims directly supported by the text.
+  Do NOT fabricate evidence.
+
+editorial_policy:
+  min_fragment_length: 50
+  max_fragment_length: 8000
+  min_heading_depth: 0
+  confidence_threshold: 0.7
+  allowed_languages:
+    - en
