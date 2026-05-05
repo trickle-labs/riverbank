@@ -62,10 +62,10 @@ def test_alembic_version_table_exists(
     assert row[0] == "0001"
 
 
-def test_downgrade_removes_schema(
+def test_downgrade_removes_application_tables(
     db_dsn: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Downgrade base must remove all _riverbank tables."""
+    """Downgrade base must drop all application tables (alembic_version stays)."""
     monkeypatch.setenv("RIVERBANK_DB__DSN", db_dsn)
 
     from alembic import command
@@ -74,7 +74,7 @@ def test_downgrade_removes_schema(
     cfg = Config("alembic.ini")
     # Ensure we start from head
     command.upgrade(cfg, "head")
-    # Downgrade to base (removes everything)
+    # Downgrade to base (removes application tables; alembic_version remains)
     command.downgrade(cfg, "base")
 
     engine = create_engine(db_dsn)
@@ -83,8 +83,9 @@ def test_downgrade_removes_schema(
             text(
                 "SELECT tablename FROM pg_tables"
                 " WHERE schemaname = '_riverbank'"
+                " AND tablename != 'alembic_version'"
             )
         ).fetchall()
     engine.dispose()
 
-    assert rows == [], f"Tables still exist after downgrade: {[r[0] for r in rows]}"
+    assert rows == [], f"Application tables still exist after downgrade: {[r[0] for r in rows]}"

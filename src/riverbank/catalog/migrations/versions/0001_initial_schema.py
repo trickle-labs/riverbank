@@ -170,4 +170,6 @@ def downgrade() -> None:
     op.drop_table("fragments", schema="_riverbank")
     op.drop_table("sources", schema="_riverbank")
     op.drop_table("profiles", schema="_riverbank")
-    op.execute("DROP SCHEMA IF EXISTS _riverbank")
+    # Note: the _riverbank schema is intentionally NOT dropped here.
+    # Alembic stores its version table in _riverbank.alembic_version and
+    # needs it to exist until after this function returns.
