@@ -62,13 +62,22 @@ def load_triples_with_confidence(
             }
         )
 
+    # Use a savepoint so if pg_ripple call fails, we don't abort the transaction
+    savepoint_id = f"sp_load_triples_{id(conn)}"
     try:
+        conn.execute(text(f"SAVEPOINT {savepoint_id}"))
         conn.execute(
             text(_LOAD_TRIPLES_SQL),
             {"triples_json": json.dumps(rows), "named_graph": named_graph},
         )
+        conn.execute(text(f"RELEASE SAVEPOINT {savepoint_id}"))
         return len(rows)
     except Exception as exc:  # noqa: BLE001
+        try:
+            conn.execute(text(f"ROLLBACK TO SAVEPOINT {savepoint_id}"))
+        except Exception:  # noqa: BLE001
+            pass  # Savepoint might not exist
+        
         if _is_function_missing(exc):
             logger.warning(
                 "pg_ripple not available — triples not written to graph. "
@@ -91,13 +100,21 @@ def shacl_score(
     Falls back to ``1.0`` (pass-through / treat all output as trusted) when
     pg_ripple is not installed.
     """
+    savepoint_id = f"sp_shacl_score_{id(conn)}"
     try:
+        conn.execute(text(f"SAVEPOINT {savepoint_id}"))
         row = conn.execute(
             text(_SHACL_SCORE_SQL),
             {"named_graph": named_graph},
         ).fetchone()
+        conn.execute(text(f"RELEASE SAVEPOINT {savepoint_id}"))
         return float(row[0]) if row else 1.0
     except Exception as exc:  # noqa: BLE001
+        try:
+            conn.execute(text(f"ROLLBACK TO SAVEPOINT {savepoint_id}"))
+        except Exception:  # noqa: BLE001
+            pass  # Savepoint might not exist
+        
         if _is_function_missing(exc):
             logger.debug("pg_ripple not available — shacl_score returns 1.0 (pass-through). error=%s", exc)
             return 1.0
