@@ -307,6 +307,25 @@ Fragments become semantically coherent units. The extraction LLM receives focuse
 - Only split fragments exceeding `max_fragment_tokens`
 - Only merge fragments below `min_fragment_length`
 
+### Extension: Embedding-Based Semantic Chunker
+
+Instead of (or alongside) an LLM boundary call, use **embedding similarity** between adjacent sentence windows to detect semantic shift points without any LLM cost:
+
+```python
+# Compute rolling cosine similarity between sentence-window embeddings.
+# Fire a boundary where similarity drops below threshold (e.g. 0.75).
+for i in range(len(windows) - 1):
+    sim = cosine_similarity(windows[i].embed, windows[i+1].embed)
+    if sim < BOUNDARY_THRESHOLD:
+        boundaries.append(windows[i+1].start_char)
+```
+
+Boundaries produced this way can be used as secondary split points inside the heading-fragmented text. Because no LLM call is needed, this adds negligible latency.
+
+### Extension: Overlapping Sliding Windows
+
+For fragments that exceed `max_fragment_tokens`, emit **overlapping windows** (20% overlap) instead of hard cuts. This ensures triples that straddle a boundary are captured by at least one window, at the cost of a small number of duplicate triples (de-duplicated in the post-extraction pass).
+
 ---
 
 ## Strategy 5: Document Summary as Global Context
@@ -354,6 +373,58 @@ Now extract triples from this specific section:
 
 - Keep summary to <100 tokens
 - Validate summary mentions entities found in the entity catalog
+
+---
+
+## Strategy 6: Few-Shot Golden Examples in Extraction Prompt
+
+### Concept
+
+Inject 2-3 verified (subject, predicate, object) triples from `tests/golden/` directly into the extraction prompt as **correct examples for this domain and profile**. This is the highest-leverage single-prompt change for local models — it gives the extraction LLM concrete evidence of the expected output format and ontology, grounded in the actual corpus vocabulary.
+
+### How It Helps Extraction
+
+```
+EXAMPLES (correct triples for this corpus):
+  ex:sesam-pipe  schema:isPartOf  ex:sesam-system    confidence: 0.95
+  ex:sesam-dataset  rdf:type  ex:DataStore           confidence: 0.90
+  ex:sesam-pipe  ex:consumes  ex:sesam-dataset       confidence: 0.85
+
+Now extract triples from this section using the same style:
+[fragment text]
+```
+
+### Implementation
+
+Golden triples are read from the profile's `competency_questions` results or from a dedicated `examples/golden/*.ttl` file. The `DocumentPreprocessor` (or a new `ExemplarSelector`) selects the 2-3 most semantically similar golden triples to the current fragment (using embedding similarity) before each extraction call.
+
+```yaml
+# profile YAML extension
+few_shot:
+  enabled: true
+  source: tests/golden/       # directory of .ttl files with verified triples
+  max_examples: 3
+  selection: semantic         # "semantic" | "random" | "fixed"
+```
+
+### Pros
+
+- Biggest quality jump for local models with essentially zero extra LLM calls
+- Anchors predicate naming to the corpus vocabulary
+- Fixes the schema-vs-instance confusion bug in llama3.2/mistral
+- Trivially composable with Phase 1 preprocessing
+
+### Cons
+
+- Requires at least a few verified golden triples to exist upfront (cold-start problem)
+- Wrong golden examples can mislead the LLM
+- Semantic selection requires embedding calls per fragment
+
+### Mitigation
+
+- Bootstrap golden triples via `riverbank ingest --dry-run` + manual review on small corpus
+- Fall back to `selection: random` when no embeddings are available
+- Gate on `few_shot.enabled: true` in profile; off by default
 
 ---
 
@@ -621,3 +692,167 @@ riverbank query "SELECT (COUNT(DISTINCT ?s) AS ?subjects) WHERE { ?s ?p ?o }"
 4. **Circular dependency:** The vocabulary pass (`mode: vocabulary`) already extracts SKOS concepts. Should preprocessing replace or complement the vocabulary pass? Recommendation: preprocessing complements — vocabulary pass populates a persistent graph-backed vocabulary, preprocessing produces ephemeral per-document context.
 
 5. **Multi-document consistency:** Entity catalogs are per-document. The same concept may get different canonical names in different documents. Mitigation: after preprocessing, run a deduplication pass across all entity catalogs to merge equivalent entries.
+
+---
+
+## Post-Extraction Quality Strategies
+
+The following strategies run **after** `load_triples_with_confidence()` has written to pg_ripple. They improve graph quality without re-running extraction.
+
+---
+
+### Post-1: Embedding-Based Entity Deduplication
+
+**Problem:** The entity catalog deduplicates within a document, but the same concept may receive different canonical names across documents (e.g., `ex:sesam-dataset` in doc A and `ex:dataset` in doc B).
+
+**Approach:** After a full corpus ingest:
+1. Embed all unique subject/object IRIs (using their `rdfs:label` values as text).
+2. Cluster by cosine similarity (threshold ~0.92).
+3. Promote the most common IRI in each cluster as canonical; rewrite the others as `owl:sameAs` links.
+
+```bash
+# Planned CLI command
+riverbank deduplicate-entities --graph http://riverbank.example/graph/trusted \
+  --threshold 0.92 --dry-run
+```
+
+**Implementation location:** `src/riverbank/postprocessors/dedup.py`  
+**Dependency:** `sentence-transformers` (already a transitive dep via `nomic-embed-text`)  
+**Cost:** One embedding call per unique entity IRI (typically 50–500 per corpus)
+
+---
+
+### Post-2: Self-Critique Verification Pass
+
+**Problem:** Low-confidence triples (0.5–0.75) are extracted but may not be well-supported by the source text.
+
+**Approach:** After extraction, run a second cheap LLM call per low-confidence triple:
+
+```
+Given the text: "[evidence excerpt]"
+Does the following claim hold?
+  subject:   ex:sesam-pipe
+  predicate: schema:isPartOf
+  object:    ex:sesam-system
+
+Answer YES or NO and give your confidence (0.0–1.0).
+```
+
+Triples confirmed YES get their confidence boosted; NO responses drop the triple into quarantine for human review.
+
+```yaml
+# profile YAML extension
+verification:
+  enabled: true
+  confidence_threshold: 0.75   # only verify triples below this score
+  drop_below: 0.4              # quarantine triples where verifier scores < 0.4
+```
+
+**Expected effect:** ~15–25% of low-confidence triples eliminated; ~5% false-positive rate (triples incorrectly dropped).
+
+---
+
+### Post-3: OWL/RDFS Inference
+
+**Problem:** The raw extracted graph contains only asserted triples. Many derivable facts are missing (e.g., inverse relationships, transitive hierarchies, type assertions from domain/range).
+
+**Approach:** After ingest, run a lightweight OWL 2 RL forward-chaining reasoner over the named graph:
+
+```python
+# Using owlrl (pure Python, MIT license)
+import owlrl
+from rdflib import ConjunctiveGraph
+
+g = ConjunctiveGraph()
+# load from pg_ripple via SPARQL CONSTRUCT
+owlrl.DeductiveClosure(owlrl.OWLRL_Semantics).expand(g)
+# write inferred triples back to a separate named graph
+```
+
+**What gets derived automatically:**
+- `owl:inverseOf`: if `ex:pipe schema:hasPart ex:dataset` → infers `ex:dataset schema:isPartOf ex:pipe`
+- `rdfs:subClassOf` transitivity: type hierarchies propagate through inheritance chains
+- `rdfs:domain`/`rdfs:range`: if `ex:consumes rdfs:domain ex:Pipe` → infers `rdf:type ex:Pipe` for all subjects of `ex:consumes`
+
+Inferred triples are written to a separate named graph (e.g., `http://riverbank.example/graph/inferred`) so they never contaminate the asserted evidence base.
+
+**CLI:**
+```bash
+riverbank infer --ontology ontology/pgc.ttl \
+  --graph http://riverbank.example/graph/trusted \
+  --output-graph http://riverbank.example/graph/inferred
+```
+
+---
+
+### Post-4: Provenance-Aware Confidence Decay
+
+**Problem:** Triples extracted from older documents remain in the graph at full confidence even when the source may be outdated.
+
+**Approach:** Attach a `dcterms:modified` timestamp to each source document at ingest time. At query time, apply a half-life decay function to reported confidence:
+
+$$
+c_{\text{effective}} = c_{\text{extracted}} \times e^{-\lambda \cdot \Delta t}
+$$
+
+where $\lambda$ is a `decay_half_life_days` parameter in the profile and $\Delta t$ is days since `dcterms:modified`.
+
+This is implemented as a SPARQL expression function rather than modifying stored values, so historical evidence is never deleted.
+
+```yaml
+# profile YAML extension
+confidence:
+  decay_half_life_days: 365   # confidence halves after 1 year; 0 = no decay
+```
+
+```sparql
+# Example: query with decay applied
+SELECT ?s ?p ?o ?effective_confidence WHERE {
+  GRAPH <http://riverbank.example/graph/trusted> {
+    ?s ?p ?o .
+    ?triple pgc:confidence ?raw_confidence ;
+            pgc:sourceModified ?modified .
+  }
+  BIND(NOW() - ?modified AS ?age_days)
+  BIND(?raw_confidence * EXP(-0.00190 * ?age_days) AS ?effective_confidence)
+  FILTER(?effective_confidence > 0.5)
+}
+```
+
+---
+
+### Post-5: Cross-Validation via Competency Questions
+
+**Problem:** Extraction quality regresses silently across re-ingests and model upgrades.
+
+**Approach:** Run the profile's `competency_questions` (SPARQL ASK/SELECT) after every ingest and report a **coverage score**. This turns CQs from a one-off CI check into a continuous quality metric.
+
+```bash
+riverbank validate-graph --profile docs-policy-v1.yaml
+# → CQ-01: PASS  (The corpus defines a concept called 'Confidence')
+# → CQ-02: PASS  (Evidence spans have character offsets)
+# → CQ-03: FAIL  (Pipe → Dataset relationship not found)
+# Coverage: 2/3 (67%)
+```
+
+Failed CQs are surfaced as `WARNING` in the CLI output and emitted as OpenTelemetry events so they appear in Langfuse traces. A `--fail-below` threshold option can cause the command to exit non-zero (for CI gating).
+
+**Implementation location:** extend `src/riverbank/cli.py` and `src/riverbank/catalog/graph.py`  
+**Cost:** Negligible — CQs are cheap SPARQL queries against the existing store
+
+---
+
+## Quality Improvement Roadmap
+
+| Strategy | Scope | Phase | Est. ROI | Complexity |
+|----------|-------|-------|----------|------------|
+| Few-Shot Golden Examples (Strategy 6) | Extraction prompt | Phase 1 | ⭐⭐⭐⭐⭐ | Low |
+| Entity Catalog (Strategy 1) | Per-document | Phase 1 ✅ | ⭐⭐⭐⭐ | Medium |
+| Document Summary (Strategy 5) | Per-document | Phase 1 ✅ | ⭐⭐⭐ | Low |
+| Embedding-Based Deduplication (Post-1) | Post-ingest | Phase 2 | ⭐⭐⭐⭐ | Medium |
+| Competency Question Validation (Post-5) | Post-ingest | Phase 2 | ⭐⭐⭐ | Low |
+| Self-Critique Verification (Post-2) | Post-extraction | Phase 3 | ⭐⭐⭐ | Medium |
+| Semantic Chunker (Strategy 4 ext.) | Fragmentation | Phase 3 | ⭐⭐⭐ | Medium |
+| OWL/RDFS Inference (Post-3) | Post-ingest | Phase 3 | ⭐⭐ | Low |
+| Corpus Clustering (Phase 2 preprocessing) | Corpus-level | Phase 4 | ⭐⭐⭐⭐ | High |
+| Confidence Decay (Post-4) | Query-time | Phase 4 | ⭐⭐ | Low |
