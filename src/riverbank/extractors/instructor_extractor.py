@@ -83,6 +83,44 @@ def _build_ontology_constraint(allowed_predicates: list[str], allowed_classes: l
     return "\n".join(parts)
 
 
+def _build_functional_predicate_hints(predicate_constraints: dict) -> str:
+    """v0.12.1: Build functional predicate hint block.
+
+    For predicates annotated with ``max_cardinality: 1`` in the
+    ``predicate_constraints`` profile block, the extraction prompt is told
+    to "pick the most specific value only" for that predicate.  This prevents
+    the LLM from producing multiple conflicting values for a functional property.
+
+    Example profile config::
+
+        predicate_constraints:
+          ex:hasOwner:
+            max_cardinality: 1
+          ex:hasVersion:
+            max_cardinality: 1
+
+    Returns an empty string when ``predicate_constraints`` is empty.
+    """
+    if not predicate_constraints:
+        return ""
+
+    functional: list[str] = [
+        pred
+        for pred, constraints in predicate_constraints.items()
+        if isinstance(constraints, dict) and constraints.get("max_cardinality") == 1
+    ]
+    if not functional:
+        return ""
+
+    pred_list = ", ".join(functional)
+    return (
+        f"FUNCTIONAL PREDICATES — these predicates are single-valued (max 1 object per subject): "
+        f"{pred_list}\n"
+        "For each functional predicate, extract ONLY the most specific/definitive value. "
+        "Do NOT produce multiple triples with the same functional predicate for the same subject."
+    )
+
+
 def _estimate_tokens(text: str) -> int:
     """Fast token estimate: byte length / 4 (safe for both tiktoken and Ollama)."""
     return max(1, len(text.encode("utf-8")) // 4)
@@ -221,6 +259,7 @@ class InstructorExtractor:
         allowed_predicates: list = getattr(profile, "allowed_predicates", [])
         allowed_classes: list = getattr(profile, "allowed_classes", [])
         competency_questions: list = getattr(profile, "competency_questions", [])
+        predicate_constraints: dict = getattr(profile, "predicate_constraints", {})
 
         # v0.12.0: permissive mode — inject tiered confidence guidance
         prompt_text = _build_permissive_prompt(prompt_text, extraction_strategy)
@@ -234,6 +273,11 @@ class InstructorExtractor:
         ontology_block = _build_ontology_constraint(allowed_predicates, allowed_classes)
         if ontology_block:
             prompt_text = ontology_block + "\n\n" + prompt_text
+
+        # v0.12.1: functional predicate hints
+        functional_block = _build_functional_predicate_hints(predicate_constraints)
+        if functional_block:
+            prompt_text = functional_block + "\n\n" + prompt_text
 
         source_iri: str = getattr(fragment, "source_iri", "")
         text: str = getattr(fragment, "text", "")

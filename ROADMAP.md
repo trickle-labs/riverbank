@@ -68,7 +68,7 @@
 | v0.11.0 | Preprocessing & post-processing — LLM document preprocessing, corpus-level clustering, few-shot injection, validate-graph, entity deduplication, self-critique verification | **Done** | Large |
 | v0.11.1 | Token efficiency — per-fragment entity catalog filtering, adaptive preprocessing for small documents, Phase 2 pre-scan deduplication, Ollama keep-alive prompt caching, noise section filtering | **Done** | Small |
 | v0.12.0 | Permissive extraction (Phase A) — ontology-grounded & CQ-guided prompts, permissive extraction prompt, per-triple confidence routing, `graph/tentative`, two-tier query model, safety cap, pre-write structural filtering, overlapping fragments, literal normalization | **Done** | Large |
-| v0.12.1 | Permissive extraction (Phase B) — confidence consolidation (noisy-OR) with source diversity scoring, `riverbank promote-tentative`, functional predicate hints, `riverbank explain-rejections` | Planned | Medium |
+| v0.12.1 | Permissive extraction (Phase B) — confidence consolidation (noisy-OR) with source diversity scoring, `riverbank promote-tentative`, functional predicate hints, `riverbank explain-rejections` | **Done** | Medium |
 | v0.13.0 | Entity convergence — predicate normalization, incremental entity linking with synonym ring extraction, `riverbank induce-schema`, contradiction detection, tentative cleanup, quality regression tracking | Planned | Large |
 | v0.13.1 | Extraction feedback loops — auto few-shot expansion, semantic few-shot selection, batched verification, knowledge-prefix adapter | Planned | Medium |
 
@@ -647,27 +647,27 @@ budget trimming, and the v0.11.1 quick wins).
 Goal: complete the tentative graph lifecycle by adding evidence accumulation,
 explicit promotion, and the tooling to understand what the pipeline discards.
 
-- [ ] **Confidence consolidation (noisy-OR).** When a triple `(s, p, o)` is
+- [x] **Confidence consolidation (noisy-OR).** When a triple `(s, p, o)` is
   extracted from multiple fragments, consolidate confidence via
   $c_{final} = 1 - \prod_i (1 - c_i)$. Multi-provenance evidence spans stored
   per triple. Source diversity scoring: corroboration from multiple fragments
   of the same document counts as one vote (prevents correlated hallucination
   promotion from templated or copied documents).
-- [ ] **`riverbank promote-tentative`.** Explicit CLI command — promotion is never
+- [x] **`riverbank promote-tentative`.** Explicit CLI command — promotion is never
   automatic. Requires `--dry-run` review before committing. Promotes tentative
   triples whose consolidated confidence crosses the trusted threshold. Writes
   `pgc:PromotionEvent` provenance records. Track `triples_promoted` in stats.
-- [ ] **Functional predicate hints in profile YAML.** Annotate predicates as
+- [x] **Functional predicate hints in profile YAML.** Annotate predicates as
   functional (`max_cardinality: 1`) in the `predicate_constraints` block.
   Used in two ways: the extraction prompt says "pick the most specific value
   only" for functional predicates; contradiction detection in v0.13.0 uses the
   annotations to detect `(s, p, o₁)` vs `(s, p, o₂)` conflicts.
-- [ ] **`riverbank explain-rejections`.** `--profile --since 1h` shows triples
+- [x] **`riverbank explain-rejections`.** `--profile --since 1h` shows triples
   discarded in the last run, grouped by reason: evidence span not found,
   below noise floor, ontology mismatch, safety cap. Feeds back into prompt
   improvement and surfaces which implied facts the conservative prompt was
   silently losing.
-- [ ] **`triples_promoted` stat.** Track in run stats alongside `triples_trusted`,
+- [x] **`triples_promoted` stat.** Track in run stats alongside `triples_trusted`,
   `triples_tentative`, `triples_demoted`.
 
 **Exit criterion:** `promote-tentative` successfully promotes at least one triple

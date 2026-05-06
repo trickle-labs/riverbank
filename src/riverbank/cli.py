@@ -973,6 +973,235 @@ def explain_rejections(
         )
 
 
+@app.command("promote-tentative")
+def promote_tentative(
+    tentative_graph: str = typer.Option(
+        "http://riverbank.example/graph/tentative",
+        "--tentative-graph", "-t",
+        help="IRI of the tentative named graph to read from",
+    ),
+    trusted_graph: str = typer.Option(
+        "http://riverbank.example/graph/trusted",
+        "--trusted-graph", "-g",
+        help="IRI of the trusted named graph to promote into",
+    ),
+    threshold: float = typer.Option(
+        0.75, "--threshold",
+        help="Consolidated confidence threshold for promotion (0.0–1.0)",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Show triples that would be promoted without modifying the graph",
+    ),
+    limit: int = typer.Option(
+        500, "--limit", "-n",
+        help="Maximum tentative triples to consider per run",
+    ),
+) -> None:
+    """Promote tentative triples whose consolidated confidence crosses the trusted threshold.
+
+    Reads all triples from the tentative graph and applies noisy-OR confidence
+    consolidation with source diversity scoring.  Triples whose consolidated
+    confidence reaches --threshold are promoted to the trusted graph and a
+    pgc:PromotionEvent provenance record is written.
+
+    Promotion is NEVER automatic — always review with --dry-run first.
+
+    Example::
+
+        # Preview promotions
+        riverbank promote-tentative --dry-run
+
+        # Apply promotions
+        riverbank promote-tentative
+    """
+    import json as _json  # noqa: PLC0415
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    from sqlalchemy import create_engine, text  # noqa: PLC0415
+
+    from riverbank.catalog.graph import sparql_query  # noqa: PLC0415
+    from riverbank.postprocessors.consolidate import NoisyORConsolidator  # noqa: PLC0415
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+
+    # Step 1: Query tentative graph for all triples
+    sparql_q = (
+        f"SELECT ?s ?p ?o ?confidence ?source_iri ?fragment_key ?excerpt WHERE {{"
+        f"  GRAPH <{tentative_graph}> {{"
+        f"    ?s ?p ?o ."
+        f"    OPTIONAL {{ ?s <http://riverbank.example/pgc/confidence> ?confidence . }}"
+        f"    OPTIONAL {{ ?s <http://riverbank.example/pgc/sourceIri> ?source_iri . }}"
+        f"    OPTIONAL {{ ?s <http://riverbank.example/pgc/fragmentKey> ?fragment_key . }}"
+        f"    OPTIONAL {{ ?s <http://riverbank.example/pgc/excerpt> ?excerpt . }}"
+        f"  }}"
+        f"}} LIMIT {limit}"
+    )
+
+    try:
+        with engine.connect() as conn:
+            raw_rows = sparql_query(conn, sparql_q)
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]Could not query tentative graph: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+    if not raw_rows:
+        rprint(
+            f"[dim]No triples found in tentative graph <{tentative_graph}>.[/dim]\n"
+            "[dim]Run riverbank ingest with a permissive profile first.[/dim]"
+        )
+        return
+
+    # Step 2: Build mock triple objects for the consolidator
+    class _MockTriple:
+        def __init__(self, row: dict) -> None:
+            self.subject = str(row.get("s", ""))
+            self.predicate = str(row.get("p", ""))
+            self.object_value = str(row.get("o", ""))
+            self.confidence = float(row.get("confidence", 0.5))
+            self.fragment_key = str(row.get("fragment_key", ""))
+
+            class _Ev:
+                source_iri = str(row.get("source_iri", ""))
+                excerpt = str(row.get("excerpt", ""))
+
+            self.evidence = _Ev()
+
+    mock_triples = [_MockTriple(r) for r in raw_rows]
+
+    # Step 3: Consolidate with noisy-OR
+    consolidator = NoisyORConsolidator(trusted_threshold=threshold)
+    consolidated = consolidator.consolidate(mock_triples)
+    candidates, _ = consolidator.split_by_threshold(consolidated)
+
+    rprint(
+        f"[bold]riverbank promote-tentative[/bold]  "
+        f"tentative={tentative_graph!r}\n"
+        f"  Total tentative triples:     {len(raw_rows)}\n"
+        f"  After consolidation:         {len(consolidated)}\n"
+        f"  Promotion candidates (≥{threshold:.2f}): {len(candidates)}\n"
+    )
+
+    if not candidates:
+        rprint("[dim]No triples meet the confidence threshold for promotion.[/dim]")
+        return
+
+    # Show preview table
+    table = Table(
+        title="Promotion candidates" + (" (DRY RUN)" if dry_run else ""),
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Subject", max_width=40)
+    table.add_column("Predicate", max_width=30)
+    table.add_column("Object", max_width=40)
+    table.add_column("Conf", justify="right")
+    table.add_column("Diversity", justify="right")
+    table.add_column("Sources", justify="right")
+
+    for ct in candidates[:50]:  # show at most 50 in table
+        table.add_row(
+            ct.subject[:40],
+            ct.predicate[:30],
+            ct.object_value[:40],
+            f"{ct.final_confidence:.3f}",
+            str(ct.source_diversity),
+            str(len(ct.provenance)),
+        )
+
+    rprint(table)
+
+    if dry_run:
+        rprint(
+            f"\n[yellow bold]DRY RUN — {len(candidates)} triple(s) would be promoted. "
+            f"Remove --dry-run to apply.[/yellow bold]"
+        )
+        return
+
+    # Step 4: Write promoted triples to the trusted graph and record PromotionEvents
+    engine2 = create_engine(settings.db.dsn)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    promoted_count = 0
+
+    try:
+        with engine2.connect() as conn:
+            from riverbank.catalog.graph import load_triples_with_confidence  # noqa: PLC0415
+            from riverbank.prov import EvidenceSpan, ExtractedTriple  # noqa: PLC0415
+
+            for ct in candidates:
+                try:
+                    # Build a minimal EvidenceSpan from the first provenance record
+                    prov = ct.provenance[0] if ct.provenance else None
+                    if prov is None or not prov.excerpt:
+                        # Skip if no evidence — should not happen for well-formed tentative triples
+                        continue
+                    evidence = EvidenceSpan(
+                        source_iri=prov.source_iri or "urn:promoted",
+                        char_start=0,
+                        char_end=max(1, len(prov.excerpt)),
+                        excerpt=prov.excerpt or ct.subject[:50],
+                    )
+                    promoted_triple = ExtractedTriple(
+                        subject=ct.subject,
+                        predicate=ct.predicate,
+                        object_value=ct.object_value,
+                        confidence=ct.final_confidence,
+                        evidence=evidence,
+                        named_graph=trusted_graph,
+                    )
+                    written = load_triples_with_confidence(conn, [promoted_triple], trusted_graph)
+                    if written > 0:
+                        promoted_count += written
+                        # Write pgc:PromotionEvent provenance record
+                        _write_promotion_event(conn, ct, trusted_graph, now_iso)
+                except Exception as _exc:  # noqa: BLE001
+                    rprint(f"[yellow]Skipped triple ({ct.subject[:40]}…): {_exc}[/yellow]")
+
+            conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]Promotion failed: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine2.dispose()
+
+    rprint(
+        f"\n[green bold]Promoted {promoted_count} triple(s) to {trusted_graph!r}[/green bold]"
+    )
+
+
+def _write_promotion_event(conn: object, ct: object, trusted_graph: str, now_iso: str) -> None:
+    """Write a pgc:PromotionEvent provenance record for a promoted triple."""
+    try:
+        import json as _json  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+
+        subj = getattr(ct, "subject", "")
+        pred = getattr(ct, "predicate", "")
+        obj = getattr(ct, "object_value", "")
+        conf = getattr(ct, "final_confidence", 0.0)
+        diversity = getattr(ct, "source_diversity", 1)
+
+        conn.execute(  # type: ignore[union-attr]
+            text(
+                "INSERT INTO _riverbank.log (event_type, payload, occurred_at) "
+                "VALUES ('pgc:PromotionEvent', cast(:payload as jsonb), now())"
+            ),
+            {
+                "payload": _json.dumps({
+                    "triple": {"s": subj, "p": pred, "o": obj},
+                    "final_confidence": conf,
+                    "source_diversity": diversity,
+                    "trusted_graph": trusted_graph,
+                    "promoted_at": now_iso,
+                })
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass  # PromotionEvent logging is best-effort
+
 
 review_app = typer.Typer(
     name="review",

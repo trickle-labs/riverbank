@@ -74,6 +74,8 @@ class CompilerProfile:
     extraction_strategy: dict = field(default_factory=dict)
     # v0.12.0: Token optimization (compact schema, budget manager, merged preprocessing)
     token_optimization: dict = field(default_factory=dict)
+    # v0.12.1: Functional predicate hints — max_cardinality: 1 annotations
+    predicate_constraints: dict = field(default_factory=dict)
     # id is set after the profile is registered in the catalog DB
     id: Optional[int] = None
 
@@ -194,6 +196,8 @@ class IngestPipeline:
             "triples_discarded": 0,
             "triples_rejected_ontology": 0,
             "triples_capped": 0,
+            # v0.12.1
+            "triples_promoted": 0,
         }
         with tracer.start_as_current_span("ingest_pipeline.run") as span:
             for run_mode in sequence:
@@ -253,6 +257,8 @@ class IngestPipeline:
             "triples_discarded": 0,
             "triples_rejected_ontology": 0,
             "triples_capped": 0,
+            # v0.12.1
+            "triples_promoted": 0,
         }
 
         p = Path(corpus_path)
