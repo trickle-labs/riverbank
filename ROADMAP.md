@@ -55,11 +55,20 @@
 |---|---|---|---|
 | v0.9.0 | Multi-tenant and rendering — tenant_id RLS activation, federated compilation (SPARQL SERVICE), Markdown/JSON-LD page rendering, streaming render via SSE | **Done** | Very Large |
 
+### Extraction Quality (v0.11.x – v0.12.x)
+
+| Version | Description | Status | Size |
+|---|---|---|---|
+| v0.11.0 | Preprocessing & post-processing — LLM document preprocessing, corpus-level clustering, few-shot injection, validate-graph, entity deduplication, self-critique verification | **Done** | Large |
+| v0.12.0 | Permissive extraction — ontology-grounded & CQ-guided prompts, per-triple confidence routing, `graph/tentative`, overlapping fragments, confidence consolidation (noisy-OR), literal normalization | Planned | Large |
+| v0.13.0 | Entity quality — predicate normalization, incremental entity linking, auto few-shot expansion, knowledge-prefix adapter, quality regression tracking | Planned | Large |
+
 ### Stable Release (v1.0.0)
 
 | Version | Description | Status | Size |
 |---|---|---|---|
 | v0.10.0 | Release infrastructure — PyPI package, `riverbank sbom` command, documentation site auto-publish on every release | **Done** | Medium |
+| v0.14.0 | Structural improvements — constrained decoding, semantic chunking, SHACL shape validation, SPARQL CONSTRUCT rules, OWL 2 RL inference | Planned | Large |
 | v1.0.0 | Stable — full API stability guarantee, signed artifacts, Helm chart stability, SLOs in CI | Planned | Medium |
 
 ---
@@ -435,6 +444,164 @@ JSON file; the documentation site updates automatically on the next version tag.
 
 ---
 
+### v0.11.0 — Preprocessing & Post-Processing
+
+Goal: enrich extraction with document-level and corpus-level context, and add
+post-extraction quality passes that clean and verify the compiled graph.
+
+- [x] **LLM document preprocessing (Phase 1).** `DocumentPreprocessor` generates
+  a structured summary and entity catalog per document before extraction. The
+  catalog (label, type, aliases) is injected into the extraction prompt via
+  `build_extraction_prompt()`, giving the LLM entity-aware context. Token counts
+  tracked separately (`preprocessing_prompt_tokens`, `preprocessing_completion_tokens`).
+- [x] **Corpus-level clustering (Phase 2).** `CorpusPreprocessor` embeds document
+  summaries via sentence-transformers, clusters with K-Means, and generates
+  per-cluster and corpus-wide summaries. `CorpusAnalysis` (cluster map, entity
+  vocabulary, predicate vocabulary) is prepended to extraction prompts via
+  `build_context()`, providing cross-document awareness.
+- [x] **Few-shot injection.** `FewShotInjector` loads golden examples from YAML
+  files in `examples/golden/` and prepends them to the extraction prompt.
+  Configurable per profile via the `few_shot` block.
+- [x] **`riverbank validate-graph`.** Evaluates competency-question coverage
+  against the compiled graph via SPARQL ASK queries. Exits non-zero if
+  coverage falls below the profile threshold.
+- [x] **Entity deduplication (Post-1).** `EntityDeduplicator` embeds entity IRI
+  labels via sentence-transformers, clusters by cosine similarity (default
+  threshold 0.92), promotes the shortest IRI as canonical, and writes
+  `owl:sameAs` links for aliases.
+  CLI: `riverbank deduplicate-entities --graph --threshold --dry-run`.
+- [x] **Self-critique verification (Post-2).** `VerificationPass` issues a second
+  LLM call per low-confidence triple. Confirmed triples receive a confidence
+  boost; rejected triples are quarantined to `<draft>`. Configurable via
+  the `verification` block in the compiler profile.
+  CLI: `riverbank verify-triples --profile --graph --dry-run`.
+
+**Exit criterion:** a 3-document corpus ingested with Phase 1 + Phase 2
+preprocessing shows measurably higher CQ coverage than without. Entity
+deduplication reduces unique IRI count by ≥ 15%. Verification pass quarantines
+at least one low-confidence triple in a test run.
+
+---
+
+### v0.12.0 — Permissive Extraction
+
+Goal: dramatically increase triple yield — especially for small corpora — by
+extracting broadly within ontology-bounded constraints, routing per-triple by
+confidence, and consolidating evidence across fragments.
+
+- [ ] **Ontology-grounded extraction.** `allowed_predicates` and
+  `allowed_classes` fields in the compiler profile YAML. Injected into the
+  extraction prompt as a closed-world constraint: "use ONLY these predicates;
+  if a relationship does not fit, SKIP it." Triples with non-conforming
+  predicates are rejected before writing (`triple_rejected_ontology` stat).
+- [ ] **CQ-guided extraction.** Competency questions from the profile are
+  transformed into "EXTRACTION OBJECTIVES" and prepended to the extraction
+  prompt, making extraction goal-directed rather than exhaustive.
+- [ ] **Permissive extraction prompt.** New `extraction_strategy.mode: permissive`
+  option replaces the conservative "only extract claims directly supported by
+  the text" instruction with a tiered guidance that includes explicit, strong
+  inference, implied, and weak inference categories.
+- [ ] **Per-triple confidence routing.** Replace batch-level SHACL routing with
+  per-triple confidence routing: ≥ 0.75 → trusted graph, 0.35–0.75 →
+  `graph/tentative`, < 0.35 → discarded. New `tentative_graph` field in
+  `CompilerProfile`.
+- [ ] **`--include-tentative` query flag.** `riverbank query --include-tentative`
+  unions the tentative graph into query results.
+- [ ] **Confidence consolidation (noisy-OR).** When a triple `(s, p, o)` is
+  extracted from multiple fragments, consolidate confidence via
+  $c_{final} = 1 - \prod_i (1 - c_i)$. Multi-provenance evidence spans stored
+  per triple.
+- [ ] **`riverbank promote-tentative`.** CLI command that promotes tentative
+  triples whose consolidated confidence crosses the trusted threshold.
+  Writes `pgc:PromotionEvent` provenance records.
+- [ ] **Overlapping fragment windows.** `overlap_sentences` config in the
+  fragmenter block prepends the last N sentences of the previous fragment to
+  recover facts split across boundaries. Duplicate triples from overlap regions
+  deduplicated by content hash.
+- [ ] **Literal normalization.** Normalize string literals (lowercase + trim),
+  dates (ISO 8601 canonical form), and IRIs before writing. Deduplicate on
+  normalized form; keep the highest-confidence instance.
+- [ ] **Extraction stats.** Track `triples_trusted`, `triples_tentative`,
+  `triples_discarded`, `triples_promoted`, `triples_rejected_ontology`.
+
+**Exit criterion:** the 3-document example corpus produces ≥ 2x more triples
+than v0.11.0 (trusted + tentative combined). CQ coverage with
+`--include-tentative` exceeds 75%. `promote-tentative` successfully promotes
+at least one triple after a second ingest pass.
+
+---
+
+### v0.13.0 — Entity Quality & Feedback Loops
+
+Goal: make the entity vocabulary converge over time, automate quality
+improvement via feedback loops, and enable graph-aware extraction.
+
+- [ ] **Predicate normalization.** Embed predicate labels, cluster by similarity,
+  map non-canonical predicates to ontology-defined canonical forms. Companion
+  to entity deduplication — reduces predicate vocabulary by 30–50%.
+- [ ] **Incremental entity linking.** Persistent `entity_registry` table
+  (IRI, label, type, embedding, first_seen, doc_count) grows as documents are
+  processed. Before extraction, top-K relevant entities are injected as
+  "KNOWN ENTITIES — prefer these IRIs." New CLI:
+  `riverbank entities list` and `riverbank entities merge`.
+- [ ] **Auto few-shot expansion.** After validated ingests where CQ coverage
+  exceeds threshold, high-confidence triples that satisfy competency questions
+  are automatically sampled and appended to the profile's golden examples file.
+  Capped at 10–15 examples per profile with diversity constraints.
+- [ ] **Knowledge-prefix adapter.** At extraction time, retrieve the local
+  neighborhood of already-extracted entities from pg_ripple and inject as a
+  structured "KNOWN GRAPH CONTEXT" prefix. Improves consistency of new
+  extractions with the existing graph.
+- [ ] **Quality regression tracking.** `riverbank benchmark --profile <name>
+  --golden tests/golden/<name>/ --fail-below-f1 0.85` re-extracts the golden
+  corpus and compares against ground truth (precision, recall, F1). Runs in
+  CI on every release; fails the build if quality drops.
+- [ ] **Contradiction detection & demotion.** For functional predicates, detect
+  when new `(s, p, o₂)` conflicts with existing `(s, p, o₁)`. Reduce
+  confidence of both triples; demote if below threshold. Create
+  `pgc:ConflictRecord`.
+
+**Exit criterion:** entity duplication rate across a 10-document corpus is
+< 1.15x. Auto-expanded few-shot bank has ≥ 8 examples after two full ingest
+cycles. `riverbank benchmark` CI step runs in under 60 seconds and catches
+a deliberately degraded prompt.
+
+---
+
+### v0.14.0 — Structural Improvements & Reasoning
+
+Goal: improve fragment quality, add deductive reasoning, and support
+grammar-constrained output for local models.
+
+- [ ] **Constrained decoding.** For Ollama backends, use grammar-constrained
+  decoding via the `format` parameter to force JSON schema conformance at
+  decode time. Eliminates 100% of JSON parsing failures for local models.
+- [ ] **Semantic chunking.** Embedding-based boundary detection: embed each
+  sentence, split where cosine similarity drops below a threshold (topic
+  transition). Fragments align with semantic units rather than fixed-size
+  or heading-based boundaries.
+- [ ] **SHACL shape validation.** Define a `pgc-shapes.ttl` shapes graph
+  alongside the ontology. After ingest, validate the named graph via pyshacl.
+  Report violations as diagnostics; optionally reduce confidence of violating
+  triples. CLI: `riverbank validate-shapes --graph --shapes`.
+- [ ] **SPARQL CONSTRUCT rules.** Profile-specific inference rules defined as
+  SPARQL CONSTRUCT queries. Run after ingest, writing results to
+  `graph/inferred`. Transparent, auditable, domain-specific reasoning.
+- [ ] **OWL 2 RL forward-chaining.** Lightweight deductive closure via owlrl:
+  `owl:inverseOf`, `rdfs:subClassOf` transitivity, domain/range type
+  assertions, `owl:TransitiveProperty`. Results written to `graph/inferred`
+  — never contaminates the asserted evidence base.
+- [ ] **TTL-based tentative cleanup.** Track `first_seen` timestamp for
+  tentative triples. `riverbank gc-tentative --older-than 30d` archives stale
+  entries. Optional auto-run after each ingest.
+
+**Exit criterion:** constrained decoding eliminates JSON parse errors in
+Ollama CI tests. Semantic chunking produces fewer orphan triples than
+heading-based fragmentation on a test corpus. OWL 2 RL closure at least
+doubles queryable type assertions.
+
+---
+
 ### v1.0.0 — Stable Release
 
 Goal: full API stability guarantee; production SLOs that an operations team
@@ -481,6 +648,18 @@ v0.9.0  ─── Multi-tenant + rendering: RLS activation, federated compilatio
     │        Markdown/JSON-LD page rendering, streaming SSE render
     │
 v0.10.0 ─── Release infrastructure: PyPI package, riverbank sbom, docs auto-publish
+    │
+v0.11.0 ─── Preprocessing & post-processing: document preprocessing, corpus
+    │        clustering, few-shot injection, entity dedup, self-critique verification
+    │
+v0.12.0 ─── Permissive extraction: ontology-grounded prompts, per-triple routing,
+    │        graph/tentative, confidence consolidation, overlapping fragments
+    │
+v0.13.0 ─── Entity quality: predicate normalization, incremental entity linking,
+    │        auto few-shot expansion, knowledge-prefix adapter, quality benchmarks
+    │
+v0.14.0 ─── Structural improvements: constrained decoding, semantic chunking,
+    │        SHACL shapes, SPARQL CONSTRUCT rules, OWL 2 RL inference
     │
 v1.0.0  ─── Stable: API stability guarantee, signed artifacts, Helm stability, SLOs in CI
 ```
@@ -540,6 +719,36 @@ to a CI publish step is straightforward. The PyPI package and SBOM command are
 self-contained packaging work that does not touch the core pipeline. Separating
 this from the stability declaration keeps v1.0.0 focused on the policy commitment
 rather than implementation.
+
+v0.11.0 captures the preprocessing and post-processing work done since v0.10.0:
+document-level and corpus-level LLM preprocessing that gives extraction prompts
+entity-aware context, few-shot injection from golden examples, entity
+deduplication via embedding similarity, and self-critique verification that
+quarantines low-confidence hallucinations. These are foundational capabilities
+that all subsequent quality work builds on.
+
+v0.12.0 is the extraction quality turning point. The core insight is that
+permissive extraction (extract broadly, including implied facts) combined with
+ontology-grounded constraints (extract only allowed predicates and classes)
+produces dramatically more signal without proportionally more noise. Per-triple
+confidence routing into a `graph/tentative` named graph preserves low-confidence
+facts that would otherwise be lost, and noisy-OR consolidation provides a
+mechanism for tentative triples to earn promotion to trusted status over time.
+For small corpora, the primary benefit is higher single-pass recall — most facts
+appear in exactly one fragment, so capturing them on the first pass is critical.
+
+v0.13.0 makes the entity vocabulary self-improving. Incremental entity linking
+ensures that document N knows about entities discovered in documents 1 through
+N−1. Auto few-shot expansion means the system organically builds its own
+training examples from high-quality extractions. The knowledge-prefix adapter
+closes the feedback loop by injecting the existing graph neighborhood into
+extraction prompts, so the LLM sees what's already been asserted.
+
+v0.14.0 addresses structural quality: better fragment boundaries (semantic
+chunking), deductive reasoning (OWL 2 RL, SPARQL CONSTRUCT), and output
+reliability for local models (constrained decoding). These are medium-complexity
+improvements that deliver the most value once the extraction pipeline itself is
+producing high-quality triples.
 
 v1.0.0 completes the API stability contract. The goal is not to add features at
 1.0 but to guarantee that v0.x adopters can upgrade to v1.0 without breaking
