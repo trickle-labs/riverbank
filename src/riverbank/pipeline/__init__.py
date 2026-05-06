@@ -55,6 +55,8 @@ class CompilerProfile:
     # v0.5.0: Singer tap configuration; NER and embedding model settings
     singer_taps: list = field(default_factory=list)
     ner_model: str = "en_core_web_sm"
+    # v0.11.0: LLM preprocessing (document summary + entity catalog)
+    preprocessing: dict = field(default_factory=dict)
     # id is set after the profile is registered in the catalog DB
     id: Optional[int] = None
 
@@ -238,6 +240,12 @@ class IngestPipeline:
             profile_db_id = self._ensure_profile(conn, profile)
             profile.id = profile_db_id
 
+            # Phase 1 preprocessing: build document preprocessor once (re-used per source)
+            preprocessor = None
+            if getattr(profile, "preprocessing", {}).get("enabled", False):
+                from riverbank.preprocessors import DocumentPreprocessor  # noqa: PLC0415
+                preprocessor = DocumentPreprocessor(self._settings)
+
             for source in sources:
                 with tracer.start_as_current_span("ingest_pipeline.source") as src_span:
                     src_span.set_attribute("source.iri", source.iri)
@@ -255,6 +263,7 @@ class IngestPipeline:
                             stats,
                             mode=mode,
                             progress_callback=progress_callback,
+                            preprocessor=preprocessor,
                         )
                     except Exception as exc:  # noqa: BLE001
                         logger.error("Failed to process %s: %s", source.iri, exc)
@@ -277,6 +286,7 @@ class IngestPipeline:
         stats: dict,
         mode: str = "full",
         progress_callback: Callable[[str, dict], None] | None = None,
+        preprocessor: Any = None,
     ) -> None:
         from riverbank.catalog.graph import (  # noqa: PLC0415
             delete_artifact_deps,
@@ -291,6 +301,25 @@ class IngestPipeline:
         fragments = list(fragmenter.fragment(doc))
         existing_hashes = self._get_existing_hashes(conn, source.iri)
         tracer = otel_trace.get_tracer(__name__)
+
+        # Phase 1 preprocessing: run once per document before extraction begins
+        extraction_profile = profile
+        if preprocessor is not None and not dry_run:
+            with tracer.start_as_current_span("ingest_pipeline.preprocess") as pp_span:
+                pp_span.set_attribute("source.iri", source.iri)
+                from dataclasses import replace as _dc_replace  # noqa: PLC0415
+                preprocess_result = preprocessor.preprocess(doc.raw_text, profile)
+                if preprocess_result is not None:
+                    enriched_prompt = preprocessor.build_extraction_prompt(
+                        preprocess_result, profile
+                    )
+                    extraction_profile = _dc_replace(profile, prompt_text=enriched_prompt)
+                    stats["preprocessing_calls"] = stats.get("preprocessing_calls", 0) + 1
+                    logger.debug(
+                        "Preprocessing: enriched prompt for %s (%d entities)",
+                        source.iri,
+                        len(preprocess_result.entity_catalog),
+                    )
 
         if progress_callback:
             progress_callback("source_start", {"source": source.iri, "total_fragments": len(fragments)})
@@ -386,7 +415,7 @@ class IngestPipeline:
             with tracer.start_as_current_span("ingest_pipeline.extract") as ex_span:
                 ex_span.set_attribute("fragment.key", frag.fragment_key)
                 try:
-                    result = extractor.extract(fragment=frag, profile=profile, trace=None)
+                    result = extractor.extract(fragment=frag, profile=extraction_profile, trace=None)
                 except Exception as ex_exc:  # noqa: BLE001
                     logger.warning(
                         "Extraction failed for fragment %s: %s",

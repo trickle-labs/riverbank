@@ -1,0 +1,96 @@
+---
+# docs-policy-v1-preprocessed — LLM extraction with Phase 1 preprocessing
+#
+# Adds a document-level LLM preprocessing pass before fragmentation:
+#   1. Document summary  — 2-3 sentence domain context injected into every fragment prompt
+#   2. Entity catalog    — canonical entity names extracted upfront, eliminating
+#                          terminology drift ("Dataset" / "data set" / "datasets" → one IRI)
+#
+# The preprocessing pass costs one extra LLM call per document (amortized across
+# all its fragments).  For a 10-document corpus with 50 fragments total:
+#   - Without preprocessing: 50 LLM calls
+#   - With preprocessing:    10 + 50 = 60 LLM calls (+20%)
+#
+# Expected quality improvement:
+#   - 60-80% reduction in unique predicates (no more invented natural-language predicates)
+#   - 30% reduction in duplicate entity nodes (alias deduplication)
+#   - Better confidence calibration (LLM has domain context)
+#
+# Usage:
+#   riverbank ingest examples/markdown-corpus/ \
+#     --profile examples/profiles/docs-policy-v1-preprocessed.yaml
+#
+# See also: plans/pre-processing.md
+#
+name: docs-policy-v1-preprocessed
+version: 1
+
+extractor: instructor
+
+model_provider: ollama
+model_name: llama3.2
+embed_model: nomic-embed-text
+max_fragment_tokens: 2000
+
+named_graph: "http://riverbank.example/graph/trusted"
+
+# ---------------------------------------------------------------------------
+# Phase 1: LLM Preprocessing
+# ---------------------------------------------------------------------------
+preprocessing:
+  enabled: true
+
+  # Which preprocessing strategies to run (in order)
+  strategies:
+    - document_summary    # Generate a 2-3 sentence domain summary
+    - entity_catalog      # Build a canonical entity name catalog
+
+  # Maximum number of entities to extract per document (cap to control prompt size)
+  max_entities: 50
+
+  # Predefined predicates — the extraction LLM will be instructed to use only these.
+  # Add "ex:relatedTo" as a catch-all (automatically injected at confidence ≤ 0.6).
+  predefined_predicates:
+    - "rdf:type"
+    - "rdfs:label"
+    - "schema:isPartOf"
+    - "schema:hasPart"
+    - "schema:description"
+    - "schema:relatedTo"
+    - "dcterms:description"
+    - "dcterms:creator"
+    - "skos:broader"
+    - "skos:narrower"
+    - "skos:related"
+
+# ---------------------------------------------------------------------------
+# Extraction prompt (appended after preprocessing context)
+# ---------------------------------------------------------------------------
+prompt_text: |
+  Extract factual claims from the following documentation section as RDF triples.
+
+  RULES:
+  - Use ONLY entities from the ENTITY CATALOG above as subjects and objects.
+    Map all surface variants (aliases) to the canonical ex: IRI.
+  - Use ONLY predicates from the ALLOWED PREDICATES list above.
+  - For relationships not in the list, use ex:relatedTo with confidence ≤ 0.6.
+  - Do NOT invent new entity names or predicates.
+
+  For each claim provide:
+  - subject: canonical ex: IRI from the entity catalog (e.g. ex:sesam-dataset)
+  - predicate: IRI from the allowed predicates list
+  - object_value: canonical ex: IRI or quoted literal
+  - confidence: float 0.0–1.0 reflecting how clearly the text supports the claim
+  - evidence: exact character offsets (char_start, char_end) and a verbatim excerpt
+
+  Only extract claims directly supported by the text.
+  Do NOT fabricate evidence — the excerpt must appear verbatim in the source.
+  Return an empty array if no high-confidence triples can be extracted.
+
+editorial_policy:
+  min_fragment_length: 50
+  max_fragment_length: 8000
+  min_heading_depth: 0
+  confidence_threshold: 0.7
+  allowed_languages:
+    - en
