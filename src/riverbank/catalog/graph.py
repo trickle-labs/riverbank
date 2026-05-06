@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -9,10 +8,72 @@ from sqlalchemy import text
 logger = logging.getLogger(__name__)
 
 # SQL functions provided by the pg_ripple extension
-# Note: cast(:triples_json as jsonb) avoids the SQLAlchemy text() parser treating
-# "::jsonb" as part of the bind parameter name.
-_LOAD_TRIPLES_SQL = "SELECT pg_ripple.load_triples_with_confidence(cast(:triples_json as jsonb), cast(:named_graph as text))"
-_SHACL_SCORE_SQL = "SELECT pg_ripple.shacl_score(cast(:named_graph as text))"
+# Actual signature: load_triples_with_confidence(data text, confidence float8, format text, graph_uri text)
+_LOAD_TRIPLES_SQL = (
+    "SELECT pg_ripple.load_triples_with_confidence("
+    "  cast(:data as text),"
+    "  cast(:confidence as float8),"
+    "  cast(:format as text),"
+    "  cast(:graph_uri as text)"
+    ")"
+)
+_SHACL_SCORE_SQL = "SELECT pg_ripple.shacl_score(cast(:graph_iri as text))"
+
+# Common RDF namespace prefix expansions
+_PREFIXES: dict[str, str] = {
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "skos": "http://www.w3.org/2004/02/skos/core#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "ex": "http://riverbank.example/entities/",
+    "pgc": "http://riverbank.example/pgc/",
+    "prov": "http://www.w3.org/ns/prov#",
+    "schema": "http://schema.org/",
+    "dcterms": "http://purl.org/dc/terms/",
+    "dc": "http://purl.org/dc/elements/1.1/",
+}
+
+
+def _to_ntriples_term(term: str) -> str:
+    """Convert a prefixed name, URI, or literal value to N-Triples term."""
+    # Already a full URI in angle brackets
+    if term.startswith("<"):
+        return term
+    # Full http/https URI without brackets
+    if term.startswith("http://") or term.startswith("https://"):
+        return f"<{term}>"
+    # literal: prefix → plain string literal
+    if term.startswith("literal:"):
+        value = term[len("literal:"):]
+        escaped = (
+            value.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t")
+        )
+        return f'"{escaped}"'
+    # Prefixed name (e.g. ex:Ariadne, rdf:type)
+    if ":" in term:
+        prefix, local = term.split(":", 1)
+        ns = _PREFIXES.get(prefix, f"http://riverbank.example/{prefix}/")
+        return f"<{ns}{local}>"
+    # Plain string with no prefix — treat as literal
+    escaped = term.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    return f'"{escaped}"'
+
+
+def _triples_to_ntriples(triples: list) -> str:
+    """Convert a list of ExtractedTriple objects to N-Triples format text."""
+    lines = []
+    for t in triples:
+        s = _to_ntriples_term(t.subject)
+        p = _to_ntriples_term(t.predicate)
+        o = _to_ntriples_term(t.object_value)
+        lines.append(f"{s} {p} {o} .")
+    return "\n".join(lines)
+
 
 # pg_ripple is checked at call time (trying the call is simpler than probing)
 
@@ -31,36 +92,22 @@ def load_triples_with_confidence(
 ) -> int:
     """Write extracted triples to a named graph via pg_ripple.
 
-    Calls ``pg_ripple.load_triples_with_confidence(triples_json, named_graph)``
-    and returns the number of triples submitted.
+    Converts triples to N-Triples format and calls
+    ``pg_ripple.load_triples_with_confidence(data, confidence, format, graph_uri)``.
+    Returns the number of triples submitted.
 
     Falls back gracefully (logs a warning, returns 0) when pg_ripple is not
-    installed in the target database — this allows the catalog plumbing to be
-    tested against stock PostgreSQL in CI.
+    installed in the target database.
 
     Each element of ``triples`` must be an ``ExtractedTriple`` (or any object
-    with ``.subject``, ``.predicate``, ``.object_value``, ``.confidence``, and
-    ``.evidence`` attributes).
+    with ``.subject``, ``.predicate``, ``.object_value``, ``.confidence``).
     """
     if not triples:
         return 0
 
-    rows = []
-    for t in triples:
-        ev: Any | None = getattr(t, "evidence", None)
-        rows.append(
-            {
-                "subject": t.subject,
-                "predicate": t.predicate,
-                "object": t.object_value,
-                "confidence": t.confidence,
-                "named_graph": getattr(t, "named_graph", named_graph),
-                "prov_fragment_iri": getattr(ev, "source_iri", "") if ev else "",
-                "prov_char_start": getattr(ev, "char_start", 0) if ev else 0,
-                "prov_char_end": getattr(ev, "char_end", 0) if ev else 0,
-                "prov_excerpt": getattr(ev, "excerpt", "") if ev else "",
-            }
-        )
+    ntriples_data = _triples_to_ntriples(triples)
+    # Use the minimum confidence in the batch (conservative)
+    min_confidence = min((getattr(t, "confidence", 1.0) for t in triples), default=1.0)
 
     # Use a SQLAlchemy nested transaction (savepoint) so a pg_ripple failure
     # doesn't abort the surrounding transaction.
@@ -68,9 +115,14 @@ def load_triples_with_confidence(
         with conn.begin_nested():
             conn.execute(
                 text(_LOAD_TRIPLES_SQL),
-                {"triples_json": json.dumps(rows), "named_graph": named_graph},
+                {
+                    "data": ntriples_data,
+                    "confidence": min_confidence,
+                    "format": "ntriples",
+                    "graph_uri": named_graph,
+                },
             )
-        return len(rows)
+        return len(triples)
     except Exception as exc:  # noqa: BLE001
         if _is_function_missing(exc):
             logger.warning(
@@ -101,7 +153,7 @@ def shacl_score(
         with conn.begin_nested():
             row = conn.execute(
                 text(_SHACL_SCORE_SQL),
-                {"named_graph": named_graph},
+                {"graph_iri": named_graph},
             ).fetchone()
         return float(row[0]) if row else 1.0
     except Exception as exc:  # noqa: BLE001
