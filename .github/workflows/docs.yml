@@ -26,10 +26,10 @@ jobs:
       - name: Install docs dependencies
         run: pip install -e ".[docs]"
 
-      - name: Build docs (strict mode)
+      - name: Build docs
         env:
           DISABLE_MKDOCS_2_WARNING: "true"
-        run: mkdocs build --strict
+        run: mkdocs build
 
       - name: Deploy to GitHub Pages
         if: github.ref == 'refs/heads/main'

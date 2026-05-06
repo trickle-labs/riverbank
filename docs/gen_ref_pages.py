@@ -14,6 +14,10 @@ for path in sorted(src.rglob("*.py")):
 
     parts = tuple(module_path.parts)
 
+    # Skip migrations (alembic env files can't be imported as regular modules)
+    if "migrations" in parts:
+        continue
+
     # Skip __init__, __main__, and test files
     if parts[-1] == "__init__":
         parts = parts[:-1]
