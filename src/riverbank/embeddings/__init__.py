@@ -110,11 +110,16 @@ def store_entity_embedding(
 
     import json  # noqa: PLC0415
 
+    from sqlalchemy import text  # noqa: PLC0415
+
     try:
-        conn.execute(
-            "SELECT pg_ripple.store_embedding($1, $2::vector)",
-            (entity_iri, json.dumps(embedding)),
-        )
+        # Use a nested transaction (savepoint) so a pg_ripple failure doesn't
+        # abort the surrounding transaction.
+        with conn.begin_nested():
+            conn.execute(
+                text("SELECT pg_ripple.store_embedding(:iri, :emb::vector)"),
+                {"iri": entity_iri, "emb": json.dumps(embedding)},
+            )
         return True
     except Exception as exc:  # noqa: BLE001
         msg = str(exc).lower()

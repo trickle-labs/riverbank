@@ -123,10 +123,14 @@ def lookup_vocabulary(conn: Any, entity_text: str) -> Optional[str]:
     try:
         from sqlalchemy import text  # noqa: PLC0415
 
-        row = conn.execute(
-            text("SELECT pg_ripple.skos_label_lookup(:entity_text)"),
-            {"entity_text": entity_text},
-        ).fetchone()
+        # Use a nested transaction (savepoint) so a pg_ripple failure doesn't
+        # abort the surrounding transaction.
+        row = None
+        with conn.begin_nested():
+            row = conn.execute(
+                text("SELECT pg_ripple.skos_label_lookup(:entity_text)"),
+                {"entity_text": entity_text},
+            ).fetchone()
         if row and row[0]:
             return str(row[0])
         return None
