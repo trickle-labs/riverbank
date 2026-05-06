@@ -59,7 +59,7 @@
 
 | Version | Description | Status | Size |
 |---|---|---|---|
-| v0.10.0 | Release infrastructure — PyPI package, `riverbank sbom` command, documentation site auto-publish on every release | Planned | Medium |
+| v0.10.0 | Release infrastructure — PyPI package, `riverbank sbom` command, documentation site auto-publish on every release | **Done** | Medium |
 | v1.0.0 | Stable — full API stability guarantee, signed artifacts, Helm chart stability, SLOs in CI | Planned | Medium |
 
 ---
@@ -416,15 +416,15 @@ Goal: make riverbank self-installable from PyPI, ship a machine-readable SBOM,
 and automate the documentation site — so that adopters can onboard without
 cloning the repository.
 
-- **PyPI package.** `pip install riverbank` installs the worker and CLI.
+- [x] **PyPI package.** `pip install riverbank` installs the worker and CLI.
   Optional extras: `[ollama]`, `[docling]`, `[labelstudio]`. `pyproject.toml`
   build metadata, `MANIFEST.in`, and a GitHub Actions release workflow that
   publishes to PyPI on every version tag.
-- **`riverbank sbom`** — new CLI command that generates a CycloneDX SBOM for
+- [x] **`riverbank sbom`** — new CLI command that generates a CycloneDX SBOM for
   the installed package using `cyclonedx-python`. Output formats: JSON (default)
   and XML. Exits non-zero if any dependency has a known CVE (via `pip-audit`
   integration). Designed for supply-chain compliance workflows.
-- **Documentation site auto-publish.** The existing `riverbank render` capability
+- [x] **Documentation site auto-publish.** The existing `riverbank render` capability
   is wired to a release workflow: on each tag, `riverbank render --format markdown
   --target docs/` generates the MkDocs site from the pg_ripple docs corpus and
   publishes it to GitHub Pages. No new rendering logic — purely CI plumbing.

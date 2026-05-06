@@ -1,0 +1,6 @@
+include README.md
+include LICENSE
+include ROADMAP.md
+recursive-include src/riverbank *.py
+recursive-include examples *.md *.yaml
+recursive-include ontology *.ttl

@@ -1492,3 +1492,94 @@ def review_collect(
         f"  example bank: {bank_path}  ({bank_size} entries)"
     )
 
+
+# ---------------------------------------------------------------------------
+# sbom command  (v0.10.0)
+# ---------------------------------------------------------------------------
+
+@app.command()
+def sbom(
+    output: str = typer.Option(
+        "riverbank-sbom.json",
+        "--output", "-o",
+        help="Path to write the SBOM file",
+    ),
+    output_format: str = typer.Option(
+        "json",
+        "--format", "-f",
+        help="Output format: json (default) | xml",
+    ),
+    no_audit: bool = typer.Option(
+        False,
+        "--no-audit",
+        help="Skip the pip-audit CVE scan (produce SBOM only)",
+    ),
+) -> None:
+    """Generate a CycloneDX SBOM for the installed riverbank package.
+
+    Uses ``cyclonedx-py`` (installed via ``pip install riverbank[sbom]``) to
+    produce a machine-readable Software Bill of Materials.  After generating
+    the SBOM, ``pip-audit`` is run to check all dependencies for known CVEs;
+    the command exits non-zero if any vulnerability is found.
+
+    Output formats:
+
+    * ``json`` (default) — CycloneDX JSON 1.6
+    * ``xml`` — CycloneDX XML 1.6
+
+    Example::
+
+        riverbank sbom
+        riverbank sbom --output sbom.xml --format xml
+        riverbank sbom --no-audit
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from riverbank.sbom import SBOMResult, audit_vulnerabilities, generate_sbom  # noqa: PLC0415
+
+    fmt = output_format.lower()
+    if fmt not in {"json", "xml"}:
+        rprint(f"[red]Unknown format: {output_format!r}. Use json or xml.[/red]")
+        raise typer.Exit(code=1)
+
+    output_path = Path(output)
+    rprint(f"[bold]riverbank sbom[/bold]  format={fmt}  output={output_path}\n")
+
+    rprint("[dim]Generating CycloneDX SBOM…[/dim]")
+    result: SBOMResult = generate_sbom(output_path, fmt=fmt)  # type: ignore[arg-type]
+    rprint(f"[green]✓[/green]  SBOM written to [cyan]{result.output_path}[/cyan]")
+
+    if no_audit:
+        rprint("[dim]CVE audit skipped (--no-audit)[/dim]")
+        return
+
+    rprint("[dim]Running pip-audit CVE scan…[/dim]")
+    vulns = audit_vulnerabilities()
+    result.vulnerabilities = vulns
+
+    if not result.has_vulnerabilities:
+        rprint("[green]✓[/green]  No known CVEs found in installed dependencies")
+        return
+
+    rprint(
+        f"\n[red bold]pip-audit: {result.vulnerability_count} vulnerability(s) found![/red bold]"
+    )
+    vuln_table = Table(
+        title="CVE findings",
+        show_header=True,
+        header_style="bold red",
+    )
+    vuln_table.add_column("Package")
+    vuln_table.add_column("Version")
+    vuln_table.add_column("CVE / Advisory")
+    vuln_table.add_column("Fix versions")
+    for v in result.vulnerabilities:
+        vuln_table.add_row(
+            v["name"],
+            v["version"],
+            v["id"],
+            ", ".join(v["fix_versions"]) if v["fix_versions"] else "—",
+        )
+    rprint(vuln_table)
+    raise typer.Exit(code=1)
+

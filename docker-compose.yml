@@ -37,7 +37,8 @@ services:
 
   # ─── Langfuse (LLM observability — self-hosted) ───────────────────────────
   langfuse_db:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
+    platform: linux/arm64/v8
     environment:
       POSTGRES_USER: langfuse
       POSTGRES_PASSWORD: langfuse
