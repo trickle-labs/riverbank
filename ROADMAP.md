@@ -55,19 +55,25 @@
 |---|---|---|---|
 | v0.9.0 | Multi-tenant and rendering — tenant_id RLS activation, federated compilation (SPARQL SERVICE), Markdown/JSON-LD page rendering, streaming render via SSE | **Done** | Very Large |
 
-### Extraction Quality (v0.11.x – v0.12.x)
-
-| Version | Description | Status | Size |
-|---|---|---|---|
-| v0.11.0 | Preprocessing & post-processing — LLM document preprocessing, corpus-level clustering, few-shot injection, validate-graph, entity deduplication, self-critique verification | **Done** | Large |
-| v0.12.0 | Permissive extraction — ontology-grounded & CQ-guided prompts, per-triple confidence routing, `graph/tentative`, overlapping fragments, confidence consolidation (noisy-OR), literal normalization | Planned | Large |
-| v0.13.0 | Entity quality — predicate normalization, incremental entity linking, auto few-shot expansion, knowledge-prefix adapter, quality regression tracking | Planned | Large |
-
-### Stable Release (v1.0.0)
+### Release Infrastructure (v0.10.x)
 
 | Version | Description | Status | Size |
 |---|---|---|---|
 | v0.10.0 | Release infrastructure — PyPI package, `riverbank sbom` command, documentation site auto-publish on every release | **Done** | Medium |
+
+### Extraction Quality (v0.11.x – v0.13.x)
+
+| Version | Description | Status | Size |
+|---|---|---|---|
+| v0.11.0 | Preprocessing & post-processing — LLM document preprocessing, corpus-level clustering, few-shot injection, validate-graph, entity deduplication, self-critique verification | **Done** | Large |
+| v0.12.0 | Permissive extraction (Phase A) — ontology-grounded & CQ-guided prompts, permissive extraction prompt, per-triple confidence routing, `graph/tentative`, two-tier query model, safety cap, pre-write structural filtering, overlapping fragments, literal normalization | Planned | Large |
+| v0.12.1 | Permissive extraction (Phase B) — confidence consolidation (noisy-OR) with source diversity scoring, `riverbank promote-tentative`, functional predicate hints, `riverbank explain-rejections` | Planned | Medium |
+| v0.13.0 | Entity quality — predicate normalization, incremental entity linking, `riverbank induce-schema`, auto few-shot expansion, knowledge-prefix adapter, contradiction detection, tentative cleanup, quality regression tracking | Planned | Large |
+
+### Structural Improvements & Stable Release (v0.14.x – v1.0.0)
+
+| Version | Description | Status | Size |
+|---|---|---|---|
 | v0.14.0 | Structural improvements — constrained decoding, semantic chunking, SHACL shape validation, SPARQL CONSTRUCT rules, OWL 2 RL inference | Planned | Large |
 | v1.0.0 | Stable — full API stability guarantee, signed artifacts, Helm chart stability, SLOs in CI | Planned | Medium |
 
@@ -84,6 +90,8 @@ Several planned versions delegate implementation to pg-ripple or pg-tide rather 
 | `pg_ripple.refresh_coverage_map()` | pg-ripple | v0.8.0 | Coverage map generation deferred; competency-question coverage computed locally |
 | SPARQL `SERVICE` federation | pg-ripple | v0.9.0 | Federated compilation deferred; local compilation unaffected |
 | Relay circuit breakers, DLQ, backpressure | pg-tide | v0.7.0 | Relay health visible in `riverbank health`; manual configuration fallback |
+| `owlrl` (OWL 2 RL reasoner) | PyPI | v0.14.0 | OWL inference deferred; SPARQL CONSTRUCT rules still ship and cover most derivations |
+| `pyshacl` (SHACL validation) | PyPI | v0.14.0 | SHACL shape validation deferred; ontology-grounded predicate allowlist still enforces structural constraints |
 
 **Policy:** if a dependency is unavailable at the start of a release cycle, the affected feature moves to the following minor version. All core ingestion, extraction, catalog, and provenance features are riverbank-owned and carry no upstream dependency.
 
@@ -515,9 +523,18 @@ permissive extraction still skips implied facts.
 - [ ] **Per-triple confidence routing.** Replace batch-level SHACL routing with
   per-triple confidence routing: ≥ 0.75 → trusted graph, 0.35–0.75 →
   `graph/tentative`, < 0.35 → discarded. New `tentative_graph` field in
-  `CompilerProfile`. Phase A (permissive prompt + per-triple routing) is
-  independently shippable and already delivers the full single-pass recall
-  improvement without requiring Phase B (accumulation).
+  `CompilerProfile`. This is Phase A — independently shippable, delivering the
+  full single-pass recall improvement without requiring Phase B (accumulation).
+- [ ] **Pre-write structural filtering.** Reuse the ontology allowlist as a fast
+  write-time filter: before any triple enters the tentative graph, check that
+  the predicate is in `allowed_predicates` and that subject/object types match
+  declared domain/range (if specified). Zero graph queries, microsecond latency.
+  Prevents structurally invalid triples from entering the tentative graph and
+  polluting noisy-OR calculations.
+- [ ] **Extraction safety cap.** `max_triples_per_fragment: 50` in the
+  `extraction_strategy` profile block. If the LLM produces more, keep the top-N
+  by confidence and log a `triples_capped` warning. Prevents runaway token usage
+  on dense documents with permissive extraction. Track `triples_capped` in stats.
 - [ ] **Two-tier query model.** `riverbank query` (default): trusted graph only
   — strict, fast, conservative. `riverbank query --include-tentative`: unions
   trusted + tentative graphs, results ordered by confidence descending —
@@ -527,21 +544,6 @@ permissive extraction still skips implied facts.
   --since 1h` shows triples discarded in the last run: evidence span not found,
   below noise floor, or ontology mismatch. Feeds back into prompt improvement
   and surfaces which implied facts the conservative prompt was silently losing.
-- [ ] **Confidence consolidation (noisy-OR).** When a triple `(s, p, o)` is
-  extracted from multiple fragments, consolidate confidence via
-  $c_{final} = 1 - \prod_i (1 - c_i)$. Multi-provenance evidence spans stored
-  per triple. Source diversity scoring: corroboration from multiple fragments
-  of the same document counts as one vote (prevents correlated hallucination
-  promotion).
-- [ ] **`riverbank promote-tentative`.** Explicit CLI command — promotion is never
-  automatic. Requires `--dry-run` review before committing. Promotes tentative
-  triples whose consolidated confidence crosses the trusted threshold. Writes
-  `pgc:PromotionEvent` provenance records.
-- [ ] **Functional predicate hints in profile YAML.** Annotate predicates as
-  functional (`max_cardinality: 1`) in the profile to enable contradiction
-  detection: if `(s, p, o₁)` exists and `(s, p, o₂)` is extracted with
-  `o₁ ≠ o₂`, both are flagged. Used by contradiction detection in v0.13.0
-  and in the extraction prompt ("pick the most specific value only").
 - [ ] **Overlapping fragment windows.** `overlap_sentences` config in the
   fragmenter block prepends the last N sentences of the previous fragment to
   recover facts split across boundaries. Duplicate triples from overlap regions
@@ -550,13 +552,48 @@ permissive extraction still skips implied facts.
   dates (ISO 8601 canonical form), and IRIs before writing. Deduplicate on
   normalized form; keep the highest-confidence instance.
 - [ ] **Extraction stats.** Track `triples_trusted`, `triples_tentative`,
-  `triples_discarded`, `triples_promoted`, `triples_rejected_ontology`.
+  `triples_discarded`, `triples_rejected_ontology`, `triples_capped`.
 
 **Exit criterion:** the 3-document example corpus produces ≥ 2x more triples
-than v0.11.0 (trusted + tentative combined) after Phase A alone (permissive
-prompt + per-triple routing), before any accumulation. CQ coverage with
-`--include-tentative` exceeds 75%. `riverbank explain-rejections` shows at
-least 5 correctly implied triples that the conservative prompt had discarded.
+than v0.11.0 (trusted + tentative combined). CQ coverage with
+`--include-tentative` exceeds 75%. Safety cap prevents any single fragment from
+producing more than 50 triples.
+
+---
+
+### v0.12.1 — Permissive Extraction Phase B
+
+Goal: complete the tentative graph lifecycle by adding evidence accumulation,
+explicit promotion, and the tooling to understand what the pipeline discards.
+
+- [ ] **Confidence consolidation (noisy-OR).** When a triple `(s, p, o)` is
+  extracted from multiple fragments, consolidate confidence via
+  $c_{final} = 1 - \prod_i (1 - c_i)$. Multi-provenance evidence spans stored
+  per triple. Source diversity scoring: corroboration from multiple fragments
+  of the same document counts as one vote (prevents correlated hallucination
+  promotion from templated or copied documents).
+- [ ] **`riverbank promote-tentative`.** Explicit CLI command — promotion is never
+  automatic. Requires `--dry-run` review before committing. Promotes tentative
+  triples whose consolidated confidence crosses the trusted threshold. Writes
+  `pgc:PromotionEvent` provenance records. Track `triples_promoted` in stats.
+- [ ] **Functional predicate hints in profile YAML.** Annotate predicates as
+  functional (`max_cardinality: 1`) in the `predicate_constraints` block.
+  Used in two ways: the extraction prompt says "pick the most specific value
+  only" for functional predicates; contradiction detection in v0.13.0 uses the
+  annotations to detect `(s, p, o₁)` vs `(s, p, o₂)` conflicts.
+- [ ] **`riverbank explain-rejections`.** `--profile --since 1h` shows triples
+  discarded in the last run, grouped by reason: evidence span not found,
+  below noise floor, ontology mismatch, safety cap. Feeds back into prompt
+  improvement and surfaces which implied facts the conservative prompt was
+  silently losing.
+- [ ] **`triples_promoted` stat.** Track in run stats alongside `triples_trusted`,
+  `triples_tentative`, `triples_demoted`.
+
+**Exit criterion:** `promote-tentative` successfully promotes at least one triple
+after a second ingest pass. `riverbank explain-rejections` shows at least 5
+correctly implied triples that Phase A discarded. Source diversity scoring
+prevents a triple corroborated only by fragments of the same document from
+crossing the promotion threshold.
 
 ---
 
@@ -590,6 +627,14 @@ the tentative graph lifecycle with contradiction detection and automatic cleanup
   below threshold. Create `pgc:ConflictRecord`. Works as an identity
   verification layer: triples that survive contradiction detection are
   demonstrably more trustworthy.
+- [ ] **`riverbank induce-schema`.** Cold-start onboarding: after an initial
+  unconstrained extraction pass, collect all unique predicates and entity types
+  from the graph, compute frequency statistics, and ask the LLM to propose a
+  minimal OWL ontology (class hierarchy, domain/range, cardinality constraints).
+  Present for human review before writing to `ontology/`. A second extraction
+  pass with the induced ontology as constraints produces 2x better precision.
+  Removes the adoption bottleneck: users no longer need ontology expertise to
+  get quality results.
 - [ ] **Automatic tentative cleanup.** Track `first_seen` timestamp for tentative
   triples. Auto-run after each ingest: archive tentative triples that were
   never promoted and have not been corroborated within the configurable TTL
@@ -691,11 +736,16 @@ v0.10.0 ─── Release infrastructure: PyPI package, riverbank sbom, docs aut
 v0.11.0 ─── Preprocessing & post-processing: document preprocessing, corpus
     │        clustering, few-shot injection, entity dedup, self-critique verification
     │
-v0.12.0 ─── Permissive extraction: ontology-grounded prompts, per-triple routing,
-    │        graph/tentative, confidence consolidation, overlapping fragments
+v0.12.0 ─── Permissive extraction Phase A: ontology-grounded prompts, per-triple
+    │        routing, graph/tentative, safety cap, pre-write filtering, overlapping
+    │        fragments, literal normalization
+    │
+v0.12.1 ─── Permissive extraction Phase B: noisy-OR accumulation, source diversity
+    │        scoring, promote-tentative, functional predicate hints, explain-rejections
     │
 v0.13.0 ─── Entity quality: predicate normalization, incremental entity linking,
-    │        auto few-shot expansion, knowledge-prefix adapter, quality benchmarks
+    │        induce-schema, auto few-shot expansion, knowledge-prefix adapter,
+    │        contradiction detection, tentative cleanup, quality benchmarks
     │
 v0.14.0 ─── Structural improvements: constrained decoding, semantic chunking,
     │        SHACL shapes, SPARQL CONSTRUCT rules, OWL 2 RL inference
