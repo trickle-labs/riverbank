@@ -24,8 +24,14 @@ def _check_pg_ripple(conn: Any) -> bool:
         result = conn.execute(
             text("SELECT COUNT(*) FROM pg_extension WHERE extname = 'pg_ripple'")
         ).scalar()
-        return bool(result)
-    except Exception:  # noqa: BLE001
+        is_installed = bool(result)
+        if not is_installed:
+            # Log what extensions ARE installed for debugging
+            ext_list = conn.execute(text("SELECT extname FROM pg_extension")).fetchall()
+            logger.debug(f"pg_ripple NOT found in pg_extension. Available: {[e[0] for e in ext_list]}")
+        return is_installed
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"Error checking pg_ripple: {exc}")
         return False
 
 
