@@ -66,10 +66,11 @@
 | Version | Description | Status | Size |
 |---|---|---|---|
 | v0.11.0 | Preprocessing & post-processing — LLM document preprocessing, corpus-level clustering, few-shot injection, validate-graph, entity deduplication, self-critique verification | **Done** | Large |
-| v0.11.1 | Token efficiency — per-fragment entity catalog filtering, adaptive preprocessing for small documents, Phase 2 pre-scan deduplication, Ollama keep-alive prompt caching | Planned | Small |
+| v0.11.1 | Token efficiency — per-fragment entity catalog filtering, adaptive preprocessing for small documents, Phase 2 pre-scan deduplication, Ollama keep-alive prompt caching, noise section filtering | Planned | Small |
 | v0.12.0 | Permissive extraction (Phase A) — ontology-grounded & CQ-guided prompts, permissive extraction prompt, per-triple confidence routing, `graph/tentative`, two-tier query model, safety cap, pre-write structural filtering, overlapping fragments, literal normalization | Planned | Large |
 | v0.12.1 | Permissive extraction (Phase B) — confidence consolidation (noisy-OR) with source diversity scoring, `riverbank promote-tentative`, functional predicate hints, `riverbank explain-rejections` | Planned | Medium |
-| v0.13.0 | Entity quality — predicate normalization, incremental entity linking, `riverbank induce-schema`, auto few-shot expansion, knowledge-prefix adapter, contradiction detection, tentative cleanup, quality regression tracking | Planned | Large |
+| v0.13.0 | Entity convergence — predicate normalization, incremental entity linking with synonym ring extraction, `riverbank induce-schema`, contradiction detection, tentative cleanup, quality regression tracking | Planned | Large |
+| v0.13.1 | Extraction feedback loops — auto few-shot expansion, semantic few-shot selection, batched verification, knowledge-prefix adapter | Planned | Medium |
 
 ### Structural Improvements & Stable Release (v0.14.x – v1.0.0)
 
@@ -521,11 +522,20 @@ the net impact of v0.12.0 stays within 20% of today's token baseline.
   run. The static system prompt (~200 tokens) is re-processed only once per
   run instead of once per fragment. For cloud providers (OpenAI / Anthropic)
   prompt caching is already active automatically.
+- [ ] **Noise section filtering.** Wire up the `noise_sections` field in
+  `PreprocessingResult` (the data model already exists but is never populated).
+  Add an LLM call in `DocumentPreprocessor.preprocess()` that asks:
+  "Identify headings that are pure boilerplate and carry no domain facts
+  (navigation, disclaimers, change logs, legal notices). Return a JSON array
+  of heading paths." Fragments whose heading path matches a noise section are
+  skipped before extraction entirely. Saves one full LLM extraction call per
+  boilerplate fragment. Controlled by `preprocessing.noise_filtering: true`.
 
 **Exit criterion:** a 10-document corpus ingested with all v0.11.0 features
 enabled uses ≤ 100 000 total tokens (down from ~144 600 baseline). Phase 2
 pre-scan produces zero duplicate LLM summary calls. Small documents
-(< 2 000 chars) are processed without any preprocessing LLM calls.
+(< 2 000 chars) are processed without any preprocessing LLM calls. At least
+one corpus document has boilerplate sections correctly identified and skipped.
 
 ---
 
@@ -582,6 +592,18 @@ permissive extraction still skips implied facts.
   --since 1h` shows triples discarded in the last run: evidence span not found,
   below noise floor, or ontology mismatch. Feeds back into prompt improvement
   and surfaces which implied facts the conservative prompt was silently losing.
+- [ ] **Coreference resolution.** Before fragmentation, run a lightweight
+  coreference resolution pass on the full document text to replace pronouns
+  and anaphoric references with their resolved entity names: "it" →
+  "the Pipeline", "this component" → "the Dataset Writer". Two modes
+  controlled by `preprocessing.coreference: llm | spacy | disabled`:
+  (a) LLM call with prompt "Replace all pronouns and anaphoric references
+  in the following text with the entity they refer to. Return the full
+  resolved text."; (b) spaCy `neuralcoref` or `coreferee` model (no extra
+  LLM call). Only high-confidence resolutions applied — ambiguous pronouns
+  left unchanged. Fragment-boundary coreference breaks are the primary reason
+  procedural corpora produce phantom entities like `ex:_it`. Significant yield
+  improvement on procedure, runbook, and tutorial corpora.
 - [ ] **Overlapping fragment windows.** `overlap_sentences` config in the
   fragmenter block prepends the last N sentences of the previous fragment to
   recover facts split across boundaries. Duplicate triples from overlap regions
@@ -656,45 +678,28 @@ crossing the promotion threshold.
 
 ---
 
-### v0.13.0 — Entity Quality & Feedback Loops
+### v0.13.0 — Entity Convergence
 
-Goal: make the entity vocabulary converge over time, automate quality
-improvement via feedback loops, enable graph-aware extraction, and complete
-the tentative graph lifecycle with contradiction detection and automatic cleanup.
+Goal: make the entity and predicate vocabularies converge and stabilise, close
+the cold-start problem via schema induction, and complete the tentative graph
+lifecycle with contradiction detection and automatic cleanup. These are the
+critical correctness foundations — without stable vocabularies, the extraction
+feedback loops planned for v0.13.1 learn from noisy data.
 
 - [ ] **Predicate normalization.** Embed predicate labels, cluster by similarity,
   map non-canonical predicates to ontology-defined canonical forms. Companion
   to entity deduplication — reduces predicate vocabulary by 30–50%.
-- [ ] **Incremental entity linking.** Persistent `entity_registry` table
-  (IRI, label, type, embedding, first_seen, doc_count) grows as documents are
-  processed. Before extraction, top-K relevant entities are injected as
-  "KNOWN ENTITIES — prefer these IRIs." New CLI:
+- [ ] **Incremental entity linking with synonym rings.** Persistent
+  `entity_registry` table (IRI, label, type, embedding, first_seen, doc_count)
+  grows as documents are processed. Before extraction, top-K relevant entities
+  are injected as "KNOWN ENTITIES — prefer these IRIs." New CLI:
   `riverbank entities list` and `riverbank entities merge`.
-- [ ] **Auto few-shot expansion.** After validated ingests where CQ coverage
-  exceeds threshold, high-confidence triples that satisfy competency questions
-  are automatically sampled and appended to the profile's golden examples file.
-  Capped at 10–15 examples per profile with diversity constraints (no two
-  examples with the same predicate+type combination). CQs drive selection,
-  completing the CQ-as-north-star feedback cycle begun in v0.12.0.
-- [ ] **Semantic few-shot selection.** Upgrade `FewShotInjector` to support
-  `selection: semantic`. Embeds the fragment text and the golden examples at
-  injection time and selects the top-K most similar examples by cosine
-  similarity, replacing random selection. Reduces injected examples from 3 to
-  1–2 highly relevant ones — saves ~80–150 tokens per fragment while anchoring
-  the LLM to the most topically relevant examples. Falls back to random when
-  sentence-transformers is unavailable.
-- [ ] **Batched verification.** Upgrade `VerificationPass` to group
-  low-confidence triples into batches of up to `verification.batch_size: 5`
-  and issue a single LLM call per batch instead of one call per triple. The
-  system prompt overhead (~250 tokens) is paid once per batch rather than per
-  triple. Saves ~3 400 tokens for a typical 20-triple verification run.
-- [ ] **Knowledge-prefix adapter.** At extraction time, retrieve the local
-  neighborhood of already-extracted entities from pg_ripple and inject as a
-  structured "KNOWN GRAPH CONTEXT" prefix. Improves consistency of new
-  extractions with the existing graph and reduces contradictory triples.
-  Requires the v0.12.0 token budget manager — the graph context block is
-  capped at `max_graph_context_tokens: 200` (default) to prevent prompt
-  explosion; without the cap, this adapter adds +100–300 tokens per fragment.
+  The vocabulary pass now explicitly produces `skos:altLabel` triples for every
+  discovered variant (synonym rings, per ANSI Z39.19): "Dataset" / "data set" /
+  "datasets" → one entity with three alt-labels. The `pg:fuzzy_match()` function
+  validates synonymy before writing. Synonym rings improve query recall and
+  anchor the entity linker to attested surface forms rather than canonical-only
+  matching.
 - [ ] **Contradiction detection & demotion.** For functional predicates annotated
   in the profile YAML (from v0.12.0), detect when new `(s, p, o₂)` conflicts
   with existing `(s, p, o₁)`. Reduce confidence of both triples by 30%; demote
@@ -722,11 +727,51 @@ the tentative graph lifecycle with contradiction detection and automatic cleanup
   CI on every release; fails the build if quality drops.
 
 **Exit criterion:** entity duplication rate across a 10-document corpus is
-< 1.15x. Auto-expanded few-shot bank has ≥ 8 examples after two full ingest
-cycles. Contradiction detection flags at least one functional predicate conflict
-in a test run. Tentative cleanup auto-runs and archives stale triples without
-manual intervention. `riverbank benchmark` CI step catches a deliberately
-degraded prompt.
+< 1.15x. Synonym ring extraction produces `skos:altLabel` triples for ≥ 80%
+of entities that have attested surface variants. Contradiction detection flags
+at least one functional predicate conflict in a test run. Tentative cleanup
+auto-runs and archives stale triples without manual intervention.
+`riverbank benchmark` CI step catches a deliberately degraded prompt.
+
+---
+
+### v0.13.1 — Extraction Feedback Loops
+
+Goal: close the self-improvement loop — the pipeline learns from its own
+high-confidence outputs to improve future extractions. Depends on stable
+vocabularies from v0.13.0; without them, feedback loops learn from noisy data.
+
+- [ ] **Auto few-shot expansion.** After validated ingests where CQ coverage
+  exceeds threshold, high-confidence triples that satisfy competency questions
+  are automatically sampled and appended to the profile's golden examples file.
+  Capped at 10–15 examples per profile with diversity constraints (no two
+  examples with the same predicate+type combination). CQs drive selection,
+  completing the CQ-as-north-star feedback cycle begun in v0.12.0.
+- [ ] **Semantic few-shot selection.** Upgrade `FewShotInjector` to support
+  `selection: semantic`. Embeds the fragment text and the golden examples at
+  injection time and selects the top-K most similar examples by cosine
+  similarity. Reduces injected examples from 3 to 1–2 highly relevant ones —
+  saves ~80–150 tokens per fragment while anchoring the LLM to the most
+  topically relevant examples. Falls back to random when sentence-transformers
+  is unavailable.
+- [ ] **Batched verification.** Upgrade `VerificationPass` to group
+  low-confidence triples into batches of up to `verification.batch_size: 5`
+  per LLM call instead of one call per triple. Saves ~3 400 tokens for a
+  typical 20-triple verification run.
+- [ ] **Knowledge-prefix adapter.** At extraction time, retrieve the local
+  neighborhood of already-extracted entities from pg_ripple and inject as a
+  structured "KNOWN GRAPH CONTEXT" prefix. Improves consistency of new
+  extractions with the existing graph and reduces contradictory triples.
+  Requires the v0.12.0 token budget manager — the graph context block is
+  capped at `max_graph_context_tokens: 200` (default) to prevent prompt
+  explosion.
+
+**Exit criterion:** auto-expanded few-shot bank has ≥ 8 examples after two
+full ingest cycles. Semantic few-shot selection demonstrably selects more
+relevant examples than random (measured by extraction precision on held-out
+corpus). Batched verification issues ≤ 4 LLM calls for a 20-triple
+verification run (instead of 20). Knowledge-prefix adapter improves
+entity IRI consistency across documents.
 
 ---
 
@@ -820,9 +865,12 @@ v0.12.0 ─── Permissive extraction Phase A: ontology-grounded prompts, per-
 v0.12.1 ─── Permissive extraction Phase B: noisy-OR accumulation, source diversity
     │        scoring, promote-tentative, functional predicate hints, explain-rejections
     │
-v0.13.0 ─── Entity quality: predicate normalization, incremental entity linking,
-    │        induce-schema, auto few-shot expansion, knowledge-prefix adapter,
-    │        contradiction detection, tentative cleanup, quality benchmarks
+v0.13.0 ─── Entity convergence: predicate normalization, entity linking + synonym
+    │        rings, induce-schema, contradiction detection, tentative cleanup,
+    │        quality benchmarks
+    │
+v0.13.1 ─── Extraction feedback loops: auto few-shot expansion, semantic few-shot,
+    │        batched verification, knowledge-prefix adapter
     │
 v0.14.0 ─── Structural improvements: constrained decoding, semantic chunking,
     │        SHACL shapes, SPARQL CONSTRUCT rules, OWL 2 RL inference
