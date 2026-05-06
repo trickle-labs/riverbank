@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import xxhash
 import yaml
@@ -125,6 +125,7 @@ class IngestPipeline:
         profile: Optional[CompilerProfile] = None,
         dry_run: bool = False,
         mode: str = "full",
+        progress_callback: Callable[[str, dict], None] | None = None,
     ) -> dict:
         """Run the pipeline against a corpus directory or single file.
 
@@ -168,7 +169,7 @@ class IngestPipeline:
         }
         with tracer.start_as_current_span("ingest_pipeline.run") as span:
             for run_mode in sequence:
-                stats = self._run_inner(corpus_path, profile, dry_run, span, run_mode)
+                stats = self._run_inner(corpus_path, profile, dry_run, span, run_mode, progress_callback)
                 for k in combined:
                     combined[k] += stats[k]  # type: ignore[operator]
             span.set_attribute("ingest.fragments_processed", combined["fragments_processed"])
@@ -187,6 +188,7 @@ class IngestPipeline:
         dry_run: bool,
         span: Any,
         mode: str = "full",
+        progress_callback: Callable[[str, dict], None] | None = None,
     ) -> dict:
         from riverbank.connectors.fs import FilesystemConnector  # noqa: PLC0415
         from riverbank.fragmenters.heading import HeadingFragmenter  # noqa: PLC0415
@@ -252,6 +254,7 @@ class IngestPipeline:
                             dry_run,
                             stats,
                             mode=mode,
+                            progress_callback=progress_callback,
                         )
                     except Exception as exc:  # noqa: BLE001
                         logger.error("Failed to process %s: %s", source.iri, exc)
@@ -273,6 +276,7 @@ class IngestPipeline:
         dry_run: bool,
         stats: dict,
         mode: str = "full",
+        progress_callback: Callable[[str, dict], None] | None = None,
     ) -> None:
         from riverbank.catalog.graph import (  # noqa: PLC0415
             delete_artifact_deps,
@@ -287,6 +291,9 @@ class IngestPipeline:
         fragments = list(fragmenter.fragment(doc))
         existing_hashes = self._get_existing_hashes(conn, source.iri)
         tracer = otel_trace.get_tracer(__name__)
+
+        if progress_callback:
+            progress_callback("source_start", {"source": source.iri, "total_fragments": len(fragments)})
 
         for frag in fragments:
             frag_hash_hex = frag.content_hash.hex()
@@ -327,6 +334,8 @@ class IngestPipeline:
             ):
                 stats["fragments_skipped_hash"] += 1
                 stats["fragments_skipped"] += 1
+                if progress_callback:
+                    progress_callback("fragment", {"key": frag.fragment_key, "status": "skipped_hash"})
                 continue
 
             # Editorial policy gate
@@ -338,9 +347,13 @@ class IngestPipeline:
                     frag.fragment_key,
                     gate_result.reason,
                 )
+                if progress_callback:
+                    progress_callback("fragment", {"key": frag.fragment_key, "status": "skipped_gate"})
                 continue
 
             stats["fragments_processed"] += 1
+            if progress_callback:
+                progress_callback("fragment", {"key": frag.fragment_key, "status": "processing"})
 
             if dry_run:
                 # In dry-run mode we parse + fragment but skip extraction
@@ -372,7 +385,16 @@ class IngestPipeline:
             # Extract triples
             with tracer.start_as_current_span("ingest_pipeline.extract") as ex_span:
                 ex_span.set_attribute("fragment.key", frag.fragment_key)
-                result = extractor.extract(fragment=frag, profile=profile, trace=None)
+                try:
+                    result = extractor.extract(fragment=frag, profile=profile, trace=None)
+                except Exception as ex_exc:  # noqa: BLE001
+                    logger.warning(
+                        "Extraction failed for fragment %s: %s",
+                        frag.fragment_key,
+                        str(ex_exc)[:200],
+                    )
+                    stats["errors"] += 1
+                    continue
 
             stats["llm_calls"] += result.diagnostics.get("llm_calls", 0)
             stats["prompt_tokens"] += result.diagnostics.get("prompt_tokens", 0)

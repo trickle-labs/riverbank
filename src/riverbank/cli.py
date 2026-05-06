@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import typer
 from rich import print as rprint
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 from riverbank import __version__
@@ -211,7 +212,43 @@ def ingest(
     if dry_run:
         rprint("[dim]dry-run mode — extraction and graph writes are skipped[/dim]")
 
-    stats = pipeline.run(corpus_path=corpus, profile=profile, dry_run=dry_run, mode=mode)
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        transient=True,
+    ) as progress:
+        task = progress.add_task("Ingesting…", total=None)
+        _counts: dict[str, int] = {"processed": 0, "skipped": 0, "errors": 0}
+
+        def _on_progress(event: str, data: dict) -> None:
+            if event == "source_start":
+                name = data["source"].rsplit("/", 1)[-1]
+                n = data["total_fragments"]
+                progress.update(task, description=f"[cyan]{name}[/cyan] ({n} fragments)")
+            elif event == "fragment":
+                status = data["status"]
+                if status == "processing":
+                    _counts["processed"] += 1
+                    key = data["key"]
+                    progress.update(
+                        task,
+                        advance=1,
+                        description=f"[cyan]{key}[/cyan]",
+                    )
+                else:
+                    _counts["skipped"] += 1
+                    progress.advance(task)
+
+        stats = pipeline.run(
+            corpus_path=corpus,
+            profile=profile,
+            dry_run=dry_run,
+            mode=mode,
+            progress_callback=_on_progress,
+        )
 
     table = Table(
         title="Ingest summary",
@@ -239,6 +276,37 @@ def ingest(
         raise typer.Exit(code=1)
 
     rprint("[green bold]ingest complete[/green bold]")
+
+
+@app.command("clear-graph")
+def clear_graph(
+    graph: str | None = typer.Option(
+        None,
+        "--graph",
+        "-g",
+        help="Named graph IRI to clear (e.g. http://riverbank.example/graph/trusted). Omit to clear ALL graphs.",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+) -> None:
+    """Delete all triples from a named graph (or every graph)."""
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.catalog.graph import clear_graph as _clear_graph  # noqa: PLC0415
+
+    target = f"<{graph}>" if graph else "ALL graphs"
+    if not yes:
+        typer.confirm(f"Delete all triples from {target}?", abort=True)
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            deleted = _clear_graph(conn, named_graph=graph)
+            conn.commit()
+    finally:
+        engine.dispose()
+
+    rprint(f"[green bold]clear-graph complete[/green bold]  graph={target}  deleted≈{deleted}")
 
 
 @app.command()

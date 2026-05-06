@@ -216,6 +216,40 @@ def sparql_query(
         raise
 
 
+def clear_graph(conn: Any, named_graph: str | None = None) -> int:
+    """Delete all triples from the given named graph, or from every graph if *named_graph* is None.
+
+    Returns the number of triples deleted (0 when pg_ripple is unavailable).
+    """
+    try:
+        with conn.begin_nested():
+            if named_graph:
+                conn.execute(
+                    text("SELECT pg_ripple.clear_graph(cast(:iri as text))"),
+                    {"iri": named_graph},
+                )
+            else:
+                # Clear every named graph
+                graphs = conn.execute(
+                    text("SELECT * FROM pg_ripple.list_graphs()")
+                ).fetchall()
+                for row in graphs:
+                    iri = row[0].strip("<>")  # strip angle brackets returned by list_graphs
+                    conn.execute(
+                        text("SELECT pg_ripple.clear_graph(cast(:iri as text))"),
+                        {"iri": iri},
+                    )
+        return 0  # pg_ripple.clear_graph returns void
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc).lower()
+        if _is_missing_extension(msg):
+            logger.warning(
+                "pg_ripple not available — clear_graph not executed. error=%s", exc
+            )
+            return 0
+        raise
+
+
 def record_artifact_dep(
     conn: Any,
     artifact_iri: str,
