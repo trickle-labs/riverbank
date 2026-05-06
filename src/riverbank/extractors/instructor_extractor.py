@@ -122,9 +122,6 @@ class InstructorExtractor:
             confidence: float
             evidence: _EvidenceSpanIn
 
-        class _ExtractionResponse(BaseModel):
-            triples: list[_TripleIn]
-
         # --- call the LLM ---
         client = instructor.from_openai(OpenAI(base_url=api_base, api_key=api_key))
 
@@ -134,12 +131,12 @@ class InstructorExtractor:
                 {"role": "system", "content": prompt_text},
                 {"role": "user", "content": text},
             ],
-            response_model=_ExtractionResponse,
+            response_model=list[_TripleIn],
         )
 
         # --- validate and filter triples ---
         validated: list[ExtractedTriple] = []
-        for t in response.triples:
+        for t in response:
             ev = t.evidence
             # Citation grounding: reject fabricated excerpts
             if ev.excerpt and ev.excerpt not in text:
