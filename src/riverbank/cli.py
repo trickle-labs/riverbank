@@ -1795,3 +1795,198 @@ def validate_graph(
     if not failed_ids:
         rprint("[green bold]All competency questions passed.[/green bold]")
 
+
+@app.command("deduplicate-entities")
+def deduplicate_entities(
+    named_graph: str = typer.Option(
+        "http://riverbank.example/graph/trusted",
+        "--graph",
+        "-g",
+        help="Named graph IRI to deduplicate",
+    ),
+    threshold: float = typer.Option(
+        0.92,
+        "--threshold",
+        "-t",
+        help="Cosine-similarity threshold for merging entities (0.0–1.0)",
+    ),
+    model: str = typer.Option(
+        "all-MiniLM-L6-v2",
+        "--model",
+        "-m",
+        help="sentence-transformers model name for embedding entity labels",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Compute clusters but do not write owl:sameAs triples",
+    ),
+) -> None:
+    """Post-1: Embed entity labels and write owl:sameAs links for duplicates.
+
+    Queries the named graph for all unique entity IRIs, embeds their labels
+    using sentence-transformers, clusters by cosine similarity, and promotes
+    the shortest IRI in each cluster as canonical.  Alias IRIs are written
+    back to the graph as ``owl:sameAs`` links.
+
+    Use ``--dry-run`` to inspect clusters without modifying the graph.
+    Requires sentence-transformers (``pip install 'riverbank[ingest]'``).
+    """
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.postprocessors.dedup import EntityDeduplicator  # noqa: PLC0415
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+
+    deduplicator = EntityDeduplicator(model_name=model, threshold=threshold)
+
+    rprint(
+        f"[bold]riverbank deduplicate-entities[/bold]  "
+        f"graph=<{named_graph}>  threshold={threshold}"
+    )
+    if dry_run:
+        rprint("[dim]dry-run mode — owl:sameAs triples will NOT be written[/dim]")
+
+    try:
+        with engine.connect() as conn:
+            result = deduplicator.deduplicate(conn, named_graph, dry_run=dry_run)
+    finally:
+        engine.dispose()
+
+    table = Table(
+        title="Entity deduplication summary",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("Entities examined", str(result.entities_examined))
+    table.add_row("Duplicate clusters found", str(result.clusters_found))
+    table.add_row("owl:sameAs triples written", str(result.sameas_written))
+    rprint(table)
+
+    if result.clusters:
+        cluster_table = Table(
+            title="Duplicate clusters",
+            show_header=True,
+            header_style="bold magenta",
+        )
+        cluster_table.add_column("Canonical IRI")
+        cluster_table.add_column("Aliases")
+        cluster_table.add_column("Similarity", justify="right")
+        for cluster in result.clusters:
+            cluster_table.add_row(
+                cluster.canonical,
+                ", ".join(cluster.aliases),
+                f"{cluster.similarity:.3f}",
+            )
+        rprint(cluster_table)
+
+    if dry_run:
+        rprint("[yellow]dry-run complete — no changes written[/yellow]")
+    else:
+        rprint("[green bold]deduplication complete[/green bold]")
+
+
+@app.command("verify-triples")
+def verify_triples(
+    profile_name: str = typer.Option(
+        "default", "--profile", "-p", help="Compiler profile name or YAML file path"
+    ),
+    named_graph: str | None = typer.Option(
+        None,
+        "--graph",
+        "-g",
+        help="Named graph IRI to verify (defaults to profile named_graph)",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Compute verification outcomes but do not modify the graph",
+    ),
+) -> None:
+    """Post-2: Re-evaluate low-confidence triples with a self-critique LLM call.
+
+    Reads ``verification:`` config from the compiler profile.  For each triple
+    below ``confidence_threshold``, asks the LLM whether the claim is supported
+    by the stored evidence excerpt.  Confirmed triples with high verifier
+    confidence are boosted; rejected triples are moved to the quarantine
+    (``<draft>``) named graph for human review.
+
+    Verification must be enabled in the profile::
+
+        verification:
+          enabled: true
+          confidence_threshold: 0.75
+          drop_below: 0.4
+          boost_above: 0.8
+
+    Use ``--dry-run`` to inspect outcomes without modifying the graph.
+    Requires instructor + openai (``pip install 'riverbank[ingest]'``).
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.pipeline import CompilerProfile  # noqa: PLC0415
+    from riverbank.postprocessors.verify import VerificationPass  # noqa: PLC0415
+
+    # Resolve profile
+    profile_path = Path(profile_name)
+    if profile_path.exists() and profile_path.suffix in {".yaml", ".yml"}:
+        profile = CompilerProfile.from_yaml(profile_path)
+    else:
+        profile = CompilerProfile(name=profile_name)
+
+    graph = named_graph or profile.named_graph
+
+    verification_cfg: dict = getattr(profile, "verification", {})
+    if not verification_cfg.get("enabled", False):
+        rprint(
+            "[yellow]verification is not enabled in this profile. "
+            "Add 'verification: {enabled: true}' to enable.[/yellow]"
+        )
+        raise typer.Exit(code=0)
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+
+    rprint(
+        f"[bold]riverbank verify-triples[/bold]  "
+        f"profile={profile.name!r}  graph=<{graph}>"
+    )
+    if dry_run:
+        rprint("[dim]dry-run mode — no changes will be written[/dim]")
+
+    verifier = VerificationPass(settings=settings)
+    try:
+        with engine.connect() as conn:
+            result = verifier.verify(conn, graph, profile, dry_run=dry_run)
+    finally:
+        engine.dispose()
+
+    table = Table(
+        title="Verification pass summary",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("Triples examined", str(result.triples_examined))
+    table.add_row("Confidence boosted", str(result.boosted))
+    table.add_row("Kept (unchanged)", str(result.kept))
+    table.add_row("Quarantined (→ draft)", str(result.quarantined))
+    table.add_row("Errors", str(result.errors))
+    table.add_row("Prompt tokens", str(result.prompt_tokens))
+    table.add_row("Completion tokens", str(result.completion_tokens))
+    rprint(table)
+
+    if result.errors > 0:
+        rprint(f"[red]{result.errors} verification error(s) — see logs for details[/red]")
+
+    if dry_run:
+        rprint("[yellow]dry-run complete — no changes written[/yellow]")
+    else:
+        rprint("[green bold]verification pass complete[/green bold]")
+

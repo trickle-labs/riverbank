@@ -61,6 +61,8 @@ class CompilerProfile:
     few_shot: dict = field(default_factory=dict)
     # v0.11.0: Corpus-level hierarchical clustering (Phase 2)
     corpus_preprocessing: dict = field(default_factory=dict)
+    # v0.11.0: Post-2 self-critique verification pass
+    verification: dict = field(default_factory=dict)
     # id is set after the profile is registered in the catalog DB
     id: Optional[int] = None
 
