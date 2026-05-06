@@ -24,41 +24,59 @@
 | v0.2.0 | MVP ingestion — Markdown corpus → triples with citation grounding, confidence scores, and fragment-level skip on re-ingest | **Done** | Large |
 | v0.3.0 | MVP completion — `riverbank query`, `riverbank runs`, cost accounting, Langfuse traces, golden corpus CI gate | **Done** | Medium |
 
-### Incremental Compilation (v0.4.x)
+### Incremental Compilation (v0.4.x – v0.5.x)
 
 | Version | Description | Status | Size |
 |---|---|---|---|
-| v0.4.0 | Incremental compilation — artifact dependency graph, `riverbank explain`, vocabulary pass, SKOS integrity shape library, Docling multi-format parser, spaCy NER + vocabulary lookup, Singer connector, embedding generation | Planned | Very Large |
+| v0.4.0 | Incremental compilation core — artifact dependency graph, `riverbank explain`, recompile flow, vocabulary pass, SKOS integrity shape bundle, `tenant_id` schema scaffold | Planned | Large |
+| v0.5.0 | Multi-format parsing and enrichment — Docling, spaCy NER + vocabulary lookup, fuzzy entity matching, embedding generation, Singer connector | Planned | Large |
 
-### Quality Gates and Review (v0.5.x)
-
-| Version | Description | Status | Size |
-|---|---|---|---|
-| v0.5.0 | Quality gates and human review loop — Label Studio integration, active-learning queue, example bank, Langfuse evals, lint flow, Prefect introduced | Planned | Large |
-
-### Production Hardening (v0.6.x)
+### Quality Gates and Review (v0.6.x)
 
 | Version | Description | Status | Size |
 |---|---|---|---|
-| v0.6.0 | Production hardening — Helm chart, multi-replica workers, Prometheus/Perses dashboards, secret management, circuit breakers, audit trail, bulk reprocessing | Planned | Very Large |
+| v0.6.0 | Quality gates and human review loop — Label Studio integration, active-learning queue, example bank, Langfuse evals, lint flow, Prefect introduced | Planned | Large |
 
-### Advanced Epistemic Features (v0.7.x)
-
-| Version | Description | Status | Size |
-|---|---|---|---|
-| v0.7.0 | Epistemic layer — negative knowledge records, argument graphs, assumption registry, all 9 epistemic status labels, model ensemble, contradiction explanation, coverage maps | Planned | Very Large |
-
-### Multi-tenant and Prose Generation (v0.8.x)
+### Production Hardening (v0.7.x)
 
 | Version | Description | Status | Size |
 |---|---|---|---|
-| v0.8.0 | Multi-tenant and rendering — tenant_id + RLS, federated compilation (SPARQL SERVICE), Markdown/JSON-LD page rendering, streaming render via SSE | Planned | Very Large |
+| v0.7.0 | Production hardening — Helm chart, multi-replica workers, Prometheus/Perses dashboards, secret management, circuit breakers, audit trail, bulk reprocessing | Planned | Very Large |
+
+### Advanced Epistemic Features (v0.8.x)
+
+| Version | Description | Status | Size |
+|---|---|---|---|
+| v0.8.0 | Epistemic layer — negative knowledge records, argument graphs, assumption registry, all 9 epistemic status labels, model ensemble, contradiction explanation, coverage maps | Planned | Very Large |
+
+### Multi-tenant and Prose Generation (v0.9.x)
+
+| Version | Description | Status | Size |
+|---|---|---|---|
+| v0.9.0 | Multi-tenant and rendering — tenant_id RLS activation, federated compilation (SPARQL SERVICE), Markdown/JSON-LD page rendering, streaming render via SSE | Planned | Very Large |
 
 ### Stable Release (v1.0.0)
 
 | Version | Description | Status | Size |
 |---|---|---|---|
 | v1.0.0 | Stable — full API stability guarantee, PyPI package, signed artifacts, SBOM, Helm chart stability, complete documentation site | Planned | Large |
+
+---
+
+## External dependency risk
+
+Several planned versions delegate implementation to pg-ripple or pg-tide rather than owning the capability in Python. The table below identifies the features at risk and the mitigation if a dependency is unavailable at the start of a release cycle.
+
+| Capability | Owned by | First needed | Mitigation if delayed |
+|---|---|---|---|
+| `pg:fuzzy_match()`, `pg:token_set_ratio()`, `suggest_sameas()`, `pagerank_find_duplicates()` | pg-ripple | v0.5.0 | Fuzzy entity matching deferred; spaCy pre-resolution still ships |
+| `pg_ripple.explain_contradiction()` | pg-ripple | v0.8.0 | `riverbank explain-conflict` deferred; contradiction detection via SHACL still works |
+| `pg_ripple.refresh_coverage_map()` | pg-ripple | v0.8.0 | Coverage map generation deferred; competency-question coverage computed locally |
+| SPARQL `SERVICE` federation | pg-ripple | v0.9.0 | Federated compilation deferred; local compilation unaffected |
+| Relay circuit breakers, DLQ, backpressure | pg-tide | v0.7.0 | Relay health visible in `riverbank health`; manual configuration fallback |
+| Singer STATE checkpoint persistence, SCHEMA drift detection | pg-tide | v0.5.0 | Singer connector ships without resumable-tap guarantee; state managed by operator |
+
+**Policy:** if a dependency is unavailable at the start of a release cycle, the affected feature moves to the following minor version. All core ingestion, extraction, catalog, and provenance features are riverbank-owned and carry no upstream dependency.
 
 ---
 
@@ -133,7 +151,7 @@ a reproducible CI gate.
   fail CI
 - [x] Full test suite runs in under 10 minutes in CI against `ollama/llama3.2:3b`
 - [x] `riverbank profile register` and `riverbank source set-profile` commands
-- [x] **`riverbank lint --shacl-only`** — thin SHACL quality report against the trusted named graph; exits non-zero if score falls below the profile threshold. No Prefect required. Establishes governance as a first-class operation from day one, before the full lint pass lands in v0.5.0.
+- [x] **`riverbank lint --shacl-only`** — thin SHACL quality report against the trusted named graph; exits non-zero if score falls below the profile threshold. No Prefect required. Establishes governance as a first-class operation from day one, before the full lint pass lands in v0.6.0.
 - [x] **Competency question CI gate** — golden corpus assertions are generated from the `competency_questions` array in each compiler profile. CI validates not just that triples were written, but that the compiled graph answers what the profile was built to answer.
 
 **Exit criterion:** end-to-end demo on pg_ripple's own `docs/src/**/*.md`:
@@ -144,7 +162,7 @@ spans, full compile cost < $5 with `gpt-4o-mini` or $0 with Ollama.
 
 ### v0.4.0 — Incremental Compilation
 
-Goal: prove the system rebuilds *only* what changed when a source updates, and establish vocabulary hygiene as an upstream constraint before relationship extraction.
+Goal: prove the system rebuilds *only* what changed when a source updates, establish vocabulary hygiene as an upstream constraint before relationship extraction, and scaffold the multi-tenant catalog schema.
 
 - **Artifact dependency graph.** Every compiled artifact records
   `(fragment, profile_version, rule_set)` dependencies in
@@ -171,6 +189,22 @@ Goal: prove the system rebuilds *only* what changed when a source updates, and e
   these rules. `riverbank lint --layer vocab` runs the bundle against the
   `<vocab>` named graph. This is the machine-executable form of the Ontology
   Pipeline output quality contract.
+- **`tenant_id` schema scaffold.** A nullable `tenant_id` column is added to
+  all `_riverbank` tables via Alembic migration. Row-level security is not
+  activated yet — that lands in v0.9.0 — but the column is present so that
+  all downstream migrations are additive-only.
+
+**Exit criterion:** modify one paragraph in one Markdown file, re-run
+`riverbank ingest`, exactly one fragment re-extracted, semantic diff event
+arrives on the pg_trickle outbox. `riverbank explain entity:Acme` prints a
+complete dependency tree.
+
+---
+
+### v0.5.0 — Multi-format Parsing and Enrichment
+
+Goal: extend ingestion beyond Markdown to office documents and web content, and add the enrichment layer (NER, fuzzy matching, embeddings) that quality gates and epistemic features depend on.
+
 - **Docling integration.** PDF, DOCX, PPTX, HTML, and image OCR via Docling ≥
   2.92. `Docling` becomes the default parser for non-Markdown sources.
 - **spaCy NER pre-resolution + vocabulary lookup.** Named entities extracted
@@ -193,14 +227,14 @@ Goal: prove the system rebuilds *only* what changed when a source updates, and e
   detection are handled by pg-tide; the Python connector wrapper requires no
   STATE management code.
 
-**Exit criterion:** modify one paragraph in one Markdown file, re-run
-`riverbank ingest`, exactly one fragment re-extracted, semantic diff event
-arrives on the pg_trickle outbox. `riverbank explain entity:Acme` prints a
-complete dependency tree.
+**Exit criterion:** a PDF and a DOCX file ingest successfully alongside the
+existing Markdown corpus; entity-cluster centroid views are queryable via SQL;
+`riverbank query` returns vector-similar results for a test entity; fuzzy match
+suggestions appear in `riverbank explain` output for a known near-duplicate pair.
 
 ---
 
-### v0.5.0 — Quality Gates and Review Loop
+### v0.6.0 — Quality Gates and Review Loop
 
 Goal: a running human-in-the-loop pipeline that converts low-confidence
 extractions into reviewed, high-confidence facts.
@@ -236,7 +270,7 @@ example bank has ≥ 20 entries after a one-week pilot.
 
 ---
 
-### v0.6.0 — Production Hardening
+### v0.7.0 — Production Hardening
 
 Goal: deployable in a regulated production environment with multi-replica
 workers, secret management, backups, and SLOs.
@@ -288,7 +322,7 @@ dropping in-flight runs.
 
 ---
 
-### v0.7.0 — Advanced Epistemic Features
+### v0.8.0 — Advanced Epistemic Features
 
 Goal: implement the features that distinguish riverbank from a generic compiler:
 explicit absence, structured reasoning, and ensemble verification.
@@ -342,14 +376,15 @@ measurable error reduction over a single-model baseline.
 
 ---
 
-### v0.8.0 — Multi-tenant and Prose Generation
+### v0.9.0 — Multi-tenant and Prose Generation
 
 Goal: deploy as shared infrastructure across multiple knowledge bases; render
 compiled knowledge back to prose.
 
-- **Multi-tenant catalog.** All `_riverbank` tables gain a `tenant_id` column
-  with row-level security. Per-tenant editorial policies, profiles, and named
-  graphs. Tenant lifecycle API (create, suspend, delete with GDPR erasure).
+- **Multi-tenant RLS activation.** Row-level security is enabled on all
+  `_riverbank` tables using the `tenant_id` column scaffolded in v0.4.0.
+  Per-tenant editorial policies, profiles, and named graphs. Tenant lifecycle
+  API (create, suspend, delete with GDPR erasure).
 - **Tenant-scoped Label Studio.** One Label Studio organisation per tenant;
   reviewer assignments respect tenant boundaries.
 - **Federated compilation.** A "remote profile" type pulls SERVICE-federated
@@ -404,20 +439,23 @@ v0.2.0  ─── MVP ingestion: Markdown → triples with citations, confidence
     │
 v0.3.0  ─── MVP completion: query, runs, cost dashboards, golden corpus CI gate
     │
-v0.4.0  ─── Incremental compilation: dependency graph, explain, Docling, embeddings,
-    │        spaCy NER, Singer/pg-tide connector, semantic diff events
+v0.4.0  ─── Incremental compilation core: dependency graph, explain, recompile flow,
+    │        vocabulary pass, SKOS shape bundle, tenant_id schema scaffold
     │
-v0.5.0  ─── Quality gates: Label Studio review loop, active-learning queue,
+v0.5.0  ─── Multi-format parsing and enrichment: Docling, spaCy NER, fuzzy matching,
+    │        embeddings, Singer/pg-tide connector
+    │
+v0.6.0  ─── Quality gates: Label Studio review loop, active-learning queue,
     │        example bank, Langfuse evals, lint flow, Prefect introduced
     │
-v0.6.0  ─── Production hardening: Helm chart, multi-replica workers, Prometheus,
+v0.7.0  ─── Production hardening: Helm chart, multi-replica workers, Prometheus,
     │        Perses dashboards, audit trail, secret management, circuit breakers
     │
-v0.7.0  ─── Advanced epistemic: negative knowledge, argument graphs, assumptions,
+v0.8.0  ─── Advanced epistemic: negative knowledge, argument graphs, assumptions,
     │        9 epistemic statuses, model ensemble, contradiction explanation
     │
-v0.8.0  ─── Multi-tenant + rendering: RLS, federated compilation, Markdown/JSON-LD
-    │        page rendering, streaming SSE render for live documentation
+v0.9.0  ─── Multi-tenant + rendering: RLS activation, federated compilation,
+    │        Markdown/JSON-LD page rendering, streaming SSE render
     │
 v1.0.0  ─── Stable: PyPI, signed artifacts, SBOM, Helm stability, SLOs in CI
 ```
@@ -434,17 +472,23 @@ is what separates riverbank from a batch re-indexer. The demo for v0.4.0 exit
 is the clearest possible: change one paragraph, watch exactly one fragment
 recompile, observe the affected facts update in SPARQL, see the semantic event
 arrive on the pg_trickle outbox — end-to-end in under a second. This release
-also adds the full multi-format parser (Docling) and the embedding infrastructure
-that v0.5.0 and later depend on.
+also scaffolds the `tenant_id` column on all catalog tables so that the
+multi-tenancy migration in v0.9.0 is additive-only.
 
-v0.5.0 closes the human-in-the-loop gap. A knowledge graph without a review
+v0.5.0 extends the ingest surface to office documents and web content, and adds
+the enrichment layer (Docling, spaCy, embeddings) that quality gates and
+epistemic features in v0.6.0 and later depend on. Splitting this from the
+incremental compilation core keeps both releases at a size that can ship
+independently.
+
+v0.6.0 closes the human-in-the-loop gap. A knowledge graph without a review
 loop is a confidence claim without evidence. Label Studio integration, the
 active-learning review queue, and the example bank together enable the quality
 feedback cycle that makes extraction quality measurably improve over time.
 Prefect is introduced here rather than earlier because it is an operational
 dependency (it needs the pipeline to be stable before it adds value).
 
-v0.6.0 is the production gate. Nothing before v0.6.0 is appropriate for
+v0.7.0 is the production gate. Nothing before v0.7.0 is appropriate for
 a regulated production environment. The Helm chart, multi-replica workers,
 audit trail, and secret management form the minimum deployable production unit.
 This release is deliberately large; every item in it is non-negotiable for
@@ -452,18 +496,19 @@ production readiness. LLM provider circuit breakers (aiobreaker) protect
 against runaway API costs; relay pipeline circuit breakers, DLQ, and backpressure
 are configured in pg-tide and do not add Python code to riverbank.
 
-v0.7.0 addresses the epistemic features that distinguish riverbank from a
+v0.8.0 addresses the epistemic features that distinguish riverbank from a
 generic RAG pipeline. Negative knowledge (explicit absences), argument graphs
 (structured reasoning), and model ensemble (verification by disagreement) are
-all features that generic pipelines do not provide. These are deferred to v0.7.0
-because they require a working review loop (v0.5.0) and stable production
-infrastructure (v0.6.0) to be useful in practice.
+all features that generic pipelines do not provide. These are deferred to v0.8.0
+because they require a working review loop (v0.6.0) and stable production
+infrastructure (v0.7.0) to be useful in practice.
 
-v0.8.0 is additive infrastructure: multi-tenancy and rendering. Both can be
-developed in parallel with v0.7.0 work. Multi-tenancy is straightforward once
-the catalog schema is stable (RLS + `tenant_id` on existing tables). Rendering
-is the last mile between a compiled knowledge graph and a documentation site
-that humans can read without a SPARQL client.
+v0.9.0 is additive infrastructure: multi-tenancy RLS activation and rendering.
+Both can be developed in parallel with v0.8.0 work. Multi-tenancy is
+straightforward because the `tenant_id` column has been present since v0.4.0 —
+activating RLS is a policy change, not a schema migration. Rendering is the
+last mile between a compiled knowledge graph and a documentation site that
+humans can read without a SPARQL client.
 
 v1.0.0 completes the API stability contract. The goal is not to add features at
 1.0 but to guarantee that v0.x adopters can upgrade to v1.0 without breaking
