@@ -66,6 +66,7 @@
 | Version | Description | Status | Size |
 |---|---|---|---|
 | v0.11.0 | Preprocessing & post-processing — LLM document preprocessing, corpus-level clustering, few-shot injection, validate-graph, entity deduplication, self-critique verification | **Done** | Large |
+| v0.11.1 | Token efficiency — per-fragment entity catalog filtering, adaptive preprocessing for small documents, Phase 2 pre-scan deduplication, Ollama keep-alive prompt caching | Planned | Small |
 | v0.12.0 | Permissive extraction (Phase A) — ontology-grounded & CQ-guided prompts, permissive extraction prompt, per-triple confidence routing, `graph/tentative`, two-tier query model, safety cap, pre-write structural filtering, overlapping fragments, literal normalization | Planned | Large |
 | v0.12.1 | Permissive extraction (Phase B) — confidence consolidation (noisy-OR) with source diversity scoring, `riverbank promote-tentative`, functional predicate hints, `riverbank explain-rejections` | Planned | Medium |
 | v0.13.0 | Entity quality — predicate normalization, incremental entity linking, `riverbank induce-schema`, auto few-shot expansion, knowledge-prefix adapter, contradiction detection, tentative cleanup, quality regression tracking | Planned | Large |
@@ -491,6 +492,43 @@ at least one low-confidence triple in a test run.
 
 ---
 
+### v0.11.1 — Token Efficiency
+
+Goal: offset the token cost increase from v0.12.0's permissive extraction
+features before they ship. The four items below deliver a **32% token
+reduction** from the v0.11.0 baseline in ≤ 1 day of implementation, ensuring
+the net impact of v0.12.0 stays within 20% of today's token baseline.
+
+- [ ] **Per-fragment entity catalog filtering.** Before injecting the entity
+  catalog into an extraction prompt, filter it to only include entries whose
+  `label` or `aliases` appear in the fragment text. A `min_entities_to_inject`
+  floor (default 3) ensures the LLM always has some context even for fragments
+  that don't surface entity names explicitly. Saves ~300–400 input tokens per
+  fragment (50 entities → ~10 relevant). Controlled by
+  `token_optimization.filter_entities_by_mention: true` in the profile.
+- [ ] **Adaptive preprocessing skip for small documents.** Skip Phase 1
+  preprocessing entirely for single-fragment documents shorter than
+  `skip_preprocessing_below_chars: 2000`. For these documents the fragment IS
+  the document — there is no inter-fragment terminology drift to resolve.
+  Eliminates 2 LLM calls (~2 500 tokens) per small document.
+- [ ] **Deduplicate Phase 2 pre-scan.** Cache the Phase 1 document summary so
+  the Phase 2 corpus pre-scan does not recompute summaries that Phase 1 will
+  compute anyway. Pass summaries from Phase 1 to the Phase 2 analyser via a
+  shared `{source_iri: summary}` dict. Saves N × ~2 000 tokens —
+  **20 000 tokens for a 10-document corpus** — at zero quality cost.
+- [ ] **Ollama keep-alive prompt caching.** Set `keep_alive: "5m"` on all
+  Ollama calls so the model KV cache persists across the fragments of an ingest
+  run. The static system prompt (~200 tokens) is re-processed only once per
+  run instead of once per fragment. For cloud providers (OpenAI / Anthropic)
+  prompt caching is already active automatically.
+
+**Exit criterion:** a 10-document corpus ingested with all v0.11.0 features
+enabled uses ≤ 100 000 total tokens (down from ~144 600 baseline). Phase 2
+pre-scan produces zero duplicate LLM summary calls. Small documents
+(< 2 000 chars) are processed without any preprocessing LLM calls.
+
+---
+
 ### v0.12.0 — Permissive Extraction
 
 Goal: dramatically increase triple yield — especially for small corpora — by
@@ -551,13 +589,34 @@ permissive extraction still skips implied facts.
 - [ ] **Literal normalization.** Normalize string literals (lowercase + trim),
   dates (ISO 8601 canonical form), and IRIs before writing. Deduplicate on
   normalized form; keep the highest-confidence instance.
+- [ ] **Compact output schema.** Replace verbose `_TripleIn` JSON field names
+  with short keys (`s`, `p`, `o`, `c`, `e`, `cs`, `ce`) to save ~20 output
+  tokens per triple. Mapped back to full field names in `ExtractionResult`.
+  Saves ~300 output tokens per fragment (15 triples × 20 tokens), partially
+  offsetting the input token increase from ontology and CQ injection.
+  Controlled by `token_optimization.compact_output_schema: true` in profile.
+- [ ] **Token budget manager.** `max_input_tokens_per_fragment: 3000` in the
+  `token_optimization` profile block. When the assembled prompt (system +
+  entity catalog + few-shot + corpus context + fragment) exceeds the budget,
+  components are trimmed in priority order: few-shot → corpus context → entity
+  catalog → doc summary. Fragment text is never truncated. Uses byte-length
+  approximation (`÷ 4`) for Ollama where tiktoken is unavailable. Mandatory
+  companion to v0.13.0's knowledge-prefix adapter, which adds +100–300 tokens
+  per fragment.
+- [ ] **Merged preprocessing for short documents.** For documents below
+  `merge_preprocessing_below_chars: 4000`, combine the document summary and
+  entity catalog into a single LLM call. Halves preprocessing LLM calls for
+  short documents and saves ~2 000 input tokens per document.
 - [ ] **Extraction stats.** Track `triples_trusted`, `triples_tentative`,
   `triples_discarded`, `triples_rejected_ontology`, `triples_capped`.
 
 **Exit criterion:** the 3-document example corpus produces ≥ 2x more triples
 than v0.11.0 (trusted + tentative combined). CQ coverage with
 `--include-tentative` exceeds 75%. Safety cap prevents any single fragment from
-producing more than 50 triples.
+producing more than 50 triples. Total prompt tokens per ingest run do not
+exceed the v0.11.0 baseline by more than 20% when `token_optimization` is
+enabled (the permissive prompt additions are offset by compact schema,
+budget trimming, and the v0.11.1 quick wins).
 
 ---
 
@@ -617,10 +676,25 @@ the tentative graph lifecycle with contradiction detection and automatic cleanup
   Capped at 10–15 examples per profile with diversity constraints (no two
   examples with the same predicate+type combination). CQs drive selection,
   completing the CQ-as-north-star feedback cycle begun in v0.12.0.
+- [ ] **Semantic few-shot selection.** Upgrade `FewShotInjector` to support
+  `selection: semantic`. Embeds the fragment text and the golden examples at
+  injection time and selects the top-K most similar examples by cosine
+  similarity, replacing random selection. Reduces injected examples from 3 to
+  1–2 highly relevant ones — saves ~80–150 tokens per fragment while anchoring
+  the LLM to the most topically relevant examples. Falls back to random when
+  sentence-transformers is unavailable.
+- [ ] **Batched verification.** Upgrade `VerificationPass` to group
+  low-confidence triples into batches of up to `verification.batch_size: 5`
+  and issue a single LLM call per batch instead of one call per triple. The
+  system prompt overhead (~250 tokens) is paid once per batch rather than per
+  triple. Saves ~3 400 tokens for a typical 20-triple verification run.
 - [ ] **Knowledge-prefix adapter.** At extraction time, retrieve the local
   neighborhood of already-extracted entities from pg_ripple and inject as a
   structured "KNOWN GRAPH CONTEXT" prefix. Improves consistency of new
   extractions with the existing graph and reduces contradictory triples.
+  Requires the v0.12.0 token budget manager — the graph context block is
+  capped at `max_graph_context_tokens: 200` (default) to prevent prompt
+  explosion; without the cap, this adapter adds +100–300 tokens per fragment.
 - [ ] **Contradiction detection & demotion.** For functional predicates annotated
   in the profile YAML (from v0.12.0), detect when new `(s, p, o₂)` conflicts
   with existing `(s, p, o₁)`. Reduce confidence of both triples by 30%; demote
@@ -735,6 +809,9 @@ v0.10.0 ─── Release infrastructure: PyPI package, riverbank sbom, docs aut
     │
 v0.11.0 ─── Preprocessing & post-processing: document preprocessing, corpus
     │        clustering, few-shot injection, entity dedup, self-critique verification
+    │
+v0.11.1 ─── Token efficiency: entity catalog filtering, adaptive preprocessing,
+    │        Phase 2 pre-scan dedup, Ollama keep-alive caching
     │
 v0.12.0 ─── Permissive extraction Phase A: ontology-grounded prompts, per-triple
     │        routing, graph/tentative, safety cap, pre-write filtering, overlapping
