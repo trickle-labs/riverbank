@@ -59,7 +59,7 @@ def test_alembic_version_table_exists(
     engine.dispose()
 
     assert row is not None
-    assert row[0] == "0001"
+    assert row[0] == "0002"
 
 
 def test_downgrade_removes_application_tables(
@@ -89,3 +89,90 @@ def test_downgrade_removes_application_tables(
     engine.dispose()
 
     assert rows == [], f"Application tables still exist after downgrade: {[r[0] for r in rows]}"
+
+
+def test_tenant_id_column_exists_after_migration(
+    db_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After upgrade head (0002), all catalog tables must have a nullable tenant_id column."""
+    monkeypatch.setenv("RIVERBANK_DB__DSN", db_dsn)
+
+    from alembic import command
+    from alembic.config import Config
+
+    cfg = Config("alembic.ini")
+    command.upgrade(cfg, "head")
+
+    tables = ["profiles", "sources", "fragments", "runs", "artifact_deps", "log"]
+    engine = create_engine(db_dsn)
+    with engine.connect() as conn:
+        for table in tables:
+            row = conn.execute(
+                text(
+                    "SELECT column_name, is_nullable "
+                    "FROM information_schema.columns "
+                    "WHERE table_schema = '_riverbank' "
+                    "  AND table_name = :table "
+                    "  AND column_name = 'tenant_id'"
+                ),
+                {"table": table},
+            ).fetchone()
+            assert row is not None, f"tenant_id missing from _riverbank.{table}"
+            assert row[1] == "YES", f"tenant_id in {table} must be nullable"
+    engine.dispose()
+
+
+def test_migration_0001_to_0002_is_incremental(
+    db_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Migration 0001 must be a valid stopping point before 0002 applies."""
+    monkeypatch.setenv("RIVERBANK_DB__DSN", db_dsn)
+
+    from alembic import command
+    from alembic.config import Config
+
+    cfg = Config("alembic.ini")
+    # Start from a clean state: downgrade to base, then upgrade to 0001 only
+    command.upgrade(cfg, "head")   # ensure schema exists first
+    command.downgrade(cfg, "base")  # tear down to base
+    command.upgrade(cfg, "0001")   # re-apply only the first migration
+
+    engine = create_engine(db_dsn)
+    with engine.connect() as conn:
+        ver = conn.execute(
+            text("SELECT version_num FROM _riverbank.alembic_version")
+        ).fetchone()
+        # tenant_id must NOT exist yet
+        row = conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = '_riverbank' "
+                "  AND table_name = 'profiles' "
+                "  AND column_name = 'tenant_id'"
+            )
+        ).fetchone()
+    engine.dispose()
+
+    assert ver is not None and ver[0] == "0001"
+    assert row is None, "tenant_id should not exist before migration 0002"
+
+    # Now apply 0002
+    command.upgrade(cfg, "head")
+    engine = create_engine(db_dsn)
+    with engine.connect() as conn:
+        ver2 = conn.execute(
+            text("SELECT version_num FROM _riverbank.alembic_version")
+        ).fetchone()
+        row2 = conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = '_riverbank' "
+                "  AND table_name = 'profiles' "
+                "  AND column_name = 'tenant_id'"
+            )
+        ).fetchone()
+    engine.dispose()
+
+    assert ver2 is not None and ver2[0] == "0002"
+    assert row2 is not None, "tenant_id must exist after migration 0002"
+

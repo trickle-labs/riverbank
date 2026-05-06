@@ -48,6 +48,9 @@ class CompilerProfile:
         }
     )
     named_graph: str = "http://riverbank.example/graph/trusted"
+    # v0.4.0: vocabulary graph and run mode sequence
+    vocab_graph: str = "http://riverbank.example/graph/vocab"
+    run_mode_sequence: list = field(default_factory=lambda: ["full"])
     competency_questions: list = field(default_factory=list)
     # id is set after the profile is registered in the catalog DB
     id: Optional[int] = None
@@ -108,8 +111,21 @@ class IngestPipeline:
         corpus_path: str,
         profile: Optional[CompilerProfile] = None,
         dry_run: bool = False,
+        mode: str = "full",
     ) -> dict:
         """Run the pipeline against a corpus directory or single file.
+
+        ``mode`` controls the extraction strategy:
+
+        * ``"full"`` (default) — standard relationship extraction, writes to
+          ``profile.named_graph``.
+        * ``"vocabulary"`` — entity extraction only; writes ``skos:Concept``
+          triples to ``profile.vocab_graph`` for use as a context constraint
+          in subsequent full passes.
+
+        When the profile declares ``run_mode_sequence: ['vocabulary', 'full']``,
+        calling ``run()`` without an explicit ``mode`` will execute both passes
+        in sequence (vocabulary first, full second) and accumulate stats.
 
         Returns a stats dict:
         ``fragments_processed``, ``fragments_skipped``, ``fragments_skipped_hash``,
@@ -119,13 +135,33 @@ class IngestPipeline:
         if profile is None:
             profile = CompilerProfile.default()
 
+        # Determine the sequence of modes to execute
+        sequence = profile.run_mode_sequence if profile.run_mode_sequence else [mode]
+        # An explicit mode= argument overrides the profile sequence
+        if mode != "full":
+            sequence = [mode]
+
         tracer = otel_trace.get_tracer(__name__)
+        combined: dict[str, Any] = {
+            "fragments_processed": 0,
+            "fragments_skipped": 0,
+            "fragments_skipped_hash": 0,
+            "triples_written": 0,
+            "llm_calls": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cost_usd": 0.0,
+            "errors": 0,
+        }
         with tracer.start_as_current_span("ingest_pipeline.run") as span:
-            stats = self._run_inner(corpus_path, profile, dry_run, span)
-            span.set_attribute("ingest.fragments_processed", stats["fragments_processed"])
-            span.set_attribute("ingest.fragments_skipped", stats["fragments_skipped"])
-            span.set_attribute("ingest.triples_written", stats["triples_written"])
-            return stats
+            for run_mode in sequence:
+                stats = self._run_inner(corpus_path, profile, dry_run, span, run_mode)
+                for k in combined:
+                    combined[k] += stats[k]  # type: ignore[operator]
+            span.set_attribute("ingest.fragments_processed", combined["fragments_processed"])
+            span.set_attribute("ingest.fragments_skipped", combined["fragments_skipped"])
+            span.set_attribute("ingest.triples_written", combined["triples_written"])
+            return combined
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -137,6 +173,7 @@ class IngestPipeline:
         profile: CompilerProfile,
         dry_run: bool,
         span: Any,
+        mode: str = "full",
     ) -> dict:
         from riverbank.connectors.fs import FilesystemConnector  # noqa: PLC0415
         from riverbank.fragmenters.heading import HeadingFragmenter  # noqa: PLC0415
@@ -201,6 +238,7 @@ class IngestPipeline:
                             profile,
                             dry_run,
                             stats,
+                            mode=mode,
                         )
                     except Exception as exc:  # noqa: BLE001
                         logger.error("Failed to process %s: %s", source.iri, exc)
@@ -221,9 +259,14 @@ class IngestPipeline:
         profile: CompilerProfile,
         dry_run: bool,
         stats: dict,
+        mode: str = "full",
     ) -> None:
         from riverbank.catalog.graph import (  # noqa: PLC0415
+            delete_artifact_deps,
+            emit_outbox_event,
+            get_artifacts_depending_on_fragment,
             load_triples_with_confidence,
+            record_artifact_dep,
             shacl_score,
         )
 
@@ -234,6 +277,35 @@ class IngestPipeline:
 
         for frag in fragments:
             frag_hash_hex = frag.content_hash.hex()
+            frag_iri = f"{source.iri}#{frag.fragment_key}"
+
+            # --- Recompile detection -------------------------------------------
+            # If the fragment existed before with a *different* hash, we must
+            # invalidate all compiled artifacts that depended on it and emit a
+            # semantic diff event on the pg-trickle outbox.
+            fragment_changed = (
+                frag.fragment_key in existing_hashes
+                and existing_hashes[frag.fragment_key] != frag_hash_hex
+            )
+            if fragment_changed and not dry_run:
+                stale_artifacts = get_artifacts_depending_on_fragment(conn, frag_iri)
+                for art_iri in stale_artifacts:
+                    delete_artifact_deps(conn, art_iri)
+                if stale_artifacts:
+                    emit_outbox_event(
+                        conn,
+                        "semantic_diff",
+                        {
+                            "fragment_iri": frag_iri,
+                            "profile": f"{profile.name}@v{profile.version}",
+                            "invalidated": stale_artifacts,
+                        },
+                    )
+                    logger.info(
+                        "Recompile: fragment %s changed — invalidated %d artifact dep(s)",
+                        frag_iri,
+                        len(stale_artifacts),
+                    )
 
             # Fragment hash check — skip if content unchanged
             if (
@@ -273,15 +345,39 @@ class IngestPipeline:
             stats["prompt_tokens"] += result.diagnostics.get("prompt_tokens", 0)
             stats["completion_tokens"] += result.diagnostics.get("completion_tokens", 0)
 
-            # Route by SHACL score
-            score = shacl_score(conn, profile.named_graph, profile)
-            threshold = _confidence_threshold(profile)
-            target_graph = profile.named_graph if score >= threshold else "<draft>"
+            if mode == "vocabulary":
+                # Vocabulary pass: convert ExtractedEntity objects to SKOS triples
+                # and write them to the <vocab> graph.
+                entities = getattr(result, "entities", [])
+                vocab_triples: list[Any] = []
+                for entity in entities:
+                    vocab_triples.extend(entity.to_skos_triples(profile.vocab_graph))
+                # Also treat any triples already returned (noop extractor returns [])
+                vocab_triples.extend(result.triples)
+                if vocab_triples:
+                    written = load_triples_with_confidence(
+                        conn, vocab_triples, profile.vocab_graph
+                    )
+                    stats["triples_written"] += written
+                    # Record artifact deps for each concept subject
+                    _record_triples_deps(
+                        conn, vocab_triples, frag_iri, profile, record_artifact_dep
+                    )
+            else:
+                # Full pass: standard SHACL-gated extraction to the trusted graph
+                score = shacl_score(conn, profile.named_graph, profile)
+                threshold = _confidence_threshold(profile)
+                target_graph = profile.named_graph if score >= threshold else "<draft>"
 
-            # Write triples to the knowledge graph
-            if result.triples:
-                written = load_triples_with_confidence(conn, result.triples, target_graph)
-                stats["triples_written"] += written
+                if result.triples:
+                    written = load_triples_with_confidence(
+                        conn, result.triples, target_graph
+                    )
+                    stats["triples_written"] += written
+                    # Record artifact dependency edges for each subject
+                    _record_triples_deps(
+                        conn, result.triples, frag_iri, profile, record_artifact_dep
+                    )
 
             # Record fragment + run in the catalog
             self._upsert_fragment(conn, source, frag)
@@ -515,6 +611,32 @@ class IngestPipeline:
 # ---------------------------------------------------------------------------
 # Cost estimation helpers
 # ---------------------------------------------------------------------------
+
+
+def _record_triples_deps(
+    conn: Any,
+    triples: list,
+    frag_iri: str,
+    profile: "CompilerProfile",
+    record_fn: Any,
+) -> None:
+    """Record artifact dependency edges for a batch of extracted triples.
+
+    For each unique subject in the triple list we record three edges:
+    * ``(subject_iri, fragment, frag_iri)`` — which fragment was the source
+    * ``(subject_iri, profile_version, name@vN)`` — which profile version compiled it
+    * ``(subject_iri, rule_set, profile_name)`` — which rule set was used
+    """
+    seen: set[str] = set()
+    profile_ver = f"{profile.name}@v{profile.version}"
+    for triple in triples:
+        subject = getattr(triple, "subject", None)
+        if not subject or subject in seen:
+            continue
+        seen.add(subject)
+        record_fn(conn, subject, "fragment", frag_iri)
+        record_fn(conn, subject, "profile_version", profile_ver)
+        record_fn(conn, subject, "rule_set", profile.name)
 
 
 def _estimate_cost(

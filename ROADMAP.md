@@ -28,7 +28,7 @@
 
 | Version | Description | Status | Size |
 |---|---|---|---|
-| v0.4.0 | Incremental compilation core — artifact dependency graph, `riverbank explain`, recompile flow, vocabulary pass, SKOS integrity shape bundle, `tenant_id` schema scaffold | Planned | Large |
+| v0.4.0 | Incremental compilation core — artifact dependency graph, `riverbank explain`, recompile flow, vocabulary pass, SKOS integrity shape bundle, `tenant_id` schema scaffold | **Done** | Large |
 | v0.5.0 | Multi-format parsing and enrichment — Docling, spaCy NER + vocabulary lookup, fuzzy entity matching, embedding generation, Singer tap configuration (pg-tide ≥ 0.14.0) | Planned | Large |
 
 ### Quality Gates and Review (v0.6.x)
@@ -163,15 +163,15 @@ spans, full compile cost < $5 with `gpt-4o-mini` or $0 with Ollama.
 
 Goal: prove the system rebuilds *only* what changed when a source updates, establish vocabulary hygiene as an upstream constraint before relationship extraction, and scaffold the multi-tenant catalog schema.
 
-- **Artifact dependency graph.** Every compiled artifact records
+- [x] **Artifact dependency graph.** Every compiled artifact records
   `(fragment, profile_version, rule_set)` dependencies in
   `_riverbank.artifact_deps`; queryable in SQL and SPARQL.
-- **`riverbank explain <artifact-iri>`** — dumps the dependency tree of any
+- [x] **`riverbank explain <artifact-iri>`** — dumps the dependency tree of any
   compiled artifact: fragments, profile version, rules that contributed.
-- **Recompile flow.** Changed fragments → invalidate dependent artifacts →
+- [x] **Recompile flow.** Changed fragments → invalidate dependent artifacts →
   re-extract → re-derive → emit semantic diff event via pg-trickle +
   `pgtrickle.attach_outbox()`.
-- **Vocabulary pass.** `riverbank ingest --mode vocabulary` (or
+- [x] **Vocabulary pass.** `riverbank ingest --mode vocabulary` (or
   `run_mode_sequence: ['vocabulary', 'full']` in the profile) processes the
   corpus with the `ExtractedEntity` schema first, writing `skos:Concept`
   triples (preferred label, alternate labels, scope note) into `<vocab>` before
@@ -179,7 +179,7 @@ Goal: prove the system rebuilds *only* what changed when a source updates, estab
   vocabulary as a structured context constraint, snapping entity references to
   canonical preferred-label IRIs before writing facts — upstream vocabulary
   hygiene rather than downstream deduplication.
-- **SKOS structural integrity shape bundle.** `riverbank init` activates the
+- [x] **SKOS structural integrity shape bundle.** `riverbank init` activates the
   built-in `pg:skos-integrity` shape bundle via
   `pg_ripple.load_shape_bundle('skos-integrity')` (pg-ripple ≥ 0.98.0). The
   six shapes (prefLabel required, scopeNote recommended, broader-cycle
@@ -188,9 +188,9 @@ Goal: prove the system rebuilds *only* what changed when a source updates, estab
   no Turtle files for these rules. `riverbank lint --layer vocab` runs the
   bundle against the `<vocab>` named graph. This is the machine-executable
   form of the Ontology Pipeline output quality contract.
-- **`tenant_id` schema scaffold.** A nullable `tenant_id` column is added to
-  all `_riverbank` tables via Alembic migration. Row-level security is not
-  activated yet — that lands in v0.9.0 — but the column is present so that
+- [x] **`tenant_id` schema scaffold.** A nullable `tenant_id` column is added to
+  all `_riverbank` tables via Alembic migration (0002). Row-level security is
+  not activated yet — that lands in v0.9.0 — but the column is present so that
   all downstream migrations are additive-only.
 
 **Exit criterion:** modify one paragraph in one Markdown file, re-run
