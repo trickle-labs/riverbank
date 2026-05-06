@@ -67,7 +67,7 @@
 |---|---|---|---|
 | v0.11.0 | Preprocessing & post-processing — LLM document preprocessing, corpus-level clustering, few-shot injection, validate-graph, entity deduplication, self-critique verification | **Done** | Large |
 | v0.11.1 | Token efficiency — per-fragment entity catalog filtering, adaptive preprocessing for small documents, Phase 2 pre-scan deduplication, Ollama keep-alive prompt caching, noise section filtering | **Done** | Small |
-| v0.12.0 | Permissive extraction (Phase A) — ontology-grounded & CQ-guided prompts, permissive extraction prompt, per-triple confidence routing, `graph/tentative`, two-tier query model, safety cap, pre-write structural filtering, overlapping fragments, literal normalization | Planned | Large |
+| v0.12.0 | Permissive extraction (Phase A) — ontology-grounded & CQ-guided prompts, permissive extraction prompt, per-triple confidence routing, `graph/tentative`, two-tier query model, safety cap, pre-write structural filtering, overlapping fragments, literal normalization | **Done** | Large |
 | v0.12.1 | Permissive extraction (Phase B) — confidence consolidation (noisy-OR) with source diversity scoring, `riverbank promote-tentative`, functional predicate hints, `riverbank explain-rejections` | Planned | Medium |
 | v0.13.0 | Entity convergence — predicate normalization, incremental entity linking with synonym ring extraction, `riverbank induce-schema`, contradiction detection, tentative cleanup, quality regression tracking | Planned | Large |
 | v0.13.1 | Extraction feedback loops — auto few-shot expansion, semantic few-shot selection, batched verification, knowledge-prefix adapter | Planned | Medium |
@@ -550,49 +550,49 @@ together — permissive extraction without vocabulary constraints floods the
 tentative graph with hallucinated predicates; ontology grounding without
 permissive extraction still skips implied facts.
 
-- [ ] **Ontology-grounded extraction.** `allowed_predicates` and
+- [x] **Ontology-grounded extraction.** `allowed_predicates` and
   `allowed_classes` fields in the compiler profile YAML. Injected into the
   extraction prompt as a closed-world constraint: "use ONLY these predicates;
   if a relationship does not fit, SKIP it." Triples with non-conforming
   predicates are rejected before writing (`triple_rejected_ontology` stat).
   Required companion to permissive extraction — prevents vocabulary explosion.
-- [ ] **CQ-guided extraction.** Competency questions from the profile are
+- [x] **CQ-guided extraction.** Competency questions from the profile are
   transformed into "EXTRACTION OBJECTIVES" and prepended to the extraction
   prompt, making extraction goal-directed rather than exhaustive. CQs also
   drive auto few-shot expansion (v0.13.0) and benchmark evaluation (v0.13.0),
   so this is the first step in making CQs a first-class quality driver.
-- [ ] **Permissive extraction prompt.** New `extraction_strategy.mode: permissive`
+- [x] **Permissive extraction prompt.** New `extraction_strategy.mode: permissive`
   option replaces the conservative "only extract claims directly supported by
   the text" instruction with a tiered guidance: EXPLICIT (0.9–1.0), STRONG
   (0.7–0.9), IMPLIED (0.5–0.7), WEAK (0.35–0.5). The four tiers correct the
   LLM's systematic mis-calibration — it over-scores hallucinations and
   under-scores true implied facts. Confidence at extraction time is treated
   as a routing signal, not a truth probability.
-- [ ] **Per-triple confidence routing.** Replace batch-level SHACL routing with
+- [x] **Per-triple confidence routing.** Replace batch-level SHACL routing with
   per-triple confidence routing: ≥ 0.75 → trusted graph, 0.35–0.75 →
   `graph/tentative`, < 0.35 → discarded. New `tentative_graph` field in
   `CompilerProfile`. This is Phase A — independently shippable, delivering the
   full single-pass recall improvement without requiring Phase B (accumulation).
-- [ ] **Pre-write structural filtering.** Reuse the ontology allowlist as a fast
+- [x] **Pre-write structural filtering.** Reuse the ontology allowlist as a fast
   write-time filter: before any triple enters the tentative graph, check that
   the predicate is in `allowed_predicates` and that subject/object types match
   declared domain/range (if specified). Zero graph queries, microsecond latency.
   Prevents structurally invalid triples from entering the tentative graph and
   polluting noisy-OR calculations.
-- [ ] **Extraction safety cap.** `max_triples_per_fragment: 50` in the
+- [x] **Extraction safety cap.** `max_triples_per_fragment: 50` in the
   `extraction_strategy` profile block. If the LLM produces more, keep the top-N
   by confidence and log a `triples_capped` warning. Prevents runaway token usage
   on dense documents with permissive extraction. Track `triples_capped` in stats.
-- [ ] **Two-tier query model.** `riverbank query` (default): trusted graph only
+- [x] **Two-tier query model.** `riverbank query` (default): trusted graph only
   — strict, fast, conservative. `riverbank query --include-tentative`: unions
   trusted + tentative graphs, results ordered by confidence descending —
   discovery-focused. Documented as a first-class CLI feature pair, not an
   implementation detail.
-- [ ] **Rejected triple analysis.** `riverbank explain-rejections --profile
+- [x] **Rejected triple analysis.** `riverbank explain-rejections --profile
   --since 1h` shows triples discarded in the last run: evidence span not found,
   below noise floor, or ontology mismatch. Feeds back into prompt improvement
   and surfaces which implied facts the conservative prompt was silently losing.
-- [ ] **Coreference resolution.** Before fragmentation, run a lightweight
+- [x] **Coreference resolution.** Before fragmentation, run a lightweight
   coreference resolution pass on the full document text to replace pronouns
   and anaphoric references with their resolved entity names: "it" →
   "the Pipeline", "this component" → "the Dataset Writer". Two modes
@@ -604,20 +604,20 @@ permissive extraction still skips implied facts.
   left unchanged. Fragment-boundary coreference breaks are the primary reason
   procedural corpora produce phantom entities like `ex:_it`. Significant yield
   improvement on procedure, runbook, and tutorial corpora.
-- [ ] **Overlapping fragment windows.** `overlap_sentences` config in the
+- [x] **Overlapping fragment windows.** `overlap_sentences` config in the
   fragmenter block prepends the last N sentences of the previous fragment to
   recover facts split across boundaries. Duplicate triples from overlap regions
   deduplicated by content hash.
-- [ ] **Literal normalization.** Normalize string literals (lowercase + trim),
+- [x] **Literal normalization.** Normalize string literals (lowercase + trim),
   dates (ISO 8601 canonical form), and IRIs before writing. Deduplicate on
   normalized form; keep the highest-confidence instance.
-- [ ] **Compact output schema.** Replace verbose `_TripleIn` JSON field names
+- [x] **Compact output schema.** Replace verbose `_TripleIn` JSON field names
   with short keys (`s`, `p`, `o`, `c`, `e`, `cs`, `ce`) to save ~20 output
   tokens per triple. Mapped back to full field names in `ExtractionResult`.
   Saves ~300 output tokens per fragment (15 triples × 20 tokens), partially
   offsetting the input token increase from ontology and CQ injection.
   Controlled by `token_optimization.compact_output_schema: true` in profile.
-- [ ] **Token budget manager.** `max_input_tokens_per_fragment: 3000` in the
+- [x] **Token budget manager.** `max_input_tokens_per_fragment: 3000` in the
   `token_optimization` profile block. When the assembled prompt (system +
   entity catalog + few-shot + corpus context + fragment) exceeds the budget,
   components are trimmed in priority order: few-shot → corpus context → entity
@@ -625,11 +625,11 @@ permissive extraction still skips implied facts.
   approximation (`÷ 4`) for Ollama where tiktoken is unavailable. Mandatory
   companion to v0.13.0's knowledge-prefix adapter, which adds +100–300 tokens
   per fragment.
-- [ ] **Merged preprocessing for short documents.** For documents below
+- [x] **Merged preprocessing for short documents.** For documents below
   `merge_preprocessing_below_chars: 4000`, combine the document summary and
   entity catalog into a single LLM call. Halves preprocessing LLM calls for
   short documents and saves ~2 000 input tokens per document.
-- [ ] **Extraction stats.** Track `triples_trusted`, `triples_tentative`,
+- [x] **Extraction stats.** Track `triples_trusted`, `triples_tentative`,
   `triples_discarded`, `triples_rejected_ontology`, `triples_capped`.
 
 **Exit criterion:** the 3-document example corpus produces ≥ 2x more triples

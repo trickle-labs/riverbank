@@ -144,21 +144,41 @@ class DocumentPreprocessor:
         prompt_tokens_total = 0
         completion_tokens_total = 0
 
-        if "document_summary" in strategies:
-            if pre_computed_summary is not None:
-                # §3.6 Phase 2 pre-scan dedup: reuse cached summary, no LLM call
-                summary = pre_computed_summary
-            else:
-                summary_text, pt, ct = self._extract_summary(raw_text, profile)
-                summary = summary_text or ""
-                prompt_tokens_total += pt
-                completion_tokens_total += ct
+        # v0.12.0: merged preprocessing for short documents.
+        # When the document is below merge_preprocessing_below_chars, combine
+        # the document summary and entity catalog into a single LLM call.
+        token_opt: dict = getattr(profile, "token_optimization", {})
+        merge_threshold: int = token_opt.get("merge_preprocessing_below_chars", 0)
+        should_merge = (
+            merge_threshold > 0
+            and len(raw_text) < merge_threshold
+            and "document_summary" in strategies
+            and "entity_catalog" in strategies
+            and pre_computed_summary is None
+        )
 
-        if "entity_catalog" in strategies:
-            max_entities: int = preprocessing_cfg.get("max_entities", 50)
-            entity_catalog, pt, ct = self._extract_entity_catalog(raw_text, profile, max_entities)
+        if should_merge:
+            merged_sum, merged_cat, pt, ct = self._extract_merged(raw_text, profile)
+            summary = merged_sum or ""
+            entity_catalog = merged_cat
             prompt_tokens_total += pt
             completion_tokens_total += ct
+        else:
+            if "document_summary" in strategies:
+                if pre_computed_summary is not None:
+                    # §3.6 Phase 2 pre-scan dedup: reuse cached summary, no LLM call
+                    summary = pre_computed_summary
+                else:
+                    summary_text, pt, ct = self._extract_summary(raw_text, profile)
+                    summary = summary_text or ""
+                    prompt_tokens_total += pt
+                    completion_tokens_total += ct
+
+            if "entity_catalog" in strategies:
+                max_entities: int = preprocessing_cfg.get("max_entities", 50)
+                entity_catalog, pt, ct = self._extract_entity_catalog(raw_text, profile, max_entities)
+                prompt_tokens_total += pt
+                completion_tokens_total += ct
 
         # §Noise sections: propagate profile-configured noise section headings
         noise_sections: list[str] = preprocessing_cfg.get("noise_sections", [])
@@ -298,6 +318,91 @@ class DocumentPreprocessor:
             )
 
         return client, model_name, provider
+
+    def _extract_merged(
+        self,
+        raw_text: str,
+        profile: Any,
+    ) -> tuple[str | None, list[EntityCatalogEntry], int, int]:
+        """v0.12.0: Combine document summary + entity catalog into a single LLM call.
+
+        Halves preprocessing LLM calls for short documents and saves ~2 000
+        input tokens per document.
+
+        Returns ``(summary, entity_catalog, prompt_tokens, completion_tokens)``.
+        """
+        _MERGED_PROMPT = """\
+You are a knowledge graph ontologist. Analyze this document and produce:
+1. A 2-3 sentence summary focusing on domain, main concepts, and purpose.
+2. A canonical entity catalog of named entities, concepts, and technical terms.
+
+Return a JSON object with:
+- "summary": string (2-3 sentences, max 100 words)
+- "entities": array of objects with keys:
+    - canonical_name: lowercase-hyphenated identifier
+    - label: human-readable name as it appears most often
+    - entity_type: one of [Concept, System, Component, Process, Role, Configuration, Event]
+    - aliases: list of other surface forms
+
+Rules for entities:
+- Include ONLY entities that appear in the text
+- Maximum 50 entities
+- Do NOT hallucinate entities absent from the text
+- Merge variants: "Dataset", "data set", "datasets" → one entry with aliases
+"""
+        text_for_merged = raw_text[:10000] if len(raw_text) > 10000 else raw_text
+        try:
+            from pydantic import BaseModel  # noqa: PLC0415
+
+            class _EntryIn(BaseModel):
+                canonical_name: str
+                label: str
+                entity_type: str
+                aliases: list[str] = []
+
+            class _MergedOut(BaseModel):
+                summary: str
+                entities: list[_EntryIn] = []
+
+            client, model_name, provider = self._get_llm_client(profile)
+            extra_kwargs: dict = {"extra_body": {"keep_alive": "5m"}} if provider == "ollama" else {}
+            result, completion = client.chat.completions.create_with_completion(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": _MERGED_PROMPT},
+                    {"role": "user", "content": text_for_merged},
+                ],
+                response_model=_MergedOut,
+                **extra_kwargs,
+            )
+            usage = completion.usage if completion else None
+            prompt_tokens = usage.prompt_tokens if usage else 0
+            completion_tokens = usage.completion_tokens if usage else 0
+
+            preprocessing_cfg: dict = getattr(profile, "preprocessing", {})
+            max_entities: int = preprocessing_cfg.get("max_entities", 50)
+            entries: list[EntityCatalogEntry] = []
+            for entry in result.entities[:max_entities]:
+                safe_name = entry.canonical_name.lower().replace(" ", "-").replace("_", "-")
+                valid_aliases = [a for a in entry.aliases if a and a in raw_text]
+                entries.append(EntityCatalogEntry(
+                    canonical_name=safe_name,
+                    label=entry.label,
+                    entity_type=entry.entity_type,
+                    aliases=valid_aliases,
+                ))
+
+            logger.debug(
+                "Merged preprocessing: summary=%d chars, %d entities, %d+%d tokens",
+                len(result.summary),
+                len(entries),
+                prompt_tokens,
+                completion_tokens,
+            )
+            return result.summary.strip(), entries, prompt_tokens, completion_tokens
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Merged preprocessing failed: %s", exc)
+            return None, [], 0, 0
 
     def _extract_summary(self, raw_text: str, profile: Any) -> tuple[str | None, int, int]:
         """Call the LLM to produce a 2-3 sentence document summary.

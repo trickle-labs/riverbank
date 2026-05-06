@@ -31,15 +31,36 @@ class HeadingFragmenter:
     One ``DocumentFragment`` is produced per heading section.  If the document
     has no headings at all, the entire document is emitted as a single fragment
     with ``fragment_key = "root"``.
+
+    v0.12.0: ``overlap_sentences`` prepends the last N sentences of the
+    previous fragment to each subsequent fragment, recovering facts split
+    across heading boundaries.  Duplicate triples from overlap regions are
+    deduplicated by content hash in the pipeline.
     """
 
     name: ClassVar[str] = "heading"
 
-    def fragment(self, doc: object) -> Iterator[DocumentFragment]:
-        """Yield one ``DocumentFragment`` per heading section."""
+    def __init__(self, overlap_sentences: int = 0) -> None:
+        self._overlap_sentences = overlap_sentences
+
+    def fragment(self, doc: object, overlap_sentences: int | None = None) -> Iterator[DocumentFragment]:
+        """Yield one ``DocumentFragment`` per heading section.
+
+        Parameters
+        ----------
+        doc:
+            A ``ParsedDocument`` produced by a parser.
+        overlap_sentences:
+            Override the instance-level ``overlap_sentences`` setting.
+            When > 0, the last N sentences of the previous fragment are
+            prepended to the current fragment's text.  The ``content_hash``
+            and character offsets reflect the *original* (non-overlapped)
+            section so that fragment-skip logic continues to work correctly.
+        """
         tokens: list = getattr(doc, "tokens", [])
         source_iri: str = getattr(doc, "source_iri", "")
         raw_text: str = getattr(doc, "raw_text", "")
+        overlap_n = overlap_sentences if overlap_sentences is not None else self._overlap_sentences
 
         line_offsets = _build_line_offsets(raw_text)
         sections = _collect_sections(tokens, raw_text, line_offsets)
@@ -49,25 +70,67 @@ class HeadingFragmenter:
                 yield _make_fragment("root", source_iri, [], raw_text, 0, len(raw_text), 0)
             return
 
+        previous_tail: str = ""
         for heading_path, depth, char_start, char_end in sections:
             section_text = raw_text[char_start:char_end]
             if not section_text.strip():
                 continue
             fragment_key = " > ".join(heading_path) if heading_path else "root"
-            yield _make_fragment(
+
+            if overlap_n > 0 and previous_tail:
+                # Prepend the overlap tail to the extraction text only.
+                # The content_hash is computed from the *original* section_text
+                # so that the hash-based fragment-skip check remains stable.
+                extraction_text = previous_tail + "\n" + section_text
+            else:
+                extraction_text = section_text
+
+            frag = _make_fragment(
                 fragment_key,
                 source_iri,
                 heading_path,
-                section_text,
+                section_text,   # canonical text → used for hash
                 char_start,
                 char_end,
                 depth,
             )
+            if extraction_text != section_text:
+                # Expose the overlap-enriched text via the `text` attribute
+                # without invalidating the content hash.
+                object.__setattr__(frag, "text", extraction_text) if False else None
+                frag = DocumentFragment(
+                    fragment_key=frag.fragment_key,
+                    source_iri=frag.source_iri,
+                    content_hash=frag.content_hash,  # hash of original text
+                    heading_path=frag.heading_path,
+                    text=extraction_text,
+                    char_start=frag.char_start,
+                    char_end=frag.char_end,
+                    heading_depth=frag.heading_depth,
+                )
+
+            # Update the tail for the next fragment
+            if overlap_n > 0:
+                previous_tail = _last_n_sentences(section_text, overlap_n)
+
+            yield frag
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _last_n_sentences(text: str, n: int) -> str:
+    """Return the last *n* sentences from *text*.
+
+    Sentence splitting is intentionally simple (period/exclamation/question
+    followed by whitespace) to avoid heavy NLP dependencies here.
+    """
+    import re  # noqa: PLC0415
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    tail = sentences[-n:] if len(sentences) >= n else sentences
+    return " ".join(tail)
 
 
 def _build_line_offsets(text: str) -> list[int]:

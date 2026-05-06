@@ -26,6 +26,116 @@ Only extract claims directly supported by the text.
 Do NOT fabricate evidence — the excerpt must appear verbatim in the source.
 """
 
+_PERMISSIVE_TIER_GUIDANCE = """\
+Extract ALL factual claims using the following confidence tiers:
+  EXPLICIT  (0.90–1.00): claim is stated verbatim or nearly verbatim
+  STRONG    (0.70–0.89): claim is clearly implied with strong textual support
+  IMPLIED   (0.50–0.69): claim is a reasonable inference from the text
+  WEAK      (0.35–0.49): claim is plausible but not directly stated
+
+Use the confidence score as a ROUTING SIGNAL: even 0.35 triples are valuable
+for discovery. Extract broadly within the ontology constraints — do NOT skip
+claims just because they are implied rather than explicit.
+"""
+
+_CQ_OBJECTIVES_PREFIX = "EXTRACTION OBJECTIVES (derived from competency questions):\n"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_permissive_prompt(base_prompt: str, extraction_strategy: dict) -> str:
+    """Inject permissive-mode tiered guidance into the base prompt."""
+    if extraction_strategy.get("mode") == "permissive":
+        return f"{_PERMISSIVE_TIER_GUIDANCE}\n\n{base_prompt}"
+    return base_prompt
+
+
+def _build_cq_objectives(competency_questions: list[str]) -> str:
+    """Transform CQs into EXTRACTION OBJECTIVES block."""
+    if not competency_questions:
+        return ""
+    lines = [_CQ_OBJECTIVES_PREFIX]
+    for i, cq in enumerate(competency_questions, 1):
+        lines.append(f"  {i}. {cq}")
+    lines.append(
+        "\nFocus extraction on facts that help answer these questions.\n"
+    )
+    return "\n".join(lines)
+
+
+def _build_ontology_constraint(allowed_predicates: list[str], allowed_classes: list[str]) -> str:
+    """Build an ontology constraint block to inject into the prompt."""
+    parts: list[str] = []
+    if allowed_predicates:
+        pred_list = ", ".join(allowed_predicates)
+        parts.append(
+            f"ONTOLOGY CONSTRAINT — use ONLY these predicates: {pred_list}\n"
+            "If a relationship does not fit any of the above predicates, SKIP IT."
+        )
+    if allowed_classes:
+        class_list = ", ".join(allowed_classes)
+        parts.append(
+            f"ONTOLOGY CONSTRAINT — use ONLY these classes for subject/object types: {class_list}"
+        )
+    return "\n".join(parts)
+
+
+def _estimate_tokens(text: str) -> int:
+    """Fast token estimate: byte length / 4 (safe for both tiktoken and Ollama)."""
+    return max(1, len(text.encode("utf-8")) // 4)
+
+
+def _apply_token_budget(
+    system_prompt: str,
+    fragment_text: str,
+    max_tokens: int,
+) -> str:
+    """Trim the system prompt when the assembled prompt exceeds *max_tokens*.
+
+    Trimming priority (never truncates fragment_text):
+    1. few-shot examples (lines after "EXAMPLES:" marker)
+    2. corpus context (lines before "DOCUMENT SUMMARY:" marker)
+    3. entity catalog (lines between "ENTITY CATALOG:" and the next section)
+    4. document summary (lines after "DOCUMENT SUMMARY:" up to the next section)
+
+    Returns the (possibly trimmed) system prompt.
+    """
+    fragment_tokens = _estimate_tokens(fragment_text)
+    system_tokens = _estimate_tokens(system_prompt)
+    budget_remaining = max_tokens - fragment_tokens
+
+    if system_tokens <= budget_remaining:
+        return system_prompt
+
+    lines = system_prompt.splitlines()
+
+    def _remove_section(lines: list[str], marker: str) -> list[str]:
+        in_section = False
+        result: list[str] = []
+        for line in lines:
+            if marker in line:
+                in_section = True
+            if in_section and line.strip() == "" and result and result[-1].strip() == "":
+                in_section = False
+            if not in_section:
+                result.append(line)
+        return result
+
+    for marker in ("EXAMPLES:", "CORPUS CONTEXT:", "ENTITY CATALOG:", "DOCUMENT SUMMARY:"):
+        if _estimate_tokens("\n".join(lines)) <= budget_remaining:
+            break
+        lines = _remove_section(lines, marker)
+
+    # Last resort: hard-truncate system prompt
+    trimmed = "\n".join(lines)
+    while _estimate_tokens(trimmed) > budget_remaining and len(trimmed) > 200:
+        trimmed = trimmed[: int(len(trimmed) * 0.9)]
+
+    return trimmed
+
 
 class InstructorExtractor:
     """LLM-based extractor using the ``instructor`` library for structured output.
@@ -105,23 +215,77 @@ class InstructorExtractor:
         )
         prompt_text: str = getattr(profile, "prompt_text", _DEFAULT_PROMPT)
 
+        # v0.12.0: read profile configuration blocks
+        extraction_strategy: dict = getattr(profile, "extraction_strategy", {})
+        token_optimization: dict = getattr(profile, "token_optimization", {})
+        allowed_predicates: list = getattr(profile, "allowed_predicates", [])
+        allowed_classes: list = getattr(profile, "allowed_classes", [])
+        competency_questions: list = getattr(profile, "competency_questions", [])
+
+        # v0.12.0: permissive mode — inject tiered confidence guidance
+        prompt_text = _build_permissive_prompt(prompt_text, extraction_strategy)
+
+        # v0.12.0: CQ-guided extraction — prepend EXTRACTION OBJECTIVES
+        cq_block = _build_cq_objectives(competency_questions)
+        if cq_block:
+            prompt_text = cq_block + "\n" + prompt_text
+
+        # v0.12.0: ontology constraint injection
+        ontology_block = _build_ontology_constraint(allowed_predicates, allowed_classes)
+        if ontology_block:
+            prompt_text = ontology_block + "\n\n" + prompt_text
+
         source_iri: str = getattr(fragment, "source_iri", "")
         text: str = getattr(fragment, "text", "")
 
+        # v0.12.0: token budget manager — trim system prompt before sending
+        max_input_tokens: int = token_optimization.get("max_input_tokens_per_fragment", 0)
+        if max_input_tokens > 0:
+            prompt_text = _apply_token_budget(prompt_text, text, max_input_tokens)
+
+        # v0.12.0: compact output schema
+        use_compact: bool = token_optimization.get("compact_output_schema", False)
+
         # --- define Pydantic schemas local to this call ---
+        if use_compact:
+            # Short keys save ~20 output tokens per triple
+            class _EvidenceSpanIn(BaseModel):
+                cs: int   # char_start
+                ce: int   # char_end
+                e: str    # excerpt
+                page_number: Optional[int] = None
 
-        class _EvidenceSpanIn(BaseModel):
-            char_start: int
-            char_end: int
-            excerpt: str
-            page_number: Optional[int] = None
+            class _TripleIn(BaseModel):
+                s: str    # subject
+                p: str    # predicate
+                o: str    # object_value
+                c: float  # confidence
+                ev: _EvidenceSpanIn  # evidence
 
-        class _TripleIn(BaseModel):
-            subject: str
-            predicate: str
-            object_value: str
-            confidence: float
-            evidence: _EvidenceSpanIn
+            def _unpack(t: Any) -> tuple[str, str, str, float, Any]:
+                return t.s, t.p, t.o, t.c, t.ev
+
+            def _unpack_ev(ev: Any) -> tuple[int, int, str, Optional[int]]:
+                return ev.cs, ev.ce, ev.e, ev.page_number
+        else:
+            class _EvidenceSpanIn(BaseModel):  # type: ignore[no-redef]
+                char_start: int
+                char_end: int
+                excerpt: str
+                page_number: Optional[int] = None
+
+            class _TripleIn(BaseModel):  # type: ignore[no-redef]
+                subject: str
+                predicate: str
+                object_value: str
+                confidence: float
+                evidence: _EvidenceSpanIn
+
+            def _unpack(t: Any) -> tuple[str, str, str, float, Any]:
+                return t.subject, t.predicate, t.object_value, t.confidence, t.evidence
+
+            def _unpack_ev(ev: Any) -> tuple[int, int, str, Optional[int]]:
+                return ev.char_start, ev.char_end, ev.excerpt, ev.page_number
 
         # --- build provider-specific instructor client ---
         if provider == "anthropic":
@@ -136,8 +300,6 @@ class InstructorExtractor:
             mode_kwargs: dict = {}
         elif provider == "copilot":
             # GitHub Models API — OpenAI-compatible, authenticates with a GitHub PAT.
-            # Available models: gpt-4o, gpt-4o-mini, claude-3.5-sonnet, etc.
-            # https://github.com/marketplace/models
             mode = instructor.Mode.JSON
             client = instructor.from_openai(
                 OpenAI(
@@ -149,7 +311,6 @@ class InstructorExtractor:
             mode_kwargs = {}
         else:
             # ollama, openai, vllm, azure-openai — all OpenAI-compatible
-            # Use MD_JSON for local models (ollama/vllm), JSON_SCHEMA for hosted
             mode = (
                 instructor.Mode.MD_JSON
                 if provider in ("ollama", "vllm")
@@ -173,31 +334,45 @@ class InstructorExtractor:
             **mode_kwargs,
         )
 
+        # v0.12.0: safety cap — keep top-N by confidence, log warning if exceeded
+        max_triples: int = extraction_strategy.get("max_triples_per_fragment", 0)
+        triples_capped = 0
+        if max_triples > 0 and len(response) > max_triples:
+            triples_capped = len(response) - max_triples
+            response = sorted(response, key=lambda t: _unpack(t)[3], reverse=True)[:max_triples]
+            logger.warning(
+                "Safety cap: capped %d triples to %d for fragment %s",
+                triples_capped,
+                max_triples,
+                source_iri,
+            )
+
         # --- validate and filter triples ---
         validated: list[ExtractedTriple] = []
         for t in response:
-            ev = t.evidence
+            subj, pred, obj, conf, ev_in = _unpack(t)
+            cs, ce, excerpt, page_number = _unpack_ev(ev_in)
             # Citation grounding: reject fabricated excerpts
-            if ev.excerpt and ev.excerpt not in text:
+            if excerpt and excerpt not in text:
                 logger.warning(
                     "Rejecting triple — excerpt not found in source text: %r",
-                    ev.excerpt[:80],
+                    excerpt[:80],
                 )
                 continue
             try:
                 evidence = EvidenceSpan(
                     source_iri=source_iri,
-                    char_start=ev.char_start,
-                    char_end=ev.char_end,
-                    excerpt=ev.excerpt,
-                    page_number=ev.page_number,
+                    char_start=cs,
+                    char_end=ce,
+                    excerpt=excerpt,
+                    page_number=page_number,
                 )
                 validated.append(
                     ExtractedTriple(
-                        subject=t.subject,
-                        predicate=t.predicate,
-                        object_value=t.object_value,
-                        confidence=t.confidence,
+                        subject=subj,
+                        predicate=pred,
+                        object_value=obj,
+                        confidence=conf,
                         evidence=evidence,
                     )
                 )
@@ -212,6 +387,7 @@ class InstructorExtractor:
         span.set_attribute("extraction.prompt_tokens", prompt_tokens)
         span.set_attribute("extraction.completion_tokens", completion_tokens)
         span.set_attribute("extraction.model", model_name)
+        span.set_attribute("extraction.triples_capped", triples_capped)
 
         return ExtractionResult(
             triples=validated,
@@ -220,5 +396,6 @@ class InstructorExtractor:
                 "completion_tokens": completion_tokens,
                 "model": model_name,
                 "llm_calls": 1,
+                "triples_capped": triples_capped,
             },
         )

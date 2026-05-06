@@ -65,6 +65,15 @@ class CompilerProfile:
     verification: dict = field(default_factory=dict)
     # v0.11.1: Token efficiency settings (per-fragment filtering, keep-alive, etc.)
     token_efficiency: dict = field(default_factory=dict)
+    # v0.12.0: Ontology-grounded extraction — closed-world predicate/class allowlists
+    allowed_predicates: list = field(default_factory=list)
+    allowed_classes: list = field(default_factory=list)
+    # v0.12.0: Tentative graph IRI for per-triple confidence routing
+    tentative_graph: str = "http://riverbank.example/graph/tentative"
+    # v0.12.0: Extraction strategy (mode, safety cap, overlapping windows, coreference)
+    extraction_strategy: dict = field(default_factory=dict)
+    # v0.12.0: Token optimization (compact schema, budget manager, merged preprocessing)
+    token_optimization: dict = field(default_factory=dict)
     # id is set after the profile is registered in the catalog DB
     id: Optional[int] = None
 
@@ -179,6 +188,12 @@ class IngestPipeline:
             "preprocessing_calls": 0,
             "preprocessing_prompt_tokens": 0,
             "preprocessing_completion_tokens": 0,
+            # v0.12.0 extraction stats
+            "triples_trusted": 0,
+            "triples_tentative": 0,
+            "triples_discarded": 0,
+            "triples_rejected_ontology": 0,
+            "triples_capped": 0,
         }
         with tracer.start_as_current_span("ingest_pipeline.run") as span:
             for run_mode in sequence:
@@ -210,7 +225,11 @@ class IngestPipeline:
 
         connector = FilesystemConnector()
         parser = MarkdownParser()
-        fragmenter = HeadingFragmenter()
+        # v0.12.0: overlapping fragment windows from extraction_strategy config
+        overlap_sentences: int = getattr(profile, "extraction_strategy", {}).get(
+            "overlap_sentences", 0
+        )
+        fragmenter = HeadingFragmenter(overlap_sentences=overlap_sentences)
         gate = IngestGate()
         gate_config = _gate_config_from_profile(profile)
         extractor = self._load_extractor(profile)
@@ -228,6 +247,12 @@ class IngestPipeline:
             "preprocessing_calls": 0,
             "preprocessing_prompt_tokens": 0,
             "preprocessing_completion_tokens": 0,
+            # v0.12.0 extraction stats
+            "triples_trusted": 0,
+            "triples_tentative": 0,
+            "triples_discarded": 0,
+            "triples_rejected_ontology": 0,
+            "triples_capped": 0,
         }
 
         p = Path(corpus_path)
@@ -354,6 +379,34 @@ class IngestPipeline:
         )
 
         doc = parser.parse(source)
+
+        # v0.12.0: coreference resolution — runs on the full document text before
+        # fragmentation to replace pronouns/anaphoric refs with entity names.
+        coref_mode: str = getattr(profile, "preprocessing", {}).get("coreference", "disabled")
+        if coref_mode and coref_mode != "disabled" and not dry_run:
+            try:
+                from riverbank.extractors.coreference import CoreferenceResolver  # noqa: PLC0415
+                _resolver = CoreferenceResolver(self._settings)
+                resolved_text = _resolver.resolve(doc.raw_text, profile)
+                if resolved_text != doc.raw_text:
+                    # Rebuild the parsed doc with the resolved text
+                    from riverbank.parsers.markdown import MarkdownParser as _MP  # noqa: PLC0415
+                    import io  # noqa: PLC0415
+                    from riverbank.connectors.fs import SourceRecord as _SR  # noqa: PLC0415
+                    _resolved_source = _SR(
+                        iri=source.iri,
+                        path=source.path,
+                        content=resolved_text.encode("utf-8"),
+                        content_hash=source.content_hash,  # keep original hash
+                        mime_type=source.mime_type,
+                    )
+                    doc = parser.parse(_resolved_source)
+                    logger.debug(
+                        "Coreference resolved: %s (mode=%s)", source.iri, coref_mode
+                    )
+            except Exception as _coref_exc:  # noqa: BLE001
+                logger.debug("Coreference resolution skipped: %s", _coref_exc)
+
         fragments = list(fragmenter.fragment(doc))
         existing_hashes = self._get_existing_hashes(conn, source.iri)
         tracer = otel_trace.get_tracer(__name__)
@@ -597,25 +650,77 @@ class IngestPipeline:
                         conn, vocab_triples, frag_iri, profile, record_artifact_dep
                     )
             else:
-                # Full pass: standard SHACL-gated extraction to the trusted graph
-                score = shacl_score(conn, profile.named_graph, profile)
-                threshold = _confidence_threshold(profile)
-                target_graph = profile.named_graph if score >= threshold else "<draft>"
+                # Full pass: v0.12.0 per-triple confidence routing.
+                # Pre-write ontology filtering, then route each triple by confidence:
+                #   ≥ 0.75 → trusted graph
+                #   0.35 – 0.75 → tentative graph
+                #   < 0.35 → discarded
+                from riverbank.extractors.ontology_filter import OntologyFilter  # noqa: PLC0415
 
-                if result.triples:
+                allowed_predicates: list = getattr(profile, "allowed_predicates", [])
+                allowed_classes: list = getattr(profile, "allowed_classes", [])
+                ontology_filt = OntologyFilter(allowed_predicates, allowed_classes)
+
+                all_triples = list(result.triples)
+                # Accumulate capped stat from extractor diagnostics
+                stats["triples_capped"] += result.diagnostics.get("triples_capped", 0)
+
+                # Pre-write structural filtering
+                passed_triples, rejected_count = ontology_filt.filter(all_triples)
+                stats["triples_rejected_ontology"] += rejected_count
+
+                # Literal normalisation + dedup
+                passed_triples = ontology_filt.normalize_triples(passed_triples)
+
+                # Per-triple confidence routing
+                trusted_triples: list[Any] = []
+                tentative_triples: list[Any] = []
+                for triple in passed_triples:
+                    conf = float(getattr(triple, "confidence", 0.0))
+                    if conf >= 0.75:
+                        trusted_triples.append(triple)
+                    elif conf >= 0.35:
+                        # Route to tentative graph
+                        from dataclasses import replace as _dc_r  # noqa: PLC0415
+                        from riverbank.prov import ExtractedTriple as _ET  # noqa: PLC0415
+                        tentative_triples.append(
+                            _ET(
+                                subject=triple.subject,
+                                predicate=triple.predicate,
+                                object_value=triple.object_value,
+                                confidence=triple.confidence,
+                                evidence=triple.evidence,
+                                named_graph=profile.tentative_graph,
+                            )
+                        )
+                    else:
+                        stats["triples_discarded"] += 1
+
+                # Write trusted triples
+                if trusted_triples:
                     written = load_triples_with_confidence(
-                        conn, result.triples, target_graph
+                        conn, trusted_triples, profile.named_graph
                     )
                     stats["triples_written"] += written
-                    # Record artifact dependency edges for each subject
+                    stats["triples_trusted"] += written
                     _record_triples_deps(
-                        conn, result.triples, frag_iri, profile, record_artifact_dep
+                        conn, trusted_triples, frag_iri, profile, record_artifact_dep
                     )
 
-                # Embedding generation step (v0.5.0) — generate embeddings for
-                # each unique subject and store them via pg_ripple / pgVector.
+                # Write tentative triples
+                if tentative_triples:
+                    written_tent = load_triples_with_confidence(
+                        conn, tentative_triples, profile.tentative_graph
+                    )
+                    stats["triples_written"] += written_tent
+                    stats["triples_tentative"] += written_tent
+                    _record_triples_deps(
+                        conn, tentative_triples, frag_iri, profile, record_artifact_dep
+                    )
+
+                # Embedding generation step (v0.5.0)
                 _generate_and_store_embeddings(
-                    conn, result.triples, profile, frag.text
+                    conn, trusted_triples, profile, frag.text
                 )
 
             # Record fragment + run in the catalog

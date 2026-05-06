@@ -337,6 +337,10 @@ def query(
         None, "--expand", "-e",
         help="Comma-separated seed terms to expand via the <thesaurus> named graph before querying",
     ),
+    include_tentative: bool = typer.Option(
+        False, "--include-tentative",
+        help="Union trusted + tentative graphs; results ordered by confidence descending",
+    ),
 ) -> None:
     """Execute a SPARQL SELECT or ASK query against the compiled knowledge graph.
 
@@ -347,6 +351,9 @@ def query(
     ``<thesaurus>`` named graph (``skos:altLabel``, ``skos:related``,
     ``skos:exactMatch``, ``skos:closeMatch``) and the expanded synonym set is
     logged before the query is dispatched.
+
+    With ``--include-tentative`` the trusted and tentative graphs are unioned
+    and results are ordered by confidence descending.  Use this for discovery.
     """
     import json as _json  # noqa: PLC0415
 
@@ -358,7 +365,25 @@ def query(
     engine = create_engine(settings.db.dsn)
     try:
         with engine.connect() as conn:
-            if expand:
+            if include_tentative:
+                # v0.12.0 two-tier query model: union trusted + tentative graphs.
+                # Wrap the user query in a UNION across both named graphs and
+                # order by confidence descending.
+                tentative_graph = "http://riverbank.example/graph/tentative"
+                tentative_query = (
+                    f"SELECT * WHERE {{ "
+                    f"{{ GRAPH <{tentative_graph}> {{ {sparql.strip().rstrip(';')} }} }} "
+                    f"}} ORDER BY DESC(?confidence) LIMIT 500"
+                    if "SELECT" in sparql.upper()
+                    else sparql
+                )
+                trusted_rows = sparql_query(conn, sparql, named_graph=named_graph)
+                try:
+                    tentative_rows = sparql_query(conn, tentative_query, named_graph=None)
+                except Exception:  # noqa: BLE001
+                    tentative_rows = []
+                rows = trusted_rows + tentative_rows
+            elif expand:
                 seed_terms = [t.strip() for t in expand.split(",") if t.strip()]
                 rows = sparql_query_with_thesaurus(
                     conn, sparql, named_graph=named_graph, expand_terms=seed_terms
@@ -386,7 +411,8 @@ def query(
         return
 
     # Default: rich table
-    table = Table(title="SPARQL results", show_header=True, header_style="bold cyan")
+    title = "SPARQL results (trusted + tentative)" if include_tentative else "SPARQL results"
+    table = Table(title=title, show_header=True, header_style="bold cyan")
     for col in rows[0]:
         table.add_column(str(col))
     for row in rows:
@@ -799,9 +825,154 @@ def explain(
             rprint(f"  [cyan]→[/cyan]  {candidate}")
 
 
-# ---------------------------------------------------------------------------
-# review sub-app  (v0.6.0)
-# ---------------------------------------------------------------------------
+@app.command("explain-rejections")
+def explain_rejections(
+    profile: str | None = typer.Option(
+        None, "--profile", "-p", help="Filter by profile name"
+    ),
+    since: str = typer.Option(
+        "1h", "--since", "-s", help="Show rejections from the last duration (e.g. 1h, 30m, 7d)"
+    ),
+    limit: int = typer.Option(
+        100, "--limit", "-n", help="Maximum rejections to display"
+    ),
+) -> None:
+    """Show triples discarded in recent extraction runs, grouped by rejection reason.
+
+    Reports triples that were silently discarded during extraction — evidence
+    span not found, confidence below noise floor, ontology mismatch, or safety
+    cap.  Use this to diagnose which implied facts the pipeline is losing and
+    to improve your extraction profile.
+
+    Example::
+
+        riverbank explain-rejections --profile docs-policy-v1 --since 1h
+    """
+    import re  # noqa: PLC0415
+    from datetime import timedelta  # noqa: PLC0415
+
+    from sqlalchemy import create_engine, text  # noqa: PLC0415
+
+    # Parse the --since duration
+    match = re.fullmatch(r"(\d+)(h|m|d|s)", since.strip().lower())
+    if not match:
+        rprint("[red]Invalid --since value. Use e.g. 1h, 30m, 7d[/red]")
+        raise typer.Exit(code=1)
+    amount, unit = int(match.group(1)), match.group(2)
+    delta = {
+        "h": timedelta(hours=amount),
+        "m": timedelta(minutes=amount),
+        "d": timedelta(days=amount),
+        "s": timedelta(seconds=amount),
+    }[unit]
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            sql = text(
+                "SELECT r.fragment_key, r.source_iri, r.profile_name, r.run_at, "
+                "       r.diagnostics "
+                "FROM _riverbank.runs r "
+                "WHERE r.run_at >= now() - :delta "
+                + ("AND r.profile_name = :profile " if profile else "")
+                + "ORDER BY r.run_at DESC LIMIT :limit"
+            )
+            params: dict = {"delta": delta, "limit": limit}
+            if profile:
+                params["profile"] = profile
+            rows = conn.execute(sql, params).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]Could not query runs: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+    if not rows:
+        rprint("[dim]No runs found in the specified time window.[/dim]")
+        return
+
+    import json as _json  # noqa: PLC0415
+
+    rejection_counts: dict[str, int] = {
+        "evidence_not_found": 0,
+        "below_noise_floor": 0,
+        "ontology_mismatch": 0,
+        "safety_cap": 0,
+        "invalid_triple": 0,
+    }
+    total_discarded = 0
+    total_rejected_ontology = 0
+    total_capped = 0
+
+    for row in rows:
+        diag = row[4]
+        if isinstance(diag, str):
+            try:
+                diag = _json.loads(diag)
+            except Exception:  # noqa: BLE001
+                diag = {}
+        if not isinstance(diag, dict):
+            diag = {}
+        total_discarded += diag.get("triples_discarded", 0)
+        total_rejected_ontology += diag.get("triples_rejected_ontology", 0)
+        total_capped += diag.get("triples_capped", 0)
+        rejection_counts["below_noise_floor"] += diag.get("triples_discarded", 0)
+        rejection_counts["ontology_mismatch"] += diag.get("triples_rejected_ontology", 0)
+        rejection_counts["safety_cap"] += diag.get("triples_capped", 0)
+
+    rprint(
+        f"[bold]riverbank explain-rejections[/bold]  "
+        f"since={since!r}  "
+        f"{'profile=' + repr(profile) + '  ' if profile else ''}"
+        f"runs_scanned={len(rows)}\n"
+    )
+
+    table = Table(
+        title="Rejection summary",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Rejection reason")
+    table.add_column("Count", justify="right")
+    table.add_column("Description")
+
+    reasons = [
+        ("below_noise_floor", rejection_counts["below_noise_floor"],
+         "confidence < 0.35 — triple below minimum threshold"),
+        ("ontology_mismatch", rejection_counts["ontology_mismatch"],
+         "predicate not in allowed_predicates allowlist"),
+        ("safety_cap", rejection_counts["safety_cap"],
+         "fragment exceeded max_triples_per_fragment limit"),
+        ("evidence_not_found", rejection_counts["evidence_not_found"],
+         "excerpt not found verbatim in source text"),
+        ("invalid_triple", rejection_counts["invalid_triple"],
+         "Pydantic validation error in triple schema"),
+    ]
+
+    for reason, count, desc in reasons:
+        color = "red" if count > 0 else "dim"
+        table.add_row(
+            f"[{color}]{reason}[/{color}]",
+            f"[{color}]{count}[/{color}]",
+            f"[dim]{desc}[/dim]",
+        )
+
+    rprint(table)
+
+    if total_discarded + total_rejected_ontology + total_capped == 0:
+        rprint(
+            "\n[green]No rejections recorded in this window. "
+            "Run riverbank ingest first to populate rejection stats.[/green]"
+        )
+    else:
+        rprint(
+            f"\n[dim]Tip: review your profile's allowed_predicates allowlist "
+            f"and extraction_strategy.max_triples_per_fragment to tune the "
+            f"rejection rates.[/dim]"
+        )
+
+
 
 review_app = typer.Typer(
     name="review",
