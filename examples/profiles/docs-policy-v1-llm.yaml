@@ -1,0 +1,69 @@
+---
+# docs-policy-v1-llm — LLM extraction variant for the examples/markdown-corpus
+#
+# This profile enables real knowledge extraction via the instructor extractor.
+# Requires: pip install 'riverbank[ingest]' and a local Ollama instance with llama3.2
+#
+# Runtime: ~5-10 minutes for the example corpus (14 fragments × ~30s per fragment)
+# Output: Extracts factual triples and writes them to the knowledge graph
+#
+# Usage:
+#   riverbank ingest examples/markdown-corpus/ --profile examples/profiles/docs-policy-v1-llm.yaml
+#
+name: docs-policy-v1-llm
+version: 1
+
+# Extractor — "instructor" uses LLM via OpenAI API (or Ollama via base_url override)
+extractor: instructor
+
+model_provider: ollama
+model_name: llama3.2
+embed_model: nomic-embed-text
+max_fragment_tokens: 2000
+
+named_graph: "http://riverbank.example/graph/trusted"
+
+prompt_text: |
+  You are a knowledge graph compiler.  Extract factual claims from the
+  following documentation section as RDF triples.
+
+  For each claim provide:
+  - subject: prefixed IRI (e.g. ex:Ariadne)
+  - predicate: prefixed IRI (e.g. ex:createdBy)
+  - object_value: prefixed IRI or literal
+  - confidence: float 0.0–1.0
+  - evidence: exact character offsets and a verbatim excerpt
+
+  Only extract claims directly supported by the text.
+  Do NOT fabricate evidence.
+
+editorial_policy:
+  min_fragment_length: 50
+  max_fragment_length: 8000
+  min_heading_depth: 0
+  confidence_threshold: 0.7
+  allowed_languages:
+    - en
+
+# Competency questions — SPARQL ASK queries that the compiled graph must answer.
+# Used by the golden corpus CI gate (tests/golden/).
+competency_questions:
+  - id: cq-01
+    description: "The corpus defines a concept called 'Confidence'"
+    sparql: |
+      ASK {
+        ?s ?p "Confidence" .
+      }
+  - id: cq-02
+    description: "The corpus mentions evidence spans with character offsets"
+    sparql: |
+      ASK {
+        ?s ?p ?o .
+        FILTER(CONTAINS(STR(?o), "character"))
+      }
+  - id: cq-03
+    description: "The corpus contains at least one subject–predicate–object triple"
+    sparql: |
+      ASK {
+        ?s ?p ?o .
+      }
