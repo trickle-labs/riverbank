@@ -4,7 +4,8 @@
 # Targets runbooks, SOPs, incident-response guides, and onboarding flows.
 # Aligned with the Procedural Knowledge Ontology (PKO) from Cefriel.
 #
-# Uses the instructor extractor to call the local LLM for extraction.
+# For quickstart: uses noop extractor to demonstrate the pipeline.
+# For real extraction: change extractor to "instructor" and ensure ingest extras installed.
 #
 # Vocabulary pass: extracts step names and tool/resource names into <vocab>.
 # Full pass: extracts step sequences, decision points, preconditions,
@@ -14,7 +15,7 @@
 name: procedural-v1
 version: 1
 
-extractor: instructor
+extractor: noop
 
 model_provider: ollama
 model_name: llama3.2

@@ -64,7 +64,17 @@ You should see green checkmarks for all pg-trickle preflight checks and the pg-t
 riverbank ingest examples/markdown-corpus/
 ```
 
-This parses the example Markdown files, fragments them at heading boundaries, applies the editorial policy gate, and writes compiled triples to the knowledge graph.
+This parses the example Markdown files, fragments them at heading boundaries, and applies the editorial policy gate. The default profile uses a `noop` extractor (no LLM calls) so this completes instantly — you'll see it processes 17 fragments and skips 3 due to the quality gate, but writes 0 triples since extraction is disabled.
+
+**What you've validated:** the full ingest pipeline works end-to-end — source discovery, fragmenting, gate evaluation, and database writes all function correctly.
+
+**To enable real LLM extraction:**
+
+1. Install ingest dependencies: `pip install 'riverbank[ingest]'`
+2. Pull an LLM model: `ollama pull llama3.2`  
+3. Use a profile with `extractor: instructor`: `riverbank ingest examples/markdown-corpus/ --profile examples/profiles/docs-policy-v1.yaml`
+
+_Note: LLM extraction takes 5–10 minutes depending on your hardware. The quickstart uses `noop` by default for speed._
 
 ## Query the result
 
@@ -72,7 +82,7 @@ This parses the example Markdown files, fragments them at heading boundaries, ap
 riverbank query "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10"
 ```
 
-You now have a compiled knowledge graph. Every fact traces back to the source fragment it was extracted from.
+With the default profile (noop extractor), the graph is empty. After enabling LLM extraction, you'll have compiled triples that trace back to source fragments.
 
 ## Inspect the run
 

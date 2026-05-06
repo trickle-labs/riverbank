@@ -1,13 +1,14 @@
 ---
 # docs-policy-v1 — Example compiler profile for the examples/markdown-corpus
 #
-# This profile extracts factual triples from Markdown documentation using
-# the instructor extractor with Ollama. Calls the local LLM to extract facts.
+# This profile is configured for LLM extraction. Set extractor to "instructor"
+# below to enable real extraction via Ollama or OpenAI.
+# For quickstart: use extractor: noop to see the pipeline without LLM latency.
 name: docs-policy-v1
 version: 1
 
-# Extractor — "instructor" to use LLM extraction via Ollama
-extractor: instructor
+# Extractor — "noop" for quick demo; change to "instructor" for real LLM extraction
+extractor: noop
 
 model_provider: ollama
 model_name: llama3.2
