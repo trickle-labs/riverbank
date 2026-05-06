@@ -53,7 +53,7 @@
 
 | Version | Description | Status | Size |
 |---|---|---|---|
-| v0.9.0 | Multi-tenant and rendering — tenant_id RLS activation, federated compilation (SPARQL SERVICE), Markdown/JSON-LD page rendering, streaming render via SSE | Planned | Very Large |
+| v0.9.0 | Multi-tenant and rendering — tenant_id RLS activation, federated compilation (SPARQL SERVICE), Markdown/JSON-LD page rendering, streaming render via SSE | **Done** | Very Large |
 
 ### Stable Release (v1.0.0)
 
@@ -380,25 +380,25 @@ measurable error reduction over a single-model baseline.
 Goal: deploy as shared infrastructure across multiple knowledge bases; render
 compiled knowledge back to prose.
 
-- **Multi-tenant RLS activation.** Row-level security is enabled on all
+- [x] **Multi-tenant RLS activation.** Row-level security is enabled on all
   `_riverbank` tables using the `tenant_id` column scaffolded in v0.4.0.
   Per-tenant editorial policies, profiles, and named graphs. Tenant lifecycle
   API (create, suspend, delete with GDPR erasure).
-- **Tenant-scoped Label Studio.** One Label Studio organisation per tenant;
+- [x] **Tenant-scoped Label Studio.** One Label Studio organisation per tenant;
   reviewer assignments respect tenant boundaries.
-- **Federated compilation.** A "remote profile" type pulls SERVICE-federated
+- [x] **Federated compilation.** A "remote profile" type pulls SERVICE-federated
   triples from a peer pg_ripple instance into a local compilation context,
   applies confidence weighting, and writes the result locally. The SPARQL
   `SERVICE` keyword is implemented in pg-ripple's query engine; riverbank
   configures a `federation_endpoints` entry via SQL and issues a standard
   SPARQL query — no federation protocol code lives in riverbank.
-- **Markdown / JSON-LD page rendering.** `riverbank render` generates entity
+- [x] **Markdown / JSON-LD page rendering.** `riverbank render` generates entity
   pages, topic surveys, comparison tables, and change digests from compiled
   artifacts. Output formats: Markdown (Obsidian/MkDocs), JSON-LD, HTML.
-- **Render scheduling.** Pages stored as `pgc:RenderedPage` artifacts with
+- [x] **Render scheduling.** Pages stored as `pgc:RenderedPage` artifacts with
   dependency edges to their source facts. When facts change, pages are flagged
   stale and regenerated in the next render flow.
-- **Streaming render.** SSE endpoint emits page updates as the underlying graph
+- [x] **Streaming render.** SSE endpoint emits page updates as the underlying graph
   changes, for live documentation sites.
 
 **Exit criteria:** two tenants compile independently on shared PostgreSQL with
