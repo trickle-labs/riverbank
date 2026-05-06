@@ -193,12 +193,24 @@ def sparql_query(
         rows = conn.execute(text("SELECT * FROM pg_ripple.sparql(:query)"), {"query": sparql_with_graph}).fetchall()
         if not rows:
             return []
-        # Convert JSONB results to dicts
+        # Convert rows to dicts.  Three cases:
+        # 1. SQLAlchemy Row with named columns (_mapping is a real dict) — used by
+        #    most callers and in unit tests that mock rows with _mapping set.
+        # 2. Single JSONB column from pg_ripple.sparql() — parse row[0] as JSON.
+        # 3. Plain tuple/sequence (e.g. multi-column SELECT rows) — return as list.
         result = []
         for row in rows:
+            mapping = getattr(row, "_mapping", None)
+            if mapping is not None and isinstance(mapping, dict):
+                result.append(dict(mapping))
+                continue
             result_val = row[0]  # Single column "result"
             if isinstance(result_val, str):
-                result.append(json.loads(result_val))
+                try:
+                    result.append(json.loads(result_val))
+                except json.JSONDecodeError:
+                    # Non-JSON string — treat the entire row as a plain sequence
+                    result.append(list(row))
             elif isinstance(result_val, dict):
                 result.append(result_val)
             else:

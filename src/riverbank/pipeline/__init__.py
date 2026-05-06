@@ -63,6 +63,8 @@ class CompilerProfile:
     corpus_preprocessing: dict = field(default_factory=dict)
     # v0.11.0: Post-2 self-critique verification pass
     verification: dict = field(default_factory=dict)
+    # v0.11.1: Token efficiency settings (per-fragment filtering, keep-alive, etc.)
+    token_efficiency: dict = field(default_factory=dict)
     # id is set after the profile is registered in the catalog DB
     id: Optional[int] = None
 
@@ -356,16 +358,45 @@ class IngestPipeline:
         existing_hashes = self._get_existing_hashes(conn, source.iri)
         tracer = otel_trace.get_tracer(__name__)
 
+        # §3.9 Adaptive preprocessing: skip preprocessing for small single-fragment
+        # documents where the value of entity canonicalization is minimal.
+        preprocessing_cfg: dict = getattr(profile, "preprocessing", {})
+        adaptive_threshold: int = preprocessing_cfg.get("adaptive_threshold", 2000)
+        _skip_preprocessing_adaptive = (
+            len(fragments) <= 1
+            and len(doc.raw_text) < adaptive_threshold
+        )
+        if _skip_preprocessing_adaptive and preprocessor is not None:
+            logger.debug(
+                "Adaptive preprocessing: skipping for small document %s "
+                "(%d chars, %d fragment(s))",
+                source.iri,
+                len(doc.raw_text),
+                len(fragments),
+            )
+
         # Phase 1 preprocessing: run once per document before extraction begins
+        # §3.6 Phase 2 pre-scan dedup: reuse cached summary if available
+        preprocess_result = None
         extraction_profile = profile
-        if preprocessor is not None and not dry_run:
+        if preprocessor is not None and not dry_run and not _skip_preprocessing_adaptive:
             with tracer.start_as_current_span("ingest_pipeline.preprocess") as pp_span:
                 pp_span.set_attribute("source.iri", source.iri)
                 from dataclasses import replace as _dc_replace  # noqa: PLC0415
                 if progress_callback:
                     progress_callback("preprocessing_start", {"source": source.iri})
-                preprocess_result = preprocessor.preprocess(doc.raw_text, profile)
+                # §3.6: reuse Phase 2 pre-scan summary to avoid duplicate LLM call
+                pre_summary = (
+                    corpus_analysis._doc_summaries.get(source.iri)
+                    if corpus_analysis is not None
+                    else None
+                )
+                preprocess_result = preprocessor.preprocess(
+                    doc.raw_text, profile, pre_computed_summary=pre_summary
+                )
                 if preprocess_result is not None:
+                    # §3.1 fragment_text passed later per-fragment; use empty string
+                    # here to build a base prompt (filtering happens per fragment below)
                     enriched_prompt = preprocessor.build_extraction_prompt(
                         preprocess_result, profile
                     )
@@ -452,6 +483,22 @@ class IngestPipeline:
                     progress_callback("fragment", {"key": frag.fragment_key, "status": "skipped_hash"})
                 continue
 
+            # §Noise section filtering: skip fragments whose heading path matches
+            # a configured noise section (e.g. "References", "Changelog").
+            if preprocess_result is not None and preprocess_result.noise_sections:
+                if frag.fragment_key in preprocess_result.noise_sections or any(
+                    frag.fragment_key.startswith(ns) for ns in preprocess_result.noise_sections
+                ):
+                    stats["fragments_skipped"] += 1
+                    logger.debug(
+                        "Fragment %s skipped: noise section (%s)",
+                        frag.fragment_key,
+                        preprocess_result.noise_sections,
+                    )
+                    if progress_callback:
+                        progress_callback("fragment", {"key": frag.fragment_key, "status": "skipped_noise"})
+                    continue
+
             # Editorial policy gate
             gate_result = gate.check(frag, gate_config)
             if not gate_result.accepted:
@@ -499,15 +546,23 @@ class IngestPipeline:
             # Extract triples
             with tracer.start_as_current_span("ingest_pipeline.extract") as ex_span:
                 ex_span.set_attribute("fragment.key", frag.fragment_key)
-                # Strategy 6: inject few-shot examples into the extraction prompt
+                # §3.1 Per-fragment entity catalog filtering: rebuild the enriched
+                # prompt with only entities relevant to this fragment's text.
                 frag_profile = extraction_profile
+                if preprocess_result is not None and preprocessor is not None:
+                    from dataclasses import replace as _dc_replace_frag  # noqa: PLC0415
+                    filtered_prompt = preprocessor.build_extraction_prompt(
+                        preprocess_result, profile, fragment_text=frag.text
+                    )
+                    frag_profile = _dc_replace_frag(extraction_profile, prompt_text=filtered_prompt)
+                # Strategy 6: inject few-shot examples into the extraction prompt
                 if few_shot_injector is not None and not dry_run:
                     from dataclasses import replace as _dc_replace2  # noqa: PLC0415
                     enriched_with_shots = few_shot_injector.inject(
-                        extraction_profile.prompt_text, profile
+                        frag_profile.prompt_text, profile
                     )
-                    if enriched_with_shots != extraction_profile.prompt_text:
-                        frag_profile = _dc_replace2(extraction_profile, prompt_text=enriched_with_shots)
+                    if enriched_with_shots != frag_profile.prompt_text:
+                        frag_profile = _dc_replace2(frag_profile, prompt_text=enriched_with_shots)
                 try:
                     result = extractor.extract(fragment=frag, profile=frag_profile, trace=None)
                 except Exception as ex_exc:  # noqa: BLE001

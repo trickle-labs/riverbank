@@ -166,7 +166,7 @@ def preprocessor_with_mock_llm():
         summary_return,
         catalog_return,
     ]
-    preprocessor._get_llm_client = mock.MagicMock(return_value=(mock_client, "llama3.2"))
+    preprocessor._get_llm_client = mock.MagicMock(return_value=(mock_client, "llama3.2", "openai"))
     return preprocessor
 
 
@@ -233,7 +233,7 @@ def test_preprocess_falls_back_on_summary_failure() -> None:
     preprocessor = DocumentPreprocessor()
     mock_client = mock.MagicMock()
     mock_client.chat.completions.create_with_completion.side_effect = RuntimeError("timeout")
-    preprocessor._get_llm_client = mock.MagicMock(return_value=(mock_client, "llama3.2"))
+    preprocessor._get_llm_client = mock.MagicMock(return_value=(mock_client, "llama3.2", "openai"))
 
     result = preprocessor.preprocess("Some text.", _Profile())
     # Should still return a result (not raise), with empty fields
@@ -308,7 +308,7 @@ def test_preprocess_summary_only_strategy() -> None:
     summary_return = _make_mock_summary_completion("Summary only.")
     mock_client = mock.MagicMock()
     mock_client.chat.completions.create_with_completion.return_value = summary_return
-    preprocessor._get_llm_client = mock.MagicMock(return_value=(mock_client, "llama3.2"))
+    preprocessor._get_llm_client = mock.MagicMock(return_value=(mock_client, "llama3.2", "openai"))
 
     @dataclass
     class _SummaryOnlyProfile:

@@ -168,6 +168,8 @@ class InstructorExtractor:
                 {"role": "user", "content": text},
             ],
             response_model=list[_TripleIn],
+            # §3.8 Ollama keep-alive: reuse KV cache across calls with identical system prompts
+            **({"extra_body": {"keep_alive": "5m"}} if provider == "ollama" else {}),
             **mode_kwargs,
         )
 

@@ -117,8 +117,17 @@ class DocumentPreprocessor:
         self,
         raw_text: str,
         profile: Any,
+        pre_computed_summary: str | None = None,
     ) -> PreprocessingResult | None:
         """Run preprocessing on *raw_text* and return a ``PreprocessingResult``.
+
+        Args:
+            raw_text: Raw document text to preprocess.
+            profile: Compiler profile with ``preprocessing`` config.
+            pre_computed_summary: If provided, skip the LLM summary call and
+                use this value directly.  Enables Phase 2 pre-scan dedup
+                (§3.6) — the corpus pre-scan already computed the summary so
+                Phase 1 reuses it for free.
 
         Returns ``None`` on failure so callers can fall back gracefully.
         """
@@ -136,10 +145,14 @@ class DocumentPreprocessor:
         completion_tokens_total = 0
 
         if "document_summary" in strategies:
-            summary_text, pt, ct = self._extract_summary(raw_text, profile)
-            summary = summary_text or ""
-            prompt_tokens_total += pt
-            completion_tokens_total += ct
+            if pre_computed_summary is not None:
+                # §3.6 Phase 2 pre-scan dedup: reuse cached summary, no LLM call
+                summary = pre_computed_summary
+            else:
+                summary_text, pt, ct = self._extract_summary(raw_text, profile)
+                summary = summary_text or ""
+                prompt_tokens_total += pt
+                completion_tokens_total += ct
 
         if "entity_catalog" in strategies:
             max_entities: int = preprocessing_cfg.get("max_entities", 50)
@@ -147,9 +160,13 @@ class DocumentPreprocessor:
             prompt_tokens_total += pt
             completion_tokens_total += ct
 
+        # §Noise sections: propagate profile-configured noise section headings
+        noise_sections: list[str] = preprocessing_cfg.get("noise_sections", [])
+
         return PreprocessingResult(
             summary=summary,
             entity_catalog=entity_catalog,
+            noise_sections=noise_sections,
             prompt_tokens=prompt_tokens_total,
             completion_tokens=completion_tokens_total,
         )
@@ -158,8 +175,17 @@ class DocumentPreprocessor:
         self,
         result: PreprocessingResult | None,
         profile: Any,
+        fragment_text: str = "",
     ) -> str:
         """Build an enriched extraction prompt from *result* and *profile*.
+
+        Args:
+            result: The preprocessing result containing summary and catalog.
+            profile: The compiler profile.
+            fragment_text: The fragment text being extracted.  When provided,
+                the entity catalog is filtered to only include entries whose
+                label or aliases appear in the fragment (§3.1 per-fragment
+                entity catalog filtering).
 
         Falls back to the profile's base ``prompt_text`` when *result* is None.
         """
@@ -178,18 +204,31 @@ class DocumentPreprocessor:
             parts.append(f"DOCUMENT CONTEXT:\n{result.summary}\n")
 
         if result.entity_catalog:
-            lines = ["ENTITY CATALOG (map all mentions to these canonical names):"]
-            for entry in result.entity_catalog:
-                alias_str = (
-                    f' (aliases: {", ".join(repr(a) for a in entry.aliases)})'
-                    if entry.aliases
-                    else ""
-                )
-                lines.append(
-                    f"  - ex:{entry.canonical_name} [{entry.entity_type}]"
-                    f' label="{entry.label}"{alias_str}'
-                )
-            parts.append("\n".join(lines) + "\n")
+            # §3.1 Per-fragment entity catalog filtering:
+            # Only inject entities whose label or aliases appear in the fragment.
+            if fragment_text:
+                text_lower = fragment_text.lower()
+                relevant = [
+                    e for e in result.entity_catalog
+                    if e.label.lower() in text_lower
+                    or any(a.lower() in text_lower for a in e.aliases)
+                ]
+            else:
+                relevant = result.entity_catalog
+
+            if relevant:
+                lines = ["ENTITY CATALOG (map all mentions to these canonical names):"]
+                for entry in relevant:
+                    alias_str = (
+                        f' (aliases: {", ".join(repr(a) for a in entry.aliases)})'
+                        if entry.aliases
+                        else ""
+                    )
+                    lines.append(
+                        f"  - ex:{entry.canonical_name} [{entry.entity_type}]"
+                        f' label="{entry.label}"{alias_str}'
+                    )
+                parts.append("\n".join(lines) + "\n")
 
         if predefined_predicates:
             pred_lines = ["ALLOWED PREDICATES (use only these):"]
@@ -219,8 +258,8 @@ class DocumentPreprocessor:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _get_llm_client(self, profile: Any) -> tuple[Any, str]:
-        """Return an (instructor_client, model_name) pair from profile/settings."""
+    def _get_llm_client(self, profile: Any) -> tuple[Any, str, str]:
+        """Return an (instructor_client, model_name, provider) triple from profile/settings."""
         try:
             import instructor  # noqa: PLC0415
             from openai import OpenAI  # noqa: PLC0415
@@ -258,7 +297,7 @@ class DocumentPreprocessor:
                 mode=mode,
             )
 
-        return client, model_name
+        return client, model_name, provider
 
     def _extract_summary(self, raw_text: str, profile: Any) -> tuple[str | None, int, int]:
         """Call the LLM to produce a 2-3 sentence document summary.
@@ -273,7 +312,9 @@ class DocumentPreprocessor:
             class _Summary(BaseModel):
                 summary: str
 
-            client, model_name = self._get_llm_client(profile)
+            client, model_name, provider = self._get_llm_client(profile)
+            # §3.8 Ollama keep-alive: reuse KV cache across calls with identical prompts
+            extra_kwargs: dict = {"extra_body": {"keep_alive": "5m"}} if provider == "ollama" else {}
             result, completion = client.chat.completions.create_with_completion(
                 model=model_name,
                 messages=[
@@ -281,6 +322,7 @@ class DocumentPreprocessor:
                     {"role": "user", "content": text_for_summary},
                 ],
                 response_model=_Summary,
+                **extra_kwargs,
             )
             usage = completion.usage if completion else None
             prompt_tokens = usage.prompt_tokens if usage else 0
@@ -315,7 +357,9 @@ class DocumentPreprocessor:
             class _Catalog(BaseModel):
                 entities: list[_Entry]
 
-            client, model_name = self._get_llm_client(profile)
+            client, model_name, provider = self._get_llm_client(profile)
+            # §3.8 Ollama keep-alive: reuse KV cache across calls with identical prompts
+            extra_kwargs: dict = {"extra_body": {"keep_alive": "5m"}} if provider == "ollama" else {}
             result, completion = client.chat.completions.create_with_completion(
                 model=model_name,
                 messages=[
@@ -323,6 +367,7 @@ class DocumentPreprocessor:
                     {"role": "user", "content": text_for_catalog},
                 ],
                 response_model=_Catalog,
+                **extra_kwargs,
             )
             usage = completion.usage if completion else None
             prompt_tokens = usage.prompt_tokens if usage else 0
