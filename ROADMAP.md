@@ -47,7 +47,7 @@
 
 | Version | Description | Status | Size |
 |---|---|---|---|
-| v0.8.0 | Epistemic layer — negative knowledge records, argument graphs, assumption registry, all 9 epistemic status labels, model ensemble, contradiction explanation, coverage maps | Planned | Very Large |
+| v0.8.0 | Epistemic layer — negative knowledge records, argument graphs, assumption registry, all 9 epistemic status labels, model ensemble, contradiction explanation, coverage maps | **Done** | Very Large |
 
 ### Multi-tenant and Prose Generation (v0.9.x)
 
@@ -326,36 +326,36 @@ dropping in-flight runs.
 Goal: implement the features that distinguish riverbank from a generic compiler:
 explicit absence, structured reasoning, and ensemble verification.
 
-- **Negative knowledge.** `pgc:NegativeKnowledge` records for explicit denials,
+- [x] **Negative knowledge.** `pgc:NegativeKnowledge` records for explicit denials,
   exhaustive search failures, and superseded facts. Compiler profiles can
   declare "search-and-record-absence" rules per predicate.
-- **Argument graphs.** `pgc:ArgumentRecord` extractor with a Label Studio
+- [x] **Argument graphs.** `pgc:ArgumentRecord` extractor with a Label Studio
   annotation template for `{claim, evidence, objection, rebuttal}` spans. SPARQL
   navigation: "which policy conclusions have a recorded objection but no
   rebuttal?"
-- **Assumption registry.** Extracted assumptions attached as RDF-star
+- [x] **Assumption registry.** Extracted assumptions attached as RDF-star
   annotations to facts and entity pages; surfaced by `rag_context()` alongside
   answers.
-- **Epistemic status layer.** Every fact gets a `pgc:epistemicStatus`
+- [x] **Epistemic status layer.** Every fact gets a `pgc:epistemicStatus`
   annotation from the full set: `observed`, `extracted`, `inferred`,
   `verified`, `deprecated`, `normative`, `predicted`, `disputed`,
   `speculative`. Status flows from compiler outcome, Datalog inference, and
   Label Studio decisions.
-- **Model ensemble compilation.** Per-profile opt-in; runs N model variants
+- [x] **Model ensemble compilation.** Per-profile opt-in; runs N model variants
   and routes disagreements to Label Studio with a side-by-side template. Hard
   cost cap configurable per profile.
-- **Minimal contradiction explanation.** `riverbank explain-conflict <iri>`
+- [x] **Minimal contradiction explanation.** `riverbank explain-conflict <iri>`
   is a CLI wrapper around `pg_ripple.explain_contradiction()` — the
   minimal-cause reasoning engine (SAT-style hitting-set over the inference
   dependency graph) lives in pg-ripple and requires no Python implementation
   in riverbank.
-- **Coverage maps.** `pg_ripple.refresh_coverage_map()` computes per-topic
+- [x] **Coverage maps.** `pg_ripple.refresh_coverage_map()` computes per-topic
   source density, mean confidence, contradiction count, and recency into the
   `<coverage>` named graph. A Prefect flow joins the result against
   `_riverbank.profiles.competency_questions` to compute the unanswered-question
   count (the one join that requires riverbank's catalog), then writes enriched
   `pgc:CoverageMap` triples surfaced by `rag_context()`.
-- **Procedural knowledge compiler profile.** A built-in profile template
+- [x] **Procedural knowledge compiler profile.** A built-in profile template
   (`procedural-v1`) for runbooks, SOPs, incident-response guides, and onboarding
   flows. The vocabulary pass extracts step names and tool/resource names;
   the full pass extracts step sequences (`pko:nextStep`, `pko:previousStep`),

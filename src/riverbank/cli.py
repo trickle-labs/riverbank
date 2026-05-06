@@ -948,6 +948,65 @@ def recompile(
     rprint("[green bold]recompile complete[/green bold]")
 
 
+@app.command("explain-conflict")
+def explain_conflict(
+    iri: str = typer.Argument(..., help="IRI of the entity or fact to explain conflicts for"),
+    named_graph: str = typer.Option(
+        "http://riverbank.example/graph/trusted",
+        "--graph", "-g",
+        help="Named graph IRI to search for contradictions",
+    ),
+) -> None:
+    """Explain contradictions for an entity or fact.
+
+    A CLI wrapper around ``pg_ripple.explain_contradiction()`` — the
+    minimal-cause reasoning engine (SAT-style hitting-set over the inference
+    dependency graph) lives in pg-ripple and requires no Python implementation
+    in riverbank.
+
+    Falls back gracefully when ``pg_ripple.explain_contradiction()`` is not
+    yet available (deferred per roadmap mitigation policy).
+
+    Example::
+
+        riverbank explain-conflict entity:Acme
+    """
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.catalog.graph import explain_contradiction  # noqa: PLC0415
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            result = explain_contradiction(conn, iri, named_graph=named_graph)
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]Could not run explain-conflict: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+    rprint(f"[bold]riverbank explain-conflict[/bold]  iri={iri!r}\n")
+
+    if not result:
+        rprint(f"[dim]No contradictions found for {iri!r}.[/dim]")
+        rprint("[dim](pg_ripple.explain_contradiction may be unavailable — check pg_ripple version)[/dim]")
+        return
+
+    table = Table(title="Contradiction explanation", show_header=True, header_style="bold red")
+    table.add_column("Role")
+    table.add_column("IRI / Value")
+
+    for key, val in result.items():
+        if isinstance(val, list):
+            for item in val:
+                table.add_row(key, str(item))
+        else:
+            table.add_row(key, str(val))
+
+    rprint(table)
+
+
 @review_app.command("collect")
 def review_collect(
     profile_name: str = typer.Option(
