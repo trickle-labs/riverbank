@@ -70,7 +70,7 @@
 | v0.12.0 | Permissive extraction (Phase A) — ontology-grounded & CQ-guided prompts, permissive extraction prompt, per-triple confidence routing, `graph/tentative`, two-tier query model, safety cap, pre-write structural filtering, overlapping fragments, literal normalization | **Done** | Large |
 | v0.12.1 | Permissive extraction (Phase B) — confidence consolidation (noisy-OR) with source diversity scoring, `riverbank promote-tentative`, functional predicate hints, `riverbank explain-rejections` | **Done** | Medium |
 | v0.13.0 | Entity convergence — predicate normalization, incremental entity linking with synonym ring extraction, `riverbank induce-schema`, contradiction detection, tentative cleanup, quality regression tracking | **Done** | Large |
-| v0.13.1 | Extraction feedback loops — auto few-shot expansion, semantic few-shot selection, batched verification, knowledge-prefix adapter | Planned | Medium |
+| v0.13.1 | Extraction feedback loops — auto few-shot expansion, semantic few-shot selection, batched verification, knowledge-prefix adapter | **Done** | Medium |
 
 ### Structural Improvements & Stable Release (v0.14.x – v1.0.0)
 
@@ -741,24 +741,24 @@ Goal: close the self-improvement loop — the pipeline learns from its own
 high-confidence outputs to improve future extractions. Depends on stable
 vocabularies from v0.13.0; without them, feedback loops learn from noisy data.
 
-- [ ] **Auto few-shot expansion.** After validated ingests where CQ coverage
+- [x] **Auto few-shot expansion.** After validated ingests where CQ coverage
   exceeds threshold, high-confidence triples that satisfy competency questions
   are automatically sampled and appended to the profile's golden examples file.
   Capped at 10–15 examples per profile with diversity constraints (no two
   examples with the same predicate+type combination). CQs drive selection,
   completing the CQ-as-north-star feedback cycle begun in v0.12.0.
-- [ ] **Semantic few-shot selection.** Upgrade `FewShotInjector` to support
+- [x] **Semantic few-shot selection.** Upgrade `FewShotInjector` to support
   `selection: semantic`. Embeds the fragment text and the golden examples at
   injection time and selects the top-K most similar examples by cosine
   similarity. Reduces injected examples from 3 to 1–2 highly relevant ones —
   saves ~80–150 tokens per fragment while anchoring the LLM to the most
   topically relevant examples. Falls back to random when sentence-transformers
   is unavailable.
-- [ ] **Batched verification.** Upgrade `VerificationPass` to group
+- [x] **Batched verification.** Upgrade `VerificationPass` to group
   low-confidence triples into batches of up to `verification.batch_size: 5`
   per LLM call instead of one call per triple. Saves ~3 400 tokens for a
   typical 20-triple verification run.
-- [ ] **Knowledge-prefix adapter.** At extraction time, retrieve the local
+- [x] **Knowledge-prefix adapter.** At extraction time, retrieve the local
   neighborhood of already-extracted entities from pg_ripple and inject as a
   structured "KNOWN GRAPH CONTEXT" prefix. Improves consistency of new
   extractions with the existing graph and reduces contradictory triples.

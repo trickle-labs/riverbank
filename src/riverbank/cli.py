@@ -3061,3 +3061,211 @@ def benchmark(
         rprint(f"\n[green bold]Benchmark PASSED (F1={report.f1:.3f})[/green bold]")
 
 
+# ---------------------------------------------------------------------------
+# Extraction feedback loops (v0.13.1)
+# ---------------------------------------------------------------------------
+
+
+@app.command("expand-few-shot")
+def expand_few_shot(
+    profile_name: str = typer.Option(
+        ..., "--profile", "-p",
+        help="Profile name or path to profile YAML file",
+    ),
+    graph: str = typer.Option(
+        "http://riverbank.example/graph/trusted",
+        "--graph",
+        help="Named graph IRI to sample high-confidence triples from",
+    ),
+    cq_coverage: float = typer.Option(
+        0.75, "--cq-coverage",
+        help="CQ coverage fraction from the last ingest run (0.0–1.0)",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Compute candidates but do not write to the bank file",
+    ),
+) -> None:
+    """Auto-expand the few-shot example bank with high-confidence triples.
+
+    Samples high-confidence triples from the named graph that satisfy
+    competency questions, then appends diverse examples to the profile's
+    auto-expansion JSONL bank.  Capped at 15 examples per run to prevent
+    the bank from growing monotonically.
+
+    Only runs when ``--cq-coverage`` meets or exceeds the profile's
+    ``few_shot.auto_expand_cq_threshold`` (default 0.70).
+
+    Example::
+
+        riverbank expand-few-shot --profile docs-policy-v1 --cq-coverage 0.82
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.catalog.graph import sparql_query  # noqa: PLC0415
+    from riverbank.config import get_settings  # noqa: PLC0415
+    from riverbank.few_shot_expansion import FewShotExpander  # noqa: PLC0415
+    from riverbank.pipeline import CompilerProfile  # noqa: PLC0415
+
+    settings = get_settings()
+
+    profile_path = Path(profile_name)
+    if profile_path.exists() and profile_path.suffix in {".yaml", ".yml"}:
+        profile = CompilerProfile.from_yaml(profile_path)
+    else:
+        profile = CompilerProfile(name=profile_name)
+
+    few_shot_cfg: dict = getattr(profile, "few_shot", {})
+    if not few_shot_cfg.get("auto_expand", False):
+        rprint("[yellow]Auto-expansion is disabled in this profile "
+               "(set few_shot.auto_expand: true to enable).[/yellow]")
+        raise typer.Exit(code=0)
+
+    expander = FewShotExpander(
+        cq_threshold=float(few_shot_cfg.get("auto_expand_cq_threshold", 0.70)),
+        confidence_threshold=float(few_shot_cfg.get("auto_expand_confidence", 0.85)),
+        max_bank_size=int(few_shot_cfg.get("max_bank_size", 15)),
+    )
+    bank_path = expander.bank_path_for_profile(profile)
+
+    # Fetch high-confidence triples from the graph
+    engine = create_engine(settings.db.dsn)
+    triples: list[dict] = []
+    try:
+        with engine.connect() as conn:
+            sparql = f"""\
+SELECT ?s ?p ?o ?confidence ?evidence WHERE {{
+  GRAPH <{graph}> {{
+    ?s ?p ?o .
+    ?s <http://riverbank.example/pgc/confidence> ?confidence .
+    OPTIONAL {{ ?s <http://riverbank.example/pgc/evidenceExcerpt> ?evidence . }}
+    FILTER(?confidence >= {expander._confidence_threshold})
+  }}
+}}
+LIMIT 500
+"""
+            rows = sparql_query(conn, sparql)
+            for row in rows:
+                from types import SimpleNamespace  # noqa: PLC0415
+                triple = SimpleNamespace(
+                    subject=str(row.get("s", "")),
+                    predicate=str(row.get("p", "")),
+                    object_value=str(row.get("o", "")),
+                    confidence=float(row.get("confidence", 0.9)),
+                    evidence=SimpleNamespace(excerpt=str(row.get("evidence", ""))),
+                )
+                triples.append(triple)
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]Failed to fetch triples from graph: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    rprint(
+        f"[bold]riverbank expand-few-shot[/bold]  "
+        f"profile={profile.name!r}  graph={graph!r}  "
+        f"cq_coverage={cq_coverage:.0%}  dry_run={dry_run}"
+    )
+    rprint(f"  Candidate triples fetched: {len(triples)}")
+
+    result = expander.expand(
+        triples=triples,
+        bank_path=bank_path,
+        cq_coverage=cq_coverage,
+        competency_questions=getattr(profile, "competency_questions", []),
+        dry_run=dry_run,
+    )
+
+    if not result.threshold_met:
+        rprint(
+            f"[yellow]CQ coverage {cq_coverage:.0%} is below threshold "
+            f"{expander._cq_threshold:.0%} — expansion skipped.[/yellow]"
+        )
+        raise typer.Exit(code=0)
+
+    rprint(f"  Examples added: [green]{result.examples_added}[/green]")
+    rprint(f"  Skipped (confidence): {result.examples_skipped_confidence}")
+    rprint(f"  Skipped (diversity): {result.examples_skipped_diversity}")
+    rprint(f"  Skipped (CQ relevance): {result.examples_skipped_cq}")
+    rprint(f"  Bank size after: {result.bank_size_after}")
+    if not dry_run:
+        rprint(f"\n[green bold]Bank written to {bank_path}[/green bold]")
+    else:
+        rprint("\n[yellow](dry-run — no changes written)[/yellow]")
+
+
+@app.command("build-knowledge-context")
+def build_knowledge_context(
+    profile_name: str = typer.Option(
+        ..., "--profile", "-p",
+        help="Profile name or path to profile YAML file",
+    ),
+    fragment: str = typer.Option(
+        ..., "--fragment",
+        help="Fragment text to build the knowledge context for",
+    ),
+    graph: str = typer.Option(
+        "http://riverbank.example/graph/trusted",
+        "--graph",
+        help="Named graph IRI to query for context",
+    ),
+) -> None:
+    """Preview the KNOWN GRAPH CONTEXT block that would be injected for a fragment.
+
+    Queries the graph for entities mentioned in the fragment text and renders
+    the structured context block that would be prepended to the extraction
+    prompt.  Useful for diagnosing knowledge-prefix adapter behaviour.
+
+    Example::
+
+        riverbank build-knowledge-context \\
+            --profile docs-policy-v1 \\
+            --fragment "The Sesam pipe connects to the Salesforce source."
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.config import get_settings  # noqa: PLC0415
+    from riverbank.extractors.knowledge_prefix import KnowledgePrefixAdapter  # noqa: PLC0415
+    from riverbank.pipeline import CompilerProfile  # noqa: PLC0415
+
+    settings = get_settings()
+
+    profile_path = Path(profile_name)
+    if profile_path.exists() and profile_path.suffix in {".yaml", ".yml"}:
+        profile = CompilerProfile.from_yaml(profile_path)
+    else:
+        profile = CompilerProfile(name=profile_name)
+
+    kp_cfg: dict = getattr(profile, "knowledge_prefix", {})
+    if not kp_cfg.get("enabled", False):
+        rprint("[yellow]Knowledge-prefix adapter is disabled in this profile "
+               "(set knowledge_prefix.enabled: true to enable).[/yellow]")
+        raise typer.Exit(code=0)
+
+    adapter = KnowledgePrefixAdapter.from_profile(profile)
+
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            result = adapter.build_context(conn, graph, fragment)
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]Failed to query graph: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    rprint(
+        f"[bold]riverbank build-knowledge-context[/bold]  "
+        f"profile={profile.name!r}  graph={graph!r}"
+    )
+    rprint(f"  Entities found: {result.entities_found}")
+    rprint(f"  Triples injected: {result.triples_injected}")
+    rprint(f"  Tokens used (~words): {result.tokens_used}")
+
+    if result.context_block:
+        rprint("\n[bold cyan]Context block:[/bold cyan]")
+        rprint(result.context_block)
+    else:
+        rprint("[yellow]No matching entities found — context block is empty.[/yellow]")
+
+

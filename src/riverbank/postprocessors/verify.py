@@ -1,21 +1,12 @@
-"""Post-2: Self-Critique Verification Pass (v0.11.0).
+"""Post-2: Self-Critique Verification Pass (v0.11.0, batching v0.13.1).
 
 **Problem:** Low-confidence triples (below the ``confidence_threshold``) are
 extracted but may not be well-supported by the source text.
 
-**Approach:** After extraction, run a second cheap LLM call per low-confidence
-triple:
-
-    Given the text: "[evidence excerpt]"
-    Does the following claim hold?
-      subject:   ex:sesam-pipe
-      predicate: schema:isPartOf
-      object:    ex:sesam-system
-
-    Answer YES or NO and give your confidence (0.0–1.0).
-
-Triples confirmed YES get their confidence updated in the graph; NO responses
-move the triple to the quarantine (``<draft>``) named graph for human review.
+**Approach:** After extraction, run LLM verification calls on low-confidence
+triples.  Since v0.13.1, triples are grouped into batches of up to
+``verification.batch_size`` (default 5) per LLM call, reducing total LLM calls
+for a typical 20-triple run from 20 to ≤ 4 and saving ~3 400 tokens.
 
 Profile YAML extension::
 
@@ -24,9 +15,11 @@ Profile YAML extension::
       confidence_threshold: 0.75   # only verify triples below this score
       drop_below: 0.4              # quarantine triples where verifier scores < 0.4
       boost_above: 0.8             # re-write with boosted confidence when verifier scores ≥ this
+      batch_size: 5                # triples per LLM call (default 5, max 10)
 
 **Expected effect:** ~15–25% of low-confidence triples eliminated; ~5%
-false-positive rate (triples incorrectly quarantined).
+false-positive rate (triples incorrectly quarantined).  Batching reduces LLM
+calls ≤ ceil(N / batch_size) for N candidate triples.
 
 Falls back gracefully when the LLM is unavailable or when pg_ripple is not
 installed.
@@ -42,6 +35,9 @@ logger = logging.getLogger(__name__)
 # Quarantine graph IRI — triples rejected by the verifier move here.
 _DRAFT_GRAPH = "http://riverbank.example/graph/draft"
 
+# Maximum allowed batch size to prevent prompt explosion.
+_MAX_BATCH_SIZE = 10
+
 # System prompt for the verification LLM call.
 _VERIFIER_SYSTEM_PROMPT = """\
 You are a knowledge graph fact-checker.
@@ -50,6 +46,21 @@ Given a source text excerpt and a candidate RDF triple, decide whether the
 triple is supported by the text.
 
 Respond ONLY with a JSON object with two fields:
+  "supported": true or false
+  "confidence": a float between 0.0 and 1.0
+
+Do not include any other text.
+"""
+
+# System prompt for batched verification (multiple triples per call).
+_BATCH_VERIFIER_SYSTEM_PROMPT = """\
+You are a knowledge graph fact-checker.
+
+You will be given one or more candidate RDF triples, each with a source text
+excerpt.  For EACH triple, decide whether it is supported by its source text.
+
+Respond ONLY with a JSON array.  Each element must be an object with:
+  "index": integer matching the triple's index (0-based)
   "supported": true or false
   "confidence": a float between 0.0 and 1.0
 
@@ -146,6 +157,10 @@ class VerificationPass:
         conf_threshold: float = float(verification_cfg.get("confidence_threshold", 0.75))
         drop_below: float = float(verification_cfg.get("drop_below", 0.4))
         boost_above: float = float(verification_cfg.get("boost_above", 0.8))
+        batch_size: int = min(
+            int(verification_cfg.get("batch_size", 5)),
+            _MAX_BATCH_SIZE,
+        )
         draft_graph: str = verification_cfg.get(
             "quarantine_graph", _DRAFT_GRAPH
         )
@@ -160,11 +175,15 @@ class VerificationPass:
             )
             return VerificationResult()
 
+        llm_calls = -(-len(candidates) // max(batch_size, 1))  # ceil division
         logger.info(
-            "verify: examining %d low-confidence triples (threshold=%.2f) in <%s>",
+            "verify: examining %d low-confidence triples (threshold=%.2f) in <%s> "
+            "using %d LLM call(s) (batch_size=%d)",
             len(candidates),
             conf_threshold,
             named_graph,
+            llm_calls,
+            batch_size,
         )
 
         result = VerificationResult(triples_examined=len(candidates))
@@ -178,50 +197,58 @@ class VerificationPass:
             )
             return result
 
-        for triple in candidates:
-            outcome = self._verify_triple(triple, client, model_name)
-            result.prompt_tokens += outcome.get("prompt_tokens", 0)
-            result.completion_tokens += outcome.get("completion_tokens", 0)
+        # Process candidates in batches
+        for batch_start in range(0, len(candidates), batch_size):
+            batch = candidates[batch_start : batch_start + batch_size]
+            if len(batch) == 1:
+                # Single-triple path — use the original per-triple verifier
+                outcomes = [self._verify_triple(batch[0], client, model_name)]
+            else:
+                outcomes = self._verify_batch(batch, client, model_name)
 
-            triple_id = _triple_id(triple)
-            supported = outcome.get("supported", True)
-            vc = outcome.get("verifier_confidence", 0.5)
-            error = outcome.get("error")
+            for triple, outcome in zip(batch, outcomes):
+                result.prompt_tokens += outcome.get("prompt_tokens", 0)
+                result.completion_tokens += outcome.get("completion_tokens", 0)
 
-            if error:
-                result.errors += 1
+                triple_id = _triple_id(triple)
+                supported = outcome.get("supported", True)
+                vc = outcome.get("verifier_confidence", 0.5)
+                error = outcome.get("error")
+
+                if error:
+                    result.errors += 1
+                    result.outcomes.append(
+                        VerificationOutcome(
+                            triple_id=triple_id,
+                            supported=True,
+                            verifier_confidence=0.0,
+                            action="error",
+                        )
+                    )
+                    continue
+
+                if not supported or vc < drop_below:
+                    action = "quarantined"
+                    if not dry_run:
+                        self._quarantine_triple(conn, triple, named_graph, draft_graph)
+                    result.quarantined += 1
+                elif vc >= boost_above:
+                    action = "boosted"
+                    if not dry_run:
+                        self._update_confidence(conn, triple, named_graph, new_confidence=vc)
+                    result.boosted += 1
+                else:
+                    action = "kept"
+                    result.kept += 1
+
                 result.outcomes.append(
                     VerificationOutcome(
                         triple_id=triple_id,
-                        supported=True,
-                        verifier_confidence=0.0,
-                        action="error",
+                        supported=supported,
+                        verifier_confidence=vc,
+                        action=action,
                     )
                 )
-                continue
-
-            if not supported or vc < drop_below:
-                action = "quarantined"
-                if not dry_run:
-                    self._quarantine_triple(conn, triple, named_graph, draft_graph)
-                result.quarantined += 1
-            elif vc >= boost_above:
-                action = "boosted"
-                if not dry_run:
-                    self._update_confidence(conn, triple, named_graph, new_confidence=vc)
-                result.boosted += 1
-            else:
-                action = "kept"
-                result.kept += 1
-
-            result.outcomes.append(
-                VerificationOutcome(
-                    triple_id=triple_id,
-                    supported=supported,
-                    verifier_confidence=vc,
-                    action=action,
-                )
-            )
 
         if not dry_run and (result.quarantined + result.boosted) > 0:
             try:
@@ -355,6 +382,98 @@ LIMIT 500
                 exc,
             )
             return {"error": str(exc), "prompt_tokens": 0, "completion_tokens": 0}
+
+    def _verify_batch(
+        self,
+        batch: list[dict],
+        client: Any,
+        model_name: str,
+    ) -> list[dict]:
+        """Verify a batch of triples in a single LLM call.
+
+        Groups the triples into a single prompt and parses a JSON array response.
+        Returns one outcome dict per triple in the same order as *batch*.
+        Falls back to individual calls if the LLM returns unparseable output.
+
+        Each outcome dict has keys: ``supported``, ``verifier_confidence``,
+        ``prompt_tokens``, ``completion_tokens``, and optionally ``error``.
+        """
+        # Build a multi-triple prompt
+        parts = []
+        for idx, triple in enumerate(batch):
+            evidence = triple.get("evidence", "") or "(no evidence available)"
+            parts.append(
+                f"[{idx}] Source text: {evidence[:500]}\n"
+                f"    Triple: ({triple['subject']}, {triple['predicate']}, "
+                f"{triple['object_value']})"
+            )
+        user_message = (
+            "Verify each of the following triples against its source text.\n\n"
+            + "\n\n".join(parts)
+            + "\n\nReturn a JSON array with one object per triple (index, supported, confidence)."
+        )
+
+        try:
+            import json as _json  # noqa: PLC0415
+            from pydantic import BaseModel  # noqa: PLC0415
+
+            class _BatchDecision(BaseModel):
+                index: int
+                supported: bool
+                confidence: float
+
+            class _BatchResponse(BaseModel):
+                results: list[_BatchDecision]
+
+            result, completion = client.chat.completions.create_with_completion(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": _BATCH_VERIFIER_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_message},
+                ],
+                response_model=_BatchResponse,
+                max_retries=1,
+            )
+
+            usage = getattr(completion, "usage", None)
+            pt = getattr(usage, "prompt_tokens", 0) if usage else 0
+            ct = getattr(usage, "completion_tokens", 0) if usage else 0
+
+            # Build index → decision map; fill missing indices with safe defaults
+            decision_map: dict[int, _BatchDecision] = {d.index: d for d in result.results}
+            outcomes: list[dict] = []
+            for idx in range(len(batch)):
+                dec = decision_map.get(idx)
+                if dec is not None:
+                    outcomes.append(
+                        {
+                            "supported": dec.supported,
+                            "verifier_confidence": float(
+                                max(0.0, min(1.0, dec.confidence))
+                            ),
+                            # Distribute token counts evenly across batch
+                            "prompt_tokens": pt // len(batch),
+                            "completion_tokens": ct // len(batch),
+                        }
+                    )
+                else:
+                    outcomes.append(
+                        {
+                            "supported": True,
+                            "verifier_confidence": 0.5,
+                            "prompt_tokens": 0,
+                            "completion_tokens": 0,
+                        }
+                    )
+            return outcomes
+
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "verify: batch LLM call failed (%s) — falling back to individual calls",
+                exc,
+            )
+            # Fallback: individual calls
+            return [self._verify_triple(t, client, model_name) for t in batch]
 
     def _quarantine_triple(
         self,

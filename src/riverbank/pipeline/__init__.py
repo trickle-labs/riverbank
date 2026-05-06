@@ -78,6 +78,8 @@ class CompilerProfile:
     predicate_constraints: dict = field(default_factory=dict)
     # v0.13.0: Tentative cleanup TTL in days (0 = disabled)
     tentative_ttl_days: int = 30
+    # v0.13.1: Knowledge-prefix adapter — inject existing graph context at extraction time
+    knowledge_prefix: dict = field(default_factory=dict)
     # id is set after the profile is registered in the catalog DB
     id: Optional[int] = None
 
@@ -620,10 +622,28 @@ class IngestPipeline:
                 if few_shot_injector is not None and not dry_run:
                     from dataclasses import replace as _dc_replace2  # noqa: PLC0415
                     enriched_with_shots = few_shot_injector.inject(
-                        frag_profile.prompt_text, profile
+                        frag_profile.prompt_text,
+                        profile,
+                        fragment_text=frag.text,
                     )
                     if enriched_with_shots != frag_profile.prompt_text:
                         frag_profile = _dc_replace2(frag_profile, prompt_text=enriched_with_shots)
+                # v0.13.1: knowledge-prefix adapter — inject KNOWN GRAPH CONTEXT
+                if not dry_run:
+                    from riverbank.extractors.knowledge_prefix import (  # noqa: PLC0415
+                        KnowledgePrefixAdapter,
+                    )
+                    kp_adapter = KnowledgePrefixAdapter.from_profile(profile)
+                    if kp_adapter.is_enabled():
+                        kp_result = kp_adapter.build_context(
+                            conn,
+                            profile.named_graph,
+                            frag.text,
+                        )
+                        if kp_result.context_block:
+                            from dataclasses import replace as _dc_replace_kp  # noqa: PLC0415
+                            kp_prompt = kp_result.context_block + "\n\n" + frag_profile.prompt_text
+                            frag_profile = _dc_replace_kp(frag_profile, prompt_text=kp_prompt)
                 try:
                     result = extractor.extract(fragment=frag, profile=frag_profile, trace=None)
                 except Exception as ex_exc:  # noqa: BLE001
