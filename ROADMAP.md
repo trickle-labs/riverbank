@@ -486,34 +486,62 @@ at least one low-confidence triple in a test run.
 ### v0.12.0 — Permissive Extraction
 
 Goal: dramatically increase triple yield — especially for small corpora — by
-extracting broadly within ontology-bounded constraints, routing per-triple by
-confidence, and consolidating evidence across fragments.
+extracting broadly within ontology-bounded constraints and routing per-triple by
+confidence. For small corpora (< 20 documents), the primary win is immediate:
+higher single-pass recall from the permissive prompt, not deferred accumulation.
+Ontology grounding and permissive extraction are **codependent** and must ship
+together — permissive extraction without vocabulary constraints floods the
+tentative graph with hallucinated predicates; ontology grounding without
+permissive extraction still skips implied facts.
 
 - [ ] **Ontology-grounded extraction.** `allowed_predicates` and
   `allowed_classes` fields in the compiler profile YAML. Injected into the
   extraction prompt as a closed-world constraint: "use ONLY these predicates;
   if a relationship does not fit, SKIP it." Triples with non-conforming
   predicates are rejected before writing (`triple_rejected_ontology` stat).
+  Required companion to permissive extraction — prevents vocabulary explosion.
 - [ ] **CQ-guided extraction.** Competency questions from the profile are
   transformed into "EXTRACTION OBJECTIVES" and prepended to the extraction
-  prompt, making extraction goal-directed rather than exhaustive.
+  prompt, making extraction goal-directed rather than exhaustive. CQs also
+  drive auto few-shot expansion (v0.13.0) and benchmark evaluation (v0.13.0),
+  so this is the first step in making CQs a first-class quality driver.
 - [ ] **Permissive extraction prompt.** New `extraction_strategy.mode: permissive`
   option replaces the conservative "only extract claims directly supported by
-  the text" instruction with a tiered guidance that includes explicit, strong
-  inference, implied, and weak inference categories.
+  the text" instruction with a tiered guidance: EXPLICIT (0.9–1.0), STRONG
+  (0.7–0.9), IMPLIED (0.5–0.7), WEAK (0.35–0.5). The four tiers correct the
+  LLM's systematic mis-calibration — it over-scores hallucinations and
+  under-scores true implied facts. Confidence at extraction time is treated
+  as a routing signal, not a truth probability.
 - [ ] **Per-triple confidence routing.** Replace batch-level SHACL routing with
   per-triple confidence routing: ≥ 0.75 → trusted graph, 0.35–0.75 →
   `graph/tentative`, < 0.35 → discarded. New `tentative_graph` field in
-  `CompilerProfile`.
-- [ ] **`--include-tentative` query flag.** `riverbank query --include-tentative`
-  unions the tentative graph into query results.
+  `CompilerProfile`. Phase A (permissive prompt + per-triple routing) is
+  independently shippable and already delivers the full single-pass recall
+  improvement without requiring Phase B (accumulation).
+- [ ] **Two-tier query model.** `riverbank query` (default): trusted graph only
+  — strict, fast, conservative. `riverbank query --include-tentative`: unions
+  trusted + tentative graphs, results ordered by confidence descending —
+  discovery-focused. Documented as a first-class CLI feature pair, not an
+  implementation detail.
+- [ ] **Rejected triple analysis.** `riverbank explain-rejections --profile
+  --since 1h` shows triples discarded in the last run: evidence span not found,
+  below noise floor, or ontology mismatch. Feeds back into prompt improvement
+  and surfaces which implied facts the conservative prompt was silently losing.
 - [ ] **Confidence consolidation (noisy-OR).** When a triple `(s, p, o)` is
   extracted from multiple fragments, consolidate confidence via
   $c_{final} = 1 - \prod_i (1 - c_i)$. Multi-provenance evidence spans stored
-  per triple.
-- [ ] **`riverbank promote-tentative`.** CLI command that promotes tentative
-  triples whose consolidated confidence crosses the trusted threshold.
-  Writes `pgc:PromotionEvent` provenance records.
+  per triple. Source diversity scoring: corroboration from multiple fragments
+  of the same document counts as one vote (prevents correlated hallucination
+  promotion).
+- [ ] **`riverbank promote-tentative`.** Explicit CLI command — promotion is never
+  automatic. Requires `--dry-run` review before committing. Promotes tentative
+  triples whose consolidated confidence crosses the trusted threshold. Writes
+  `pgc:PromotionEvent` provenance records.
+- [ ] **Functional predicate hints in profile YAML.** Annotate predicates as
+  functional (`max_cardinality: 1`) in the profile to enable contradiction
+  detection: if `(s, p, o₁)` exists and `(s, p, o₂)` is extracted with
+  `o₁ ≠ o₂`, both are flagged. Used by contradiction detection in v0.13.0
+  and in the extraction prompt ("pick the most specific value only").
 - [ ] **Overlapping fragment windows.** `overlap_sentences` config in the
   fragmenter block prepends the last N sentences of the previous fragment to
   recover facts split across boundaries. Duplicate triples from overlap regions
@@ -525,16 +553,18 @@ confidence, and consolidating evidence across fragments.
   `triples_discarded`, `triples_promoted`, `triples_rejected_ontology`.
 
 **Exit criterion:** the 3-document example corpus produces ≥ 2x more triples
-than v0.11.0 (trusted + tentative combined). CQ coverage with
-`--include-tentative` exceeds 75%. `promote-tentative` successfully promotes
-at least one triple after a second ingest pass.
+than v0.11.0 (trusted + tentative combined) after Phase A alone (permissive
+prompt + per-triple routing), before any accumulation. CQ coverage with
+`--include-tentative` exceeds 75%. `riverbank explain-rejections` shows at
+least 5 correctly implied triples that the conservative prompt had discarded.
 
 ---
 
 ### v0.13.0 — Entity Quality & Feedback Loops
 
 Goal: make the entity vocabulary converge over time, automate quality
-improvement via feedback loops, and enable graph-aware extraction.
+improvement via feedback loops, enable graph-aware extraction, and complete
+the tentative graph lifecycle with contradiction detection and automatic cleanup.
 
 - [ ] **Predicate normalization.** Embed predicate labels, cluster by similarity,
   map non-canonical predicates to ontology-defined canonical forms. Companion
@@ -547,24 +577,37 @@ improvement via feedback loops, and enable graph-aware extraction.
 - [ ] **Auto few-shot expansion.** After validated ingests where CQ coverage
   exceeds threshold, high-confidence triples that satisfy competency questions
   are automatically sampled and appended to the profile's golden examples file.
-  Capped at 10–15 examples per profile with diversity constraints.
+  Capped at 10–15 examples per profile with diversity constraints (no two
+  examples with the same predicate+type combination). CQs drive selection,
+  completing the CQ-as-north-star feedback cycle begun in v0.12.0.
 - [ ] **Knowledge-prefix adapter.** At extraction time, retrieve the local
   neighborhood of already-extracted entities from pg_ripple and inject as a
   structured "KNOWN GRAPH CONTEXT" prefix. Improves consistency of new
-  extractions with the existing graph.
+  extractions with the existing graph and reduces contradictory triples.
+- [ ] **Contradiction detection & demotion.** For functional predicates annotated
+  in the profile YAML (from v0.12.0), detect when new `(s, p, o₂)` conflicts
+  with existing `(s, p, o₁)`. Reduce confidence of both triples by 30%; demote
+  below threshold. Create `pgc:ConflictRecord`. Works as an identity
+  verification layer: triples that survive contradiction detection are
+  demonstrably more trustworthy.
+- [ ] **Automatic tentative cleanup.** Track `first_seen` timestamp for tentative
+  triples. Auto-run after each ingest: archive tentative triples that were
+  never promoted and have not been corroborated within the configurable TTL
+  (default 30 days). `riverbank gc-tentative --older-than 30d` available
+  for manual invocation; `tentative_ttl_days` in profile YAML to configure.
+  Without automatic cleanup, the tentative graph grows indefinitely and
+  becomes noise.
 - [ ] **Quality regression tracking.** `riverbank benchmark --profile <name>
   --golden tests/golden/<name>/ --fail-below-f1 0.85` re-extracts the golden
   corpus and compares against ground truth (precision, recall, F1). Runs in
   CI on every release; fails the build if quality drops.
-- [ ] **Contradiction detection & demotion.** For functional predicates, detect
-  when new `(s, p, o₂)` conflicts with existing `(s, p, o₁)`. Reduce
-  confidence of both triples; demote if below threshold. Create
-  `pgc:ConflictRecord`.
 
 **Exit criterion:** entity duplication rate across a 10-document corpus is
 < 1.15x. Auto-expanded few-shot bank has ≥ 8 examples after two full ingest
-cycles. `riverbank benchmark` CI step runs in under 60 seconds and catches
-a deliberately degraded prompt.
+cycles. Contradiction detection flags at least one functional predicate conflict
+in a test run. Tentative cleanup auto-runs and archives stale triples without
+manual intervention. `riverbank benchmark` CI step catches a deliberately
+degraded prompt.
 
 ---
 
@@ -591,10 +634,6 @@ grammar-constrained output for local models.
   `owl:inverseOf`, `rdfs:subClassOf` transitivity, domain/range type
   assertions, `owl:TransitiveProperty`. Results written to `graph/inferred`
   — never contaminates the asserted evidence base.
-- [ ] **TTL-based tentative cleanup.** Track `first_seen` timestamp for
-  tentative triples. `riverbank gc-tentative --older-than 30d` archives stale
-  entries. Optional auto-run after each ingest.
-
 **Exit criterion:** constrained decoding eliminates JSON parse errors in
 Ollama CI tests. Semantic chunking produces fewer orphan triples than
 heading-based fragmentation on a test corpus. OWL 2 RL closure at least
@@ -727,15 +766,18 @@ deduplication via embedding similarity, and self-critique verification that
 quarantines low-confidence hallucinations. These are foundational capabilities
 that all subsequent quality work builds on.
 
-v0.12.0 is the extraction quality turning point. The core insight is that
-permissive extraction (extract broadly, including implied facts) combined with
-ontology-grounded constraints (extract only allowed predicates and classes)
-produces dramatically more signal without proportionally more noise. Per-triple
-confidence routing into a `graph/tentative` named graph preserves low-confidence
-facts that would otherwise be lost, and noisy-OR consolidation provides a
-mechanism for tentative triples to earn promotion to trusted status over time.
-For small corpora, the primary benefit is higher single-pass recall — most facts
-appear in exactly one fragment, so capturing them on the first pass is critical.
+v0.12.0 is the extraction quality turning point. Two insights from the research
+underpinning this release: first, LLM confidence scores are not probabilities
+— they reflect how "explicitly stated" something sounds, not how likely it is
+to be true. Models systematically over-score hallucinations and under-score
+true implied facts. The four-tier extraction prompt (EXPLICIT/STRONG/IMPLIED/WEAK)
+corrects this by treating confidence as a routing signal rather than a truth
+claim. Second, permissive extraction and ontology grounding are codependent:
+permissive extraction without vocabulary constraints floods the tentative graph
+with noise; ontology constraints without permissive extraction still silently
+discards implied facts. They must ship together. For small corpora, the benefit
+is immediate — Phase A (permissive prompt + per-triple routing) alone delivers
+higher single-pass recall before any accumulation mechanism is in place.
 
 v0.13.0 makes the entity vocabulary self-improving. Incremental entity linking
 ensures that document N knows about entities discovered in documents 1 through
