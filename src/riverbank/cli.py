@@ -3269,3 +3269,250 @@ def build_knowledge_context(
         rprint("[yellow]No matching entities found — context block is empty.[/yellow]")
 
 
+# ---------------------------------------------------------------------------
+# Structural improvements & reasoning (v0.14.0)
+# ---------------------------------------------------------------------------
+
+
+@app.command("validate-shapes")
+def validate_shapes(
+    profile_name: str = typer.Option(
+        ..., "--profile", "-p",
+        help="Profile name or path to YAML file",
+    ),
+    graph: str = typer.Option(
+        "http://riverbank.example/graph/trusted",
+        "--graph",
+        help="Named graph IRI to validate",
+    ),
+    shapes: str = typer.Option(
+        "",
+        "--shapes",
+        help="Path to SHACL shapes Turtle file (default: ontology/pgc-shapes.ttl)",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Report violations but do not write confidence updates",
+    ),
+) -> None:
+    """Validate a named graph against SHACL shapes and report violations.
+
+    Loads the named graph from pg_ripple, validates it against the shapes
+    graph, and prints a violation report.  Optionally reduces the confidence
+    of violating triples when ``shacl_validation.reduce_confidence: true`` is
+    set in the profile.
+
+    Requires: ``pip install 'riverbank[reasoning]'``
+
+    Example::
+
+        riverbank validate-shapes --profile docs-policy-v1 --graph http://riverbank.example/graph/trusted
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.config import get_settings  # noqa: PLC0415
+    from riverbank.pipeline import CompilerProfile  # noqa: PLC0415
+    from riverbank.postprocessors.shacl_validator import ShaclValidator  # noqa: PLC0415
+
+    settings = get_settings()
+
+    profile_path = Path(profile_name)
+    if profile_path.exists() and profile_path.suffix in {".yaml", ".yml"}:
+        profile = CompilerProfile.from_yaml(profile_path)
+    else:
+        profile = CompilerProfile(name=profile_name)
+
+    shapes_path = shapes if shapes else None
+    validator = ShaclValidator(
+        shapes_path=shapes_path,
+        reduce_confidence=getattr(profile, "shacl_validation", {}).get("reduce_confidence", False),
+        confidence_penalty=float(
+            getattr(profile, "shacl_validation", {}).get("confidence_penalty", 0.15)
+        ),
+    )
+
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            report = validator.validate(conn, graph, dry_run=dry_run)
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]Failed to validate graph: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    rprint(
+        f"[bold]riverbank validate-shapes[/bold]  "
+        f"profile={profile.name!r}  graph={graph!r}"
+    )
+    rprint(f"  Shapes file: {report.shapes_path}")
+    rprint(f"  Conforms: {'[green]Yes[/green]' if report.conforms else '[red]No[/red]'}")
+    rprint(f"  Violations: {len(report.violations)}")
+
+    if report.violations:
+        table = Table(
+            title="SHACL Violations",
+            show_header=True,
+            header_style="bold red",
+        )
+        table.add_column("Focus Node")
+        table.add_column("Path")
+        table.add_column("Message")
+        table.add_column("Severity")
+        for v in report.violations[:50]:   # cap display at 50
+            table.add_row(
+                v.focus_node[:60],
+                v.result_path[:40],
+                v.message[:80],
+                v.severity,
+            )
+        rprint(table)
+
+    if not report.conforms:
+        rprint(f"\n[red bold]{len(report.violations)} violation(s) found in <{graph}>[/red bold]")
+        raise typer.Exit(code=1)
+    else:
+        rprint(f"\n[green bold]Graph conforms to shapes ✓[/green bold]")
+
+
+@app.command("run-construct-rules")
+def run_construct_rules(
+    profile_name: str = typer.Option(
+        ..., "--profile", "-p",
+        help="Profile name or path to YAML file",
+    ),
+    graph: str = typer.Option(
+        "http://riverbank.example/graph/trusted",
+        "--graph",
+        help="Named graph IRI to run rules against",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Execute queries but do not write inferred triples",
+    ),
+) -> None:
+    """Execute SPARQL CONSTRUCT rules and write inferred triples to graph/inferred.
+
+    Reads CONSTRUCT rules from the profile's ``construct_rules`` list and runs
+    each query against the named graph, writing results to
+    ``<http://riverbank.example/graph/inferred>``.
+
+    Example::
+
+        riverbank run-construct-rules --profile docs-policy-v1
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.config import get_settings  # noqa: PLC0415
+    from riverbank.inference import ConstructRulesEngine  # noqa: PLC0415
+    from riverbank.pipeline import CompilerProfile  # noqa: PLC0415
+
+    settings = get_settings()
+
+    profile_path = Path(profile_name)
+    if profile_path.exists() and profile_path.suffix in {".yaml", ".yml"}:
+        profile = CompilerProfile.from_yaml(profile_path)
+    else:
+        profile = CompilerProfile(name=profile_name)
+
+    rules = getattr(profile, "construct_rules", [])
+    if not rules:
+        rprint("[yellow]No construct_rules defined in this profile.[/yellow]")
+        raise typer.Exit(code=0)
+
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            result = ConstructRulesEngine().run(conn, graph, rules, dry_run=dry_run)
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]Failed to run construct rules: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    rprint(
+        f"[bold]riverbank run-construct-rules[/bold]  "
+        f"profile={profile.name!r}  graph={graph!r}  dry_run={dry_run}"
+    )
+    rprint(f"  Rules executed: {result.rules_executed}")
+    rprint(f"  Rules failed:   {result.rules_failed}")
+    rprint(f"  Triples inferred: [green]{result.triples_inferred}[/green]")
+    rprint(f"  Written to: <{result.inferred_graph}>")
+    if dry_run:
+        rprint("\n[yellow](dry-run — no changes written)[/yellow]")
+
+
+@app.command("run-owl-rl")
+def run_owl_rl(
+    profile_name: str = typer.Option(
+        ..., "--profile", "-p",
+        help="Profile name or path to YAML file",
+    ),
+    graph: str = typer.Option(
+        "http://riverbank.example/graph/trusted",
+        "--graph",
+        help="Named graph IRI to reason over",
+    ),
+    max_triples: int = typer.Option(
+        5000, "--max-triples",
+        help="Cap on inferred triples (0 = unlimited)",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Compute the closure but do not write inferred triples",
+    ),
+) -> None:
+    """Apply OWL 2 RL forward-chaining rules and write inferred triples.
+
+    Loads the named graph into an in-memory rdflib Graph, applies owlrl OWL 2
+    RL deductive closure (owl:inverseOf, rdfs:subClassOf transitivity,
+    domain/range type assertions, owl:TransitiveProperty), then writes newly
+    derived triples to ``<http://riverbank.example/graph/inferred>``.
+
+    Requires: ``pip install 'riverbank[reasoning]'``
+
+    Example::
+
+        riverbank run-owl-rl --profile docs-policy-v1 --graph http://riverbank.example/graph/trusted
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.config import get_settings  # noqa: PLC0415
+    from riverbank.inference.owl_rl import OwlRlEngine  # noqa: PLC0415
+    from riverbank.pipeline import CompilerProfile  # noqa: PLC0415
+
+    settings = get_settings()
+
+    profile_path = Path(profile_name)
+    if profile_path.exists() and profile_path.suffix in {".yaml", ".yml"}:
+        profile = CompilerProfile.from_yaml(profile_path)
+    else:
+        profile = CompilerProfile(name=profile_name)
+
+    engine_obj = OwlRlEngine(max_triples=max_triples)
+
+    db_engine = create_engine(settings.db.dsn)
+    try:
+        with db_engine.connect() as conn:
+            result = engine_obj.run(conn, graph, dry_run=dry_run)
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]Failed to run OWL 2 RL: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    rprint(
+        f"[bold]riverbank run-owl-rl[/bold]  "
+        f"profile={profile.name!r}  graph={graph!r}  dry_run={dry_run}"
+    )
+    rprint(f"  Triples before:  {result.triples_before}")
+    rprint(f"  Triples after:   {result.triples_after}")
+    rprint(f"  Triples inferred: [green]{result.triples_inferred}[/green]")
+    rprint(f"  Triples written: {result.triples_written}")
+    if result.triples_capped:
+        rprint(f"  [yellow]Capped: {result.triples_capped} triples skipped[/yellow]")
+    rprint(f"  Written to: <{result.inferred_graph}>")
+    if dry_run:
+        rprint("\n[yellow](dry-run — no changes written)[/yellow]")
+
+

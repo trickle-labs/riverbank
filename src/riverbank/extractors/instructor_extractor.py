@@ -332,6 +332,15 @@ class InstructorExtractor:
                 return ev.char_start, ev.char_end, ev.excerpt, ev.page_number
 
         # --- build provider-specific instructor client ---
+        # v0.14.0: constrained decoding — for Ollama backends, use the `format`
+        # parameter to pass a JSON Schema directly to the model, forcing grammar-
+        # constrained decode-time conformance.  This eliminates JSON parse errors
+        # at the source rather than in post-processing.
+        constrained_decoding: bool = (
+            provider == "ollama"
+            and getattr(profile, "constrained_decoding", False)
+        )
+
         if provider == "anthropic":
             try:
                 import anthropic as anthropic_sdk  # noqa: PLC0415
@@ -355,16 +364,51 @@ class InstructorExtractor:
             mode_kwargs = {}
         else:
             # ollama, openai, vllm, azure-openai — all OpenAI-compatible
-            mode = (
-                instructor.Mode.MD_JSON
-                if provider in ("ollama", "vllm")
-                else instructor.Mode.JSON
-            )
+            if constrained_decoding:
+                # v0.14.0: Ollama structured output mode — pass JSON schema via
+                # extra_body["format"].  This forces grammar-constrained decoding
+                # at the model level, eliminating JSON parse failures entirely.
+                mode = instructor.Mode.JSON
+            else:
+                mode = (
+                    instructor.Mode.MD_JSON
+                    if provider in ("ollama", "vllm")
+                    else instructor.Mode.JSON
+                )
             client = instructor.from_openai(
                 OpenAI(base_url=api_base, api_key=api_key),
                 mode=mode,
             )
             mode_kwargs = {}
+
+        # Build extra_body for Ollama (keep-alive + optional JSON schema format)
+        if provider == "ollama":
+            ollama_extra: dict = {"keep_alive": "5m"}
+            if constrained_decoding:
+                # Build JSON Schema for the list-of-triples response type.
+                # Ollama >= 0.5 accepts a JSON Schema object in the `format` field.
+                try:
+                    import json as _json  # noqa: PLC0415
+                    triple_schema = _TripleIn.model_json_schema()
+                    list_schema = {
+                        "type": "array",
+                        "items": triple_schema,
+                        "title": "ExtractedTriples",
+                    }
+                    ollama_extra["format"] = list_schema
+                    logger.debug(
+                        "instructor_extractor: constrained decoding enabled "
+                        "(Ollama JSON schema: %d chars)",
+                        len(_json.dumps(list_schema)),
+                    )
+                except Exception as _cd_exc:  # noqa: BLE001
+                    logger.debug(
+                        "instructor_extractor: could not build JSON schema for "
+                        "constrained decoding — falling back to MD_JSON (%s)", _cd_exc
+                    )
+            extra_body_kwargs: dict = {"extra_body": ollama_extra}
+        else:
+            extra_body_kwargs = {}
 
         response, completion = client.chat.completions.create_with_completion(
             model=model_name,
@@ -373,8 +417,7 @@ class InstructorExtractor:
                 {"role": "user", "content": text},
             ],
             response_model=list[_TripleIn],
-            # §3.8 Ollama keep-alive: reuse KV cache across calls with identical system prompts
-            **({"extra_body": {"keep_alive": "5m"}} if provider == "ollama" else {}),
+            **extra_body_kwargs,
             **mode_kwargs,
         )
 

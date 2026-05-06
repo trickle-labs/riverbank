@@ -1,0 +1,97 @@
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix pgc:   <https://pg-ripple.org/compile#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+
+# ─── SHACL shapes for the pgc: compiler vocabulary ───────────────────────────
+#
+# These shapes are used by `riverbank validate-shapes` to validate triples
+# written to the named graph.  Violations are reported as diagnostics; triples
+# with confidence below 0.75 that violate a sh:MaxCountConstraintComponent
+# may have their confidence reduced.
+
+# ---------------------------------------------------------------------------
+# pgc:Synthesis shapes
+# ---------------------------------------------------------------------------
+
+pgc:SynthesisShape
+    a                   sh:NodeShape ;
+    sh:targetClass      pgc:Synthesis ;
+    rdfs:comment        "Compiled synthesis artefact must carry a confidence score." ;
+
+    sh:property [
+        sh:path         pgc:confidence ;
+        sh:datatype     xsd:decimal ;
+        sh:minCount     1 ;
+        sh:maxCount     1 ;
+        sh:minInclusive 0.0 ;
+        sh:maxInclusive 1.0 ;
+        sh:message      "pgc:confidence must be a decimal in [0, 1]." ;
+    ] ;
+
+    sh:property [
+        sh:path         pgc:sourceFragment ;
+        sh:minCount     1 ;
+        sh:message      "Every Synthesis must cite at least one source fragment." ;
+    ] .
+
+
+# ---------------------------------------------------------------------------
+# pgc:Source shapes
+# ---------------------------------------------------------------------------
+
+pgc:SourceShape
+    a                   sh:NodeShape ;
+    sh:targetClass      pgc:Source ;
+    rdfs:comment        "A registered source must have exactly one label." ;
+
+    sh:property [
+        sh:path         rdfs:label ;
+        sh:minCount     1 ;
+        sh:maxCount     1 ;
+        sh:datatype     xsd:string ;
+        sh:message      "pgc:Source must have exactly one rdfs:label string." ;
+    ] .
+
+
+# ---------------------------------------------------------------------------
+# pgc:Fragment shapes
+# ---------------------------------------------------------------------------
+
+pgc:FragmentShape
+    a                   sh:NodeShape ;
+    sh:targetClass      pgc:Fragment ;
+    rdfs:comment        "Every Fragment must belong to exactly one Source." ;
+
+    sh:property [
+        sh:path         pgc:fromSource ;
+        sh:minCount     1 ;
+        sh:maxCount     1 ;
+        sh:message      "pgc:Fragment must link to exactly one pgc:fromSource." ;
+    ] .
+
+
+# ---------------------------------------------------------------------------
+# pgc:Run shapes
+# ---------------------------------------------------------------------------
+
+pgc:RunShape
+    a                   sh:NodeShape ;
+    sh:targetClass      pgc:Run ;
+    rdfs:comment        "A compile run must reference a profile and a timestamp." ;
+
+    sh:property [
+        sh:path         pgc:usedProfile ;
+        sh:minCount     1 ;
+        sh:maxCount     1 ;
+        sh:message      "pgc:Run must reference exactly one pgc:usedProfile." ;
+    ] ;
+
+    sh:property [
+        sh:path         pgc:startedAt ;
+        sh:minCount     1 ;
+        sh:maxCount     1 ;
+        sh:message      "pgc:Run must have exactly one pgc:startedAt timestamp." ;
+    ] .

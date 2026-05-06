@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "riverbank"
-version = "0.13.1"
+version = "0.14.0"
 description = "Compiled knowledge-base worker for pg-ripple, pg-trickle, and pg-tide"
 readme = "README.md"
 license = { text = "MIT" }
@@ -59,6 +59,12 @@ docs = [
     "mkdocs-section-index>=0.3",
     "mike>=2.1",
 ]
+# v0.14.0: reasoning extras — SHACL validation, OWL 2 RL, RDF graph support
+reasoning = [
+    "pyshacl>=0.25",
+    "owlrl>=6.0",
+    "rdflib>=7.0",
+]
 # v0.10.0: optional model-backend extras
 ollama = [
     "ollama>=0.2",
@@ -97,6 +103,7 @@ docling = "riverbank.parsers.docling:DoclingParser"
 
 [project.entry-points."riverbank.fragmenters"]
 heading = "riverbank.fragmenters.heading:HeadingFragmenter"
+semantic = "riverbank.fragmenters.semantic:SemanticFragmenter"
 
 [project.entry-points."riverbank.extractors"]
 noop = "riverbank.extractors.noop:NoOpExtractor"

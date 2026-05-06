@@ -76,7 +76,7 @@
 
 | Version | Description | Status | Size |
 |---|---|---|---|
-| v0.14.0 | Structural improvements — constrained decoding, semantic chunking, SHACL shape validation, SPARQL CONSTRUCT rules, OWL 2 RL inference | Planned | Large |
+| v0.14.0 | Structural improvements — constrained decoding, semantic chunking, SHACL shape validation, SPARQL CONSTRUCT rules, OWL 2 RL inference | **Done** | Large |
 | v1.0.0 | Stable — full API stability guarantee, signed artifacts, Helm chart stability, SLOs in CI | Planned | Medium |
 
 ---
@@ -780,21 +780,21 @@ entity IRI consistency across documents.
 Goal: improve fragment quality, add deductive reasoning, and support
 grammar-constrained output for local models.
 
-- [ ] **Constrained decoding.** For Ollama backends, use grammar-constrained
+- [x] **Constrained decoding.** For Ollama backends, use grammar-constrained
   decoding via the `format` parameter to force JSON schema conformance at
   decode time. Eliminates 100% of JSON parsing failures for local models.
-- [ ] **Semantic chunking.** Embedding-based boundary detection: embed each
+- [x] **Semantic chunking.** Embedding-based boundary detection: embed each
   sentence, split where cosine similarity drops below a threshold (topic
   transition). Fragments align with semantic units rather than fixed-size
   or heading-based boundaries.
-- [ ] **SHACL shape validation.** Define a `pgc-shapes.ttl` shapes graph
+- [x] **SHACL shape validation.** Define a `pgc-shapes.ttl` shapes graph
   alongside the ontology. After ingest, validate the named graph via pyshacl.
   Report violations as diagnostics; optionally reduce confidence of violating
   triples. CLI: `riverbank validate-shapes --graph --shapes`.
-- [ ] **SPARQL CONSTRUCT rules.** Profile-specific inference rules defined as
+- [x] **SPARQL CONSTRUCT rules.** Profile-specific inference rules defined as
   SPARQL CONSTRUCT queries. Run after ingest, writing results to
   `graph/inferred`. Transparent, auditable, domain-specific reasoning.
-- [ ] **OWL 2 RL forward-chaining.** Lightweight deductive closure via owlrl:
+- [x] **OWL 2 RL forward-chaining.** Lightweight deductive closure via owlrl:
   `owl:inverseOf`, `rdfs:subClassOf` transitivity, domain/range type
   assertions, `owl:TransitiveProperty`. Results written to `graph/inferred`
   — never contaminates the asserted evidence base.

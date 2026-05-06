@@ -80,6 +80,16 @@ class CompilerProfile:
     tentative_ttl_days: int = 30
     # v0.13.1: Knowledge-prefix adapter — inject existing graph context at extraction time
     knowledge_prefix: dict = field(default_factory=dict)
+    # v0.14.0: Constrained decoding — force JSON schema conformance for Ollama backends
+    constrained_decoding: bool = False
+    # v0.14.0: Semantic chunking — embedding-based boundary detection
+    semantic_chunking: dict = field(default_factory=dict)
+    # v0.14.0: SPARQL CONSTRUCT inference rules (list of SPARQL CONSTRUCT query strings)
+    construct_rules: list = field(default_factory=list)
+    # v0.14.0: SHACL shape validation
+    shacl_validation: dict = field(default_factory=dict)
+    # v0.14.0: OWL 2 RL forward-chaining
+    owl_rl: dict = field(default_factory=dict)
     # id is set after the profile is registered in the catalog DB
     id: Optional[int] = None
 
