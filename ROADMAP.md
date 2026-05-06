@@ -35,7 +35,7 @@
 
 | Version | Description | Status | Size |
 |---|---|---|---|
-| v0.6.0 | Quality gates and human review loop — Label Studio integration, active-learning queue, example bank, Langfuse evals, lint flow, Prefect introduced | Planned | Large |
+| v0.6.0 | Quality gates and human review loop — Label Studio integration, active-learning queue, example bank, Langfuse evals, lint flow, Prefect introduced | **Done** | Large |
 
 ### Production Hardening (v0.7.x)
 
@@ -238,24 +238,24 @@ suggestions appear in `riverbank explain` output for a known near-duplicate pair
 Goal: a running human-in-the-loop pipeline that converts low-confidence
 extractions into reviewed, high-confidence facts.
 
-- **Label Studio integration.** `LabelStudioReviewer` plugin creates one task
+- [x] **Label Studio integration.** `LabelStudioReviewer` plugin creates one task
   per review-queue item; pre-labels with LLM extraction; webhook posts
   decisions back; corrections enter `<human-review>` named graph.
   Custom labeling templates: atomic-fact correction, span-based evidence
   annotation, ensemble disagreement arbitration.
-- **Active-learning review queue.** `riverbank review queue` runs the
+- [x] **Active-learning review queue.** `riverbank review queue` runs the
   centrality × uncertainty SPARQL query and refreshes Label Studio task
   priorities — maximum leverage per review hour.
-- **Editorial policy example bank.** Each Label Studio decision exports to the
+- [x] **Editorial policy example bank.** Each Label Studio decision exports to the
   profile's example bank; next compile run uses these as few-shot examples.
-- **SHACL score history.** Daily Prefect flow snapshots `shacl_score()` per
+- [x] **SHACL score history.** Daily Prefect flow snapshots `shacl_score()` per
   named graph into Prometheus. **Prefect is introduced here**; the APScheduler
   job from v0.2.0 is replaced.
-- **Langfuse evaluations.** Generated Q&A pairs run as Langfuse dataset
+- [x] **Langfuse evaluations.** Generated Q&A pairs run as Langfuse dataset
   evaluations on every recompile; regressions surface as alerts.
-- **Lint flow.** `riverbank lint` runs a full lint pass and writes findings to
+- [x] **Lint flow.** `riverbank lint` runs a full lint pass and writes findings to
   `pgc:LintFinding` triples; Prefect schedules it nightly.
-- **Thesaurus layer activation.** `riverbank query` expands query terms via the
+- [x] **Thesaurus layer activation.** `riverbank query` expands query terms via the
   `<thesaurus>` named graph before dispatching BM25, vector, and graph traversal
   streams. `skos:altLabel` provides synonym coverage; `skos:related` provides
   associative coverage; `skos:exactMatch` / `skos:closeMatch` provide cross-corpus

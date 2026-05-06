@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "riverbank"
-version = "0.5.0"
+version = "0.6.0"
 description = "Compiled knowledge-base worker for pg-ripple, pg-trickle, and pg-tide"
 readme = "README.md"
 license = { text = "MIT" }
@@ -34,6 +34,10 @@ ingest = [
     "sentence-transformers>=3.1",
     "rapidfuzz>=3.9",
     "tenacity>=8.3",
+]
+# Human review loop — Label Studio integration
+review = [
+    "label-studio-sdk>=1.0",
 ]
 # Workflow orchestration — added in Phase 2
 orchestration = [
@@ -70,6 +74,7 @@ filesystem = "riverbank.connectors.fs:FilesystemConnector"
 
 [project.entry-points."riverbank.reviewers"]
 file = "riverbank.reviewers.file:FileReviewer"
+label_studio = "riverbank.reviewers.label_studio:LabelStudioReviewer"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/riverbank"]

@@ -215,23 +215,38 @@ def query(
     output_format: str = typer.Option(
         "table", "--format", "-f", help="Output format: table | json | csv"
     ),
+    expand: str | None = typer.Option(
+        None, "--expand", "-e",
+        help="Comma-separated seed terms to expand via the <thesaurus> named graph before querying",
+    ),
 ) -> None:
     """Execute a SPARQL SELECT or ASK query against the compiled knowledge graph.
 
     Routes the query through pg_ripple.sparql_query().  Falls back with a
     warning when pg_ripple is not installed.
+
+    With ``--expand term1,term2`` the terms are looked up in the
+    ``<thesaurus>`` named graph (``skos:altLabel``, ``skos:related``,
+    ``skos:exactMatch``, ``skos:closeMatch``) and the expanded synonym set is
+    logged before the query is dispatched.
     """
     import json as _json  # noqa: PLC0415
 
     from sqlalchemy import create_engine  # noqa: PLC0415
 
-    from riverbank.catalog.graph import sparql_query  # noqa: PLC0415
+    from riverbank.catalog.graph import sparql_query, sparql_query_with_thesaurus  # noqa: PLC0415
 
     settings = get_settings()
     engine = create_engine(settings.db.dsn)
     try:
         with engine.connect() as conn:
-            rows = sparql_query(conn, sparql, named_graph=named_graph)
+            if expand:
+                seed_terms = [t.strip() for t in expand.split(",") if t.strip()]
+                rows = sparql_query_with_thesaurus(
+                    conn, sparql, named_graph=named_graph, expand_terms=seed_terms
+                )
+            else:
+                rows = sparql_query(conn, sparql, named_graph=named_graph)
     finally:
         engine.dispose()
 
@@ -541,11 +556,50 @@ def lint(
         raise typer.Exit(code=1)
 
     if not shacl_only:
+        # v0.6.0: full lint pass — SHACL + SKOS integrity + pgc:LintFinding triples
+        settings = get_settings()
+        engine = create_engine(settings.db.dsn)
+        try:
+            with engine.connect() as conn:
+                from riverbank.observability import run_full_lint  # noqa: PLC0415
+
+                summary = run_full_lint(conn, named_graph, threshold=threshold)
+                conn.commit()
+        finally:
+            engine.dispose()
+
+        color = "green" if summary["passed"] else "red"
         rprint(
-            "[yellow]Full lint (beyond --shacl-only) is planned for v0.5.0.  "
-            "Pass --shacl-only to run the SHACL quality gate now.[/yellow]"
+            f"[bold]riverbank lint[/bold]  graph={named_graph!r}\n\n"
+            f"  SHACL score: [{color}]{summary['shacl_score']:.4f}[/{color}]  "
+            f"(threshold {threshold:.2f})\n"
+            f"  Findings: {summary['finding_count']}"
         )
-        raise typer.Exit(code=0)
+
+        if summary["findings"]:
+            from rich.table import Table as RichTable  # noqa: PLC0415
+
+            tbl = RichTable(
+                title="Lint findings",
+                show_header=True,
+                header_style="bold red",
+            )
+            tbl.add_column("Subject")
+            tbl.add_column("Type")
+            tbl.add_column("Message")
+            tbl.add_column("Severity")
+            for f in summary["findings"]:
+                tbl.add_row(
+                    f["subject_iri"], f["finding_type"], f["message"], f["severity"]
+                )
+            rprint(tbl)
+
+        if not summary["passed"]:
+            rprint("\n[red bold]Lint FAILED[/red bold]")
+            raise typer.Exit(code=1)
+
+        rprint("\n[green bold]Lint passed[/green bold]")
+        return
 
     settings = get_settings()
     engine = create_engine(settings.db.dsn)
@@ -625,4 +679,218 @@ def explain(
         rprint("\n[bold]Fuzzy match suggestions (owl:sameAs candidates)[/bold]")
         for candidate in sameas_candidates:
             rprint(f"  [cyan]→[/cyan]  {candidate}")
+
+
+# ---------------------------------------------------------------------------
+# review sub-app  (v0.6.0)
+# ---------------------------------------------------------------------------
+
+review_app = typer.Typer(
+    name="review",
+    help="Human review loop — Label Studio queue management.",
+    no_args_is_help=True,
+)
+app.add_typer(review_app)
+
+
+@review_app.command("queue")
+def review_queue(
+    named_graph: str = typer.Option(
+        "http://riverbank.example/graph/trusted",
+        "--graph", "-g",
+        help="Named graph to scan for low-confidence extractions",
+    ),
+    limit: int = typer.Option(
+        50, "--limit", "-n",
+        help="Maximum number of items to add to the review queue",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Print candidate items without submitting to Label Studio",
+    ),
+    label_studio_url: str = typer.Option(
+        "http://localhost:8080", "--ls-url",
+        help="Label Studio URL",
+    ),
+    label_studio_key: str = typer.Option(
+        "", "--ls-key",
+        help="Label Studio API key",
+    ),
+    project_id: int = typer.Option(
+        0, "--ls-project",
+        help="Label Studio project ID (0 = auto-create)",
+    ),
+) -> None:
+    """Run the active-learning review queue.
+
+    Queries the knowledge graph for the *limit* extractions with the lowest
+    confidence scores (centrality × uncertainty ranking), submits each as a
+    Label Studio task, and refreshes task priorities.
+
+    Use ``--dry-run`` to inspect candidates without touching Label Studio.
+
+    Example::
+
+        riverbank review queue --graph http://riverbank.example/graph/trusted --limit 20
+    """
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.catalog.graph import sparql_query  # noqa: PLC0415
+    from riverbank.reviewers.label_studio import LabelStudioReviewer, ReviewTask  # noqa: PLC0415
+
+    # SPARQL query: centrality × uncertainty ranking
+    # Selects triples whose confidence is below 0.85, ordered lowest-first.
+    queue_sparql = (
+        "SELECT ?subject ?predicate ?object ?confidence ?fragment WHERE { "
+        "  GRAPH <" + named_graph + "> { "
+        "    ?subject ?predicate ?object . "
+        "    ?subject <http://riverbank.example/ns/confidence> ?confidence . "
+        "    OPTIONAL { ?subject <http://www.w3.org/ns/prov#wasDerivedFrom> ?fragment } "
+        "    FILTER (?confidence < 0.85) "
+        "  } "
+        "} ORDER BY ?confidence LIMIT " + str(limit)
+    )
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            candidates = sparql_query(conn, queue_sparql, named_graph=named_graph)
+    finally:
+        engine.dispose()
+
+    if not candidates:
+        rprint("[dim]No low-confidence extractions found in review queue.[/dim]")
+        return
+
+    rprint(
+        f"[bold]riverbank review queue[/bold]  graph={named_graph!r}  "
+        f"candidates={len(candidates)}\n"
+    )
+
+    if dry_run:
+        table = Table(
+            title="Review queue candidates (dry-run)",
+            show_header=True,
+            header_style="bold cyan",
+        )
+        table.add_column("Subject")
+        table.add_column("Predicate")
+        table.add_column("Object")
+        table.add_column("Confidence", justify="right")
+        for row in candidates:
+            table.add_row(
+                str(row.get("subject", "")),
+                str(row.get("predicate", "")),
+                str(row.get("object", "")),
+                str(row.get("confidence", "")),
+            )
+        rprint(table)
+        rprint("[dim]dry-run — no tasks submitted to Label Studio[/dim]")
+        return
+
+    reviewer = LabelStudioReviewer(
+        url=label_studio_url,
+        api_key=label_studio_key,
+        project_id=project_id if project_id > 0 else None,
+    )
+
+    submitted = 0
+    for row in candidates:
+        task = ReviewTask(
+            fragment_iri=str(row.get("fragment", "")),
+            artifact_iri=str(row.get("subject", "")),
+            subject=str(row.get("subject", "")),
+            predicate=str(row.get("predicate", "")),
+            object_value=str(row.get("object", "")),
+            confidence=float(row.get("confidence", 0.0)),
+            priority=1.0 - float(row.get("confidence", 0.5)),
+        )
+        task_id = reviewer.enqueue(task)
+        if task_id is not None:
+            submitted += 1
+
+    rprint(
+        f"[green]✓[/green]  {submitted}/{len(candidates)} tasks submitted to Label Studio"
+    )
+
+
+@review_app.command("collect")
+def review_collect(
+    profile_name: str = typer.Option(
+        "default", "--profile", "-p",
+        help="Profile name (used to resolve the example bank path)",
+    ),
+    label_studio_url: str = typer.Option(
+        "http://localhost:8080", "--ls-url",
+        help="Label Studio URL",
+    ),
+    label_studio_key: str = typer.Option(
+        "", "--ls-key",
+        help="Label Studio API key",
+    ),
+    project_id: int = typer.Option(
+        0, "--ls-project",
+        help="Label Studio project ID",
+    ),
+    write_to_graph: bool = typer.Option(
+        True, "--write/--no-write",
+        help="Write accepted/corrected decisions to the <human-review> named graph",
+    ),
+) -> None:
+    """Collect completed review decisions from Label Studio.
+
+    Fetches annotated tasks, writes corrections into the ``<human-review>``
+    named graph, and exports each accepted/corrected decision to the profile's
+    few-shot example bank.
+
+    Example::
+
+        riverbank review collect --profile docs-policy-v1
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.example_bank import bank_path_for_profile, export_decision_to_bank  # noqa: PLC0415
+    from riverbank.reviewers.label_studio import LabelStudioReviewer  # noqa: PLC0415
+
+    reviewer = LabelStudioReviewer(
+        url=label_studio_url,
+        api_key=label_studio_key,
+        project_id=project_id if project_id > 0 else None,
+    )
+
+    bank_path = bank_path_for_profile(profile_name)
+    accepted = corrected = rejected = bank_size = 0
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            for decision in reviewer.collect():
+                if decision.accepted:
+                    accepted += 1
+                elif decision.corrected:
+                    corrected += 1
+                else:
+                    rejected += 1
+
+                if write_to_graph:
+                    reviewer.write_decision_to_graph(conn, decision)
+
+                new_size = export_decision_to_bank(decision, bank_path)
+                if new_size:
+                    bank_size = new_size
+
+            if write_to_graph:
+                conn.commit()
+    finally:
+        engine.dispose()
+
+    rprint(
+        f"[bold]riverbank review collect[/bold]  "
+        f"accepted={accepted}  corrected={corrected}  rejected={rejected}\n"
+        f"  example bank: {bank_path}  ({bank_size} entries)"
+    )
 

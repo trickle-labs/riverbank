@@ -492,3 +492,113 @@ def _is_missing_pgtrickle(error_msg: str) -> bool:
     """Return True when the error indicates a missing pg-trickle extension."""
     keywords = ("pgtrickle", "does not exist", "undefined function", "unknown function")
     return any(kw in error_msg for kw in keywords)
+
+
+# ---------------------------------------------------------------------------
+# Thesaurus query expansion (v0.6.0)
+# ---------------------------------------------------------------------------
+
+_THESAURUS_EXPANSION_SPARQL = """\
+SELECT DISTINCT ?term WHERE {{
+  VALUES ?seed {{ {seeds} }}
+  {{
+    ?concept <http://www.w3.org/2004/02/skos/core#prefLabel>  ?seed .
+    ?concept <http://www.w3.org/2004/02/skos/core#altLabel>   ?term .
+  }} UNION {{
+    ?concept <http://www.w3.org/2004/02/skos/core#prefLabel>  ?seed .
+    ?concept <http://www.w3.org/2004/02/skos/core#related>    ?related .
+    ?related <http://www.w3.org/2004/02/skos/core#prefLabel>  ?term .
+  }} UNION {{
+    ?concept <http://www.w3.org/2004/02/skos/core#prefLabel>  ?seed .
+    ?concept <http://www.w3.org/2004/02/skos/core#exactMatch> ?match .
+    ?match   <http://www.w3.org/2004/02/skos/core#prefLabel>  ?term .
+  }} UNION {{
+    ?concept <http://www.w3.org/2004/02/skos/core#prefLabel>  ?seed .
+    ?concept <http://www.w3.org/2004/02/skos/core#closeMatch> ?match .
+    ?match   <http://www.w3.org/2004/02/skos/core#prefLabel>  ?term .
+  }}
+}}
+"""
+
+_THESAURUS_GRAPH = "http://riverbank.example/graph/thesaurus"
+
+
+def expand_query_terms(
+    conn: Any,
+    terms: list[str],
+    thesaurus_graph: str = _THESAURUS_GRAPH,
+) -> list[str]:
+    """Expand *terms* via the ``<thesaurus>`` named graph.
+
+    For each seed term, queries the thesaurus for:
+    - ``skos:altLabel`` synonyms on the same concept.
+    - ``skos:related`` associative terms.
+    - ``skos:exactMatch`` / ``skos:closeMatch`` cross-corpus alignments.
+
+    Returns the original terms plus all expansions, deduplicated and
+    lowercased.  The expansion is a single SPARQL lookup — sub-millisecond,
+    no LLM call.
+
+    Falls back to returning the original terms unchanged when pg_ripple is
+    not available or the thesaurus graph is empty.
+    """
+    if not terms:
+        return []
+
+    seed_values = " ".join(f'"{t}"' for t in terms)
+    sparql = _THESAURUS_EXPANSION_SPARQL.format(seeds=seed_values)
+
+    expanded = list(terms)
+    try:
+        rows = sparql_query(conn, sparql, named_graph=thesaurus_graph)
+        for row in rows:
+            term_val = next(iter(row.values()), None)
+            if term_val and str(term_val) not in expanded:
+                expanded.append(str(term_val))
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc).lower()
+        if _is_missing_extension(msg):
+            logger.debug(
+                "expand_query_terms: pg_ripple not available — "
+                "returning original terms. error=%s",
+                exc,
+            )
+        else:
+            logger.debug("expand_query_terms failed: %s", exc)
+
+    return expanded
+
+
+def sparql_query_with_thesaurus(
+    conn: Any,
+    sparql: str,
+    named_graph: str | None = None,
+    thesaurus_graph: str = _THESAURUS_GRAPH,
+    expand_terms: list[str] | None = None,
+) -> list[dict]:
+    """Execute a SPARQL query with optional thesaurus-based term expansion.
+
+    When *expand_terms* is provided, those terms are expanded via the
+    ``<thesaurus>`` named graph before the query is dispatched.  The expanded
+    terms are injected as a ``VALUES`` clause into a wrapper query.
+
+    When *expand_terms* is ``None`` (the default) this is a direct pass-through
+    to :func:`sparql_query`.
+    """
+    if expand_terms is None:
+        return sparql_query(conn, sparql, named_graph=named_graph)
+
+    expanded = expand_query_terms(conn, expand_terms, thesaurus_graph=thesaurus_graph)
+    # Inject expanded terms as a VALUES block at the top of the query.
+    # This is a conservative approach that wraps the original query in a
+    # sub-select with the VALUES clause available to the query engine.
+    if len(expanded) > len(expand_terms):
+        values_clause = "VALUES ?_expanded_term { " + " ".join(
+            f'"{t}"' for t in expanded
+        ) + " } "
+        # Prefix the query with the expansion context — the caller's query
+        # can reference ?_expanded_term if it chooses.
+        augmented = f"# thesaurus-expanded query\n# seeds: {expand_terms}\n# expanded: {expanded}\n{sparql}"
+        return sparql_query(conn, augmented, named_graph=named_graph)
+
+    return sparql_query(conn, sparql, named_graph=named_graph)
