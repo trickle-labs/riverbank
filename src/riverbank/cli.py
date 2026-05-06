@@ -1007,6 +1007,412 @@ def explain_conflict(
     rprint(table)
 
 
+# ---------------------------------------------------------------------------
+# tenant sub-app  (v0.9.0)
+# ---------------------------------------------------------------------------
+
+tenant_app = typer.Typer(
+    name="tenant",
+    help="Multi-tenant lifecycle management (RLS activation, create/suspend/delete).",
+    no_args_is_help=True,
+)
+app.add_typer(tenant_app)
+
+
+@tenant_app.command("activate-rls")
+def tenant_activate_rls() -> None:
+    """Enable Row-Level Security on all _riverbank catalog tables.
+
+    Activates the ``tenant_id`` RLS policies scaffolded in v0.4.0 (migration
+    0002).  Safe to call multiple times — idempotent.
+
+    Example::
+
+        riverbank tenant activate-rls
+    """
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.tenants import activate_rls_for_all_tables  # noqa: PLC0415
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            results = activate_rls_for_all_tables(conn)
+            conn.commit()
+    finally:
+        engine.dispose()
+
+    for table, ok in results.items():
+        icon = "[green]✓[/green]" if ok else "[yellow]![/yellow]"
+        rprint(f"  {icon}  _riverbank.{table}")
+
+    if all(results.values()):
+        rprint("\n[green bold]RLS activated on all catalog tables[/green bold]")
+    else:
+        rprint("\n[yellow]Some tables could not be updated — check DB permissions[/yellow]")
+
+
+@tenant_app.command("create")
+def tenant_create(
+    tenant_id: str = typer.Argument(..., help="Unique tenant slug (alphanumeric, hyphens, underscores)"),
+    display_name: str = typer.Option("", "--name", "-n", help="Human-readable name"),
+    label_studio_org: int = typer.Option(0, "--ls-org", help="Label Studio organisation ID"),
+) -> None:
+    """Create a new tenant.
+
+    Example::
+
+        riverbank tenant create acme --name "Acme Corp" --ls-org 42
+    """
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.tenants import Tenant, create_tenant  # noqa: PLC0415
+
+    tenant = Tenant(
+        tenant_id=tenant_id,
+        display_name=display_name or tenant_id,
+        label_studio_org_id=label_studio_org if label_studio_org > 0 else None,
+    )
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            ok = create_tenant(conn, tenant)
+            conn.commit()
+    finally:
+        engine.dispose()
+
+    if ok:
+        rprint(f"[green]✓[/green]  tenant [bold]{tenant_id}[/bold] created")
+    else:
+        rprint(f"[red]Failed to create tenant {tenant_id}[/red]")
+        raise typer.Exit(code=1)
+
+
+@tenant_app.command("suspend")
+def tenant_suspend(
+    tenant_id: str = typer.Argument(..., help="Tenant slug to suspend"),
+) -> None:
+    """Suspend a tenant (all tenant-scoped operations will be blocked by RLS).
+
+    Example::
+
+        riverbank tenant suspend acme
+    """
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.tenants import suspend_tenant  # noqa: PLC0415
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            ok = suspend_tenant(conn, tenant_id)
+            conn.commit()
+    finally:
+        engine.dispose()
+
+    if ok:
+        rprint(f"[yellow]![/yellow]  tenant [bold]{tenant_id}[/bold] suspended")
+    else:
+        rprint(f"[red]Failed to suspend tenant {tenant_id}[/red]")
+        raise typer.Exit(code=1)
+
+
+@tenant_app.command("delete")
+def tenant_delete(
+    tenant_id: str = typer.Argument(..., help="Tenant slug to delete"),
+    gdpr: bool = typer.Option(False, "--gdpr", help="GDPR erasure: also delete all tenant data rows"),
+) -> None:
+    """Delete a tenant (soft-delete by default; --gdpr erases all data rows).
+
+    Example::
+
+        riverbank tenant delete acme
+        riverbank tenant delete acme --gdpr
+    """
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.tenants import delete_tenant  # noqa: PLC0415
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            ok = delete_tenant(conn, tenant_id, gdpr_erasure=gdpr)
+            conn.commit()
+    finally:
+        engine.dispose()
+
+    label = "GDPR-erased" if gdpr else "soft-deleted"
+    if ok:
+        rprint(f"[green]✓[/green]  tenant [bold]{tenant_id}[/bold] {label}")
+    else:
+        rprint(f"[red]Failed to delete tenant {tenant_id}[/red]")
+        raise typer.Exit(code=1)
+
+
+@tenant_app.command("list")
+def tenant_list() -> None:
+    """List all registered tenants.
+
+    Example::
+
+        riverbank tenant list
+    """
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.tenants import list_tenants  # noqa: PLC0415
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            tenants = list_tenants(conn)
+    finally:
+        engine.dispose()
+
+    if not tenants:
+        rprint("[dim]No tenants registered.[/dim]")
+        return
+
+    table = Table(title="Tenants", show_header=True, header_style="bold cyan")
+    table.add_column("ID")
+    table.add_column("Name")
+    table.add_column("Status")
+    table.add_column("LS Org")
+    table.add_column("Graph prefix")
+
+    for t in tenants:
+        status_fmt = (
+            "[green]active[/green]" if t.status.value == "active"
+            else f"[yellow]{t.status.value}[/yellow]"
+        )
+        table.add_row(
+            t.tenant_id,
+            t.display_name,
+            status_fmt,
+            str(t.label_studio_org_id) if t.label_studio_org_id else "—",
+            t.named_graph_prefix,
+        )
+    rprint(table)
+
+
+# ---------------------------------------------------------------------------
+# render command  (v0.9.0)
+# ---------------------------------------------------------------------------
+
+@app.command()
+def render(
+    entity_iri: str = typer.Argument(..., help="IRI of the entity or topic to render"),
+    output_format: str = typer.Option(
+        "markdown", "--format", "-f",
+        help="Output format: markdown | jsonld | html",
+    ),
+    target_dir: str = typer.Option(
+        "docs/", "--target", "-t",
+        help="Directory to write rendered pages into",
+    ),
+    named_graph: str = typer.Option(
+        "http://riverbank.example/graph/trusted",
+        "--graph", "-g",
+        help="Source named graph IRI",
+    ),
+    persist: bool = typer.Option(
+        True, "--persist/--no-persist",
+        help="Write pgc:RenderedPage artifact back to the graph",
+    ),
+) -> None:
+    """Render an entity page from the compiled knowledge graph.
+
+    Fetches all facts about ENTITY_IRI from the named graph and renders them
+    as Markdown (Obsidian/MkDocs), JSON-LD, or HTML.  The output file is
+    written to TARGET_DIR.
+
+    Rendered pages are stored as ``pgc:RenderedPage`` artifacts with
+    dependency edges to their source facts so that stale pages can be
+    detected when facts change.
+
+    Example::
+
+        riverbank render http://example.org/entity/Acme --format markdown --target docs/
+        riverbank render http://example.org/topic/HA --format jsonld
+    """
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.rendering import (  # noqa: PLC0415
+        PageType,
+        RenderFormat,
+        RenderRequest,
+        persist_rendered_page,
+        render_page,
+    )
+
+    fmt_map = {
+        "markdown": RenderFormat.MARKDOWN,
+        "jsonld": RenderFormat.JSONLD,
+        "html": RenderFormat.HTML,
+    }
+    fmt = fmt_map.get(output_format.lower())
+    if fmt is None:
+        rprint(f"[red]Unknown format: {output_format!r}. Use markdown, jsonld, or html.[/red]")
+        raise typer.Exit(code=1)
+
+    ext_map = {
+        RenderFormat.MARKDOWN: ".md",
+        RenderFormat.JSONLD: ".jsonld",
+        RenderFormat.HTML: ".html",
+    }
+    from riverbank.rendering import _slug  # noqa: PLC0415
+
+    output_path = f"{target_dir.rstrip('/')}/{_slug(entity_iri)}{ext_map[fmt]}"
+
+    request = RenderRequest(
+        entity_iri=entity_iri,
+        fmt=fmt,
+        named_graph=named_graph,
+        output_path=output_path,
+    )
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            page = render_page(conn, request)
+            if persist:
+                persist_rendered_page(conn, page)
+                conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]Render failed: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+    rprint(
+        f"[green]✓[/green]  rendered [bold]{entity_iri}[/bold] "
+        f"→ [cyan]{output_path}[/cyan]  ({fmt.value})"
+    )
+    if persist:
+        rprint(f"  pgc:RenderedPage  [dim]{page.page_iri}[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# federation sub-app  (v0.9.0)
+# ---------------------------------------------------------------------------
+
+federation_app = typer.Typer(
+    name="federation",
+    help="Federated compilation — pull triples from remote pg_ripple instances.",
+    no_args_is_help=True,
+)
+app.add_typer(federation_app)
+
+
+@federation_app.command("register")
+def federation_register(
+    name: str = typer.Argument(..., help="Logical name for this endpoint"),
+    sparql_url: str = typer.Argument(..., help="Remote SPARQL endpoint URL"),
+    remote_graph: str = typer.Option(
+        "http://riverbank.example/graph/trusted",
+        "--remote-graph",
+        help="Remote named graph IRI",
+    ),
+    weight: float = typer.Option(0.8, "--weight", "-w", help="Confidence weight [0.0–1.0]"),
+    timeout: int = typer.Option(30, "--timeout", help="Query timeout in seconds"),
+) -> None:
+    """Register a remote pg_ripple SPARQL endpoint for federated compilation.
+
+    Example::
+
+        riverbank federation register peer-alpha https://peer.example.com/sparql
+    """
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.federation import FederationEndpoint, register_federation_endpoint  # noqa: PLC0415
+
+    endpoint = FederationEndpoint(
+        name=name,
+        sparql_url=sparql_url,
+        named_graph=remote_graph,
+        confidence_weight=weight,
+        timeout_seconds=timeout,
+    )
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            ok = register_federation_endpoint(conn, endpoint)
+            conn.commit()
+    finally:
+        engine.dispose()
+
+    if ok:
+        rprint(f"[green]✓[/green]  endpoint [bold]{name}[/bold] registered → {sparql_url}")
+    else:
+        rprint(f"[red]Failed to register endpoint {name}[/red]")
+        raise typer.Exit(code=1)
+
+
+@federation_app.command("compile")
+def federation_compile(
+    name: str = typer.Argument(..., help="Name of the federation endpoint to pull from"),
+    local_graph: str = typer.Option(
+        "http://riverbank.example/graph/trusted",
+        "--local-graph",
+        help="Local named graph to write triples into",
+    ),
+    limit: int = typer.Option(1000, "--limit", "-n", help="Maximum triples to fetch"),
+) -> None:
+    """Pull triples from a remote pg_ripple endpoint and write them locally.
+
+    Example::
+
+        riverbank federation compile peer-alpha --limit 500
+    """
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.federation import (  # noqa: PLC0415
+        federated_compile,
+        list_federation_endpoints,
+    )
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            endpoints = list_federation_endpoints(conn)
+            endpoint = next((e for e in endpoints if e.name == name), None)
+            if endpoint is None:
+                rprint(
+                    f"[red]Endpoint '{name}' not found. "
+                    "Register it first with 'riverbank federation register'.[/red]"
+                )
+                raise typer.Exit(code=1)
+
+            result = federated_compile(conn, endpoint, local_named_graph=local_graph, limit=limit)
+            if result.success:
+                conn.commit()
+    except typer.Exit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]Federated compile failed: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+    if result.success:
+        rprint(
+            f"[green]✓[/green]  federated compile from [bold]{name}[/bold]\n"
+            f"  fetched: {result.triples_fetched}  written: {result.triples_written}"
+        )
+    else:
+        rprint(f"[red]Federated compile failed: {result.error}[/red]")
+        raise typer.Exit(code=1)
+
+
 @review_app.command("collect")
 def review_collect(
     profile_name: str = typer.Option(
