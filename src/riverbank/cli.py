@@ -94,13 +94,39 @@ def health() -> None:
 
 @app.command()
 def init() -> None:
-    """Initialise the _riverbank schema by running Alembic migrations."""
+    """Initialise the _riverbank schema by running Alembic migrations.
+
+    Also activates the built-in ``pg:skos-integrity`` shape bundle via
+    ``pg_ripple.load_shape_bundle('skos-integrity')`` (pg-ripple ≥ 0.98.0).
+    The six SKOS structural shapes are defined in pg-ripple; riverbank ships
+    no Turtle files for them.
+    """
     from alembic import command  # noqa: PLC0415
     from alembic.config import Config  # noqa: PLC0415
 
     alembic_cfg = Config("alembic.ini")
     command.upgrade(alembic_cfg, "head")
     rprint("[green]✓[/green]  schema migrations applied")
+
+    # Activate the SKOS integrity shape bundle (pg-ripple ≥ 0.98.0)
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.catalog.graph import load_shape_bundle  # noqa: PLC0415
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            loaded = load_shape_bundle(conn, "skos-integrity")
+            if loaded:
+                rprint("[green]✓[/green]  pg:skos-integrity shape bundle activated")
+            else:
+                rprint(
+                    "[yellow]![/yellow]  pg_ripple not available — "
+                    "skos-integrity shape bundle skipped"
+                )
+    finally:
+        engine.dispose()
 
 
 @app.command()
@@ -112,6 +138,11 @@ def ingest(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Parse and fragment only; skip extraction and graph writes"
     ),
+    mode: str = typer.Option(
+        "full",
+        "--mode", "-m",
+        help="Extraction mode: full | vocabulary",
+    ),
 ) -> None:
     """Ingest a document corpus into the knowledge graph.
 
@@ -122,6 +153,11 @@ def ingest(
 
     Unchanged fragments (same xxh3_128 hash) are skipped automatically —
     re-ingesting an unchanged corpus produces zero LLM calls.
+
+    Use ``--mode vocabulary`` to run the vocabulary pass only (extracts
+    ``skos:Concept`` triples into the ``<vocab>`` named graph).  The profile
+    field ``run_mode_sequence: ['vocabulary', 'full']`` runs both passes
+    automatically.
     """
     from pathlib import Path  # noqa: PLC0415
 
@@ -140,7 +176,7 @@ def ingest(
     if dry_run:
         rprint("[dim]dry-run mode — extraction and graph writes are skipped[/dim]")
 
-    stats = pipeline.run(corpus_path=corpus, profile=profile, dry_run=dry_run)
+    stats = pipeline.run(corpus_path=corpus, profile=profile, dry_run=dry_run, mode=mode)
 
     table = Table(
         title="Ingest summary",
@@ -452,6 +488,10 @@ def lint(
         0.7, "--threshold", "-t",
         help="Minimum acceptable SHACL score [0.0–1.0]",
     ),
+    layer: str = typer.Option(
+        "", "--layer", "-l",
+        help="Lint layer: '' (default SHACL) | 'vocab' (SKOS integrity on <vocab> graph)",
+    ),
 ) -> None:
     """Run a SHACL quality report against a named graph.
 
@@ -459,13 +499,46 @@ def lint(
     wrapper around ``pg_ripple.shacl_score()``.  Exits non-zero if the score
     falls below the profile threshold.
 
+    With ``--layer vocab`` this runs the ``pg:skos-integrity`` shape bundle
+    against the ``<vocab>`` named graph and reports any violations.
+
     Example::
 
         riverbank lint --shacl-only --graph http://riverbank.example/graph/trusted
+        riverbank lint --layer vocab
     """
     from sqlalchemy import create_engine  # noqa: PLC0415
 
-    from riverbank.catalog.graph import shacl_score  # noqa: PLC0415
+    from riverbank.catalog.graph import run_shape_bundle, shacl_score  # noqa: PLC0415
+
+    if layer == "vocab":
+        # SKOS integrity shape bundle against the <vocab> named graph
+        vocab_graph = named_graph if named_graph != "http://riverbank.example/graph/trusted" \
+            else "http://riverbank.example/graph/vocab"
+        settings = get_settings()
+        engine = create_engine(settings.db.dsn)
+        try:
+            with engine.connect() as conn:
+                results = run_shape_bundle(conn, "skos-integrity", vocab_graph)
+        finally:
+            engine.dispose()
+
+        rprint(
+            f"[bold]riverbank lint --layer vocab[/bold]  graph={vocab_graph!r}\n"
+        )
+        if not results:
+            rprint("[green bold]SKOS integrity: no violations (or pg_ripple not available)[/green bold]")
+            return
+
+        from rich.table import Table as RichTable  # noqa: PLC0415
+
+        tbl = RichTable(title="SKOS integrity violations", show_header=True, header_style="bold red")
+        for col in results[0]:
+            tbl.add_column(str(col))
+        for row in results:
+            tbl.add_row(*[str(v) for v in row.values()])
+        rprint(tbl)
+        raise typer.Exit(code=1)
 
     if not shacl_only:
         rprint(
@@ -497,3 +570,52 @@ def lint(
         raise typer.Exit(code=1)
 
     rprint("\n[green bold]SHACL quality gate passed[/green bold]")
+
+
+@app.command()
+def explain(
+    artifact_iri: str = typer.Argument(..., help="IRI of the compiled artifact to inspect"),
+) -> None:
+    """Dump the dependency tree of a compiled artifact.
+
+    Shows which fragments, profile version, and rule set contributed to the
+    named artifact.  The artifact IRI is typically the subject of a triple in
+    the knowledge graph (e.g. ``entity:Acme``).
+
+    Example::
+
+        riverbank explain entity:Acme
+    """
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.catalog.graph import get_artifact_deps  # noqa: PLC0415
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            deps = get_artifact_deps(conn, artifact_iri)
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]Could not query artifact deps: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+    rprint(f"[bold]riverbank explain[/bold]  artifact={artifact_iri!r}\n")
+
+    if not deps:
+        rprint(f"[dim]No dependency records found for {artifact_iri!r}.[/dim]")
+        rprint(
+            "[dim]Run 'riverbank ingest' first or check that the IRI is correct.[/dim]"
+        )
+        return
+
+    table = Table(title="Dependency tree", show_header=True, header_style="bold cyan")
+    table.add_column("Dependency kind")
+    table.add_column("Reference")
+
+    for dep in deps:
+        table.add_row(dep["dep_kind"], dep["dep_ref"])
+
+    rprint(table)
+
