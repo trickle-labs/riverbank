@@ -14,6 +14,24 @@ logger = logging.getLogger(__name__)
 _LOAD_TRIPLES_SQL = "SELECT pg_ripple.load_triples_with_confidence(cast(:triples_json as jsonb), :named_graph)"
 _SHACL_SCORE_SQL = "SELECT pg_ripple.shacl_score(:named_graph)"
 
+# Cache of pg_ripple availability, keyed by connection id to avoid repeated probes.
+_pg_ripple_available: dict[int, bool] = {}
+
+
+def _check_pg_ripple(conn: Any) -> bool:
+    """Return True if pg_ripple is installed, caching the result per connection."""
+    conn_id = id(conn)
+    if conn_id not in _pg_ripple_available:
+        try:
+            conn.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'pg_ripple'")).fetchone()
+            result = conn.execute(
+                text("SELECT COUNT(*) FROM pg_extension WHERE extname = 'pg_ripple'")
+            ).scalar()
+            _pg_ripple_available[conn_id] = bool(result)
+        except Exception:  # noqa: BLE001
+            _pg_ripple_available[conn_id] = False
+    return _pg_ripple_available[conn_id]
+
 
 def load_triples_with_confidence(
     conn: Any,
@@ -53,24 +71,20 @@ def load_triples_with_confidence(
             }
         )
 
+    if not _check_pg_ripple(conn):
+        logger.warning(
+            "pg_ripple not available — triples not written to graph. "
+            "Install pg_ripple to enable graph persistence."
+        )
+        return 0
+
     try:
-        conn.execute(text("SAVEPOINT load_triples_sp"))
         conn.execute(
             text(_LOAD_TRIPLES_SQL),
             {"triples_json": json.dumps(rows), "named_graph": named_graph},
         )
-        conn.execute(text("RELEASE SAVEPOINT load_triples_sp"))
         return len(rows)
     except Exception as exc:  # noqa: BLE001
-        conn.execute(text("ROLLBACK TO SAVEPOINT load_triples_sp"))
-        msg = str(exc).lower()
-        if _is_missing_extension(msg):
-            logger.warning(
-                "pg_ripple not available — triples not written to graph. "
-                "Install pg_ripple to enable graph persistence. error=%s",
-                exc,
-            )
-            return 0
         raise
 
 
@@ -86,23 +100,17 @@ def shacl_score(
     Falls back to ``1.0`` (pass-through / treat all output as trusted) when
     pg_ripple is not installed.
     """
+    if not _check_pg_ripple(conn):
+        logger.debug("pg_ripple not available — shacl_score returns 1.0 (pass-through).")
+        return 1.0
+
     try:
-        conn.execute(text("SAVEPOINT shacl_score_sp"))
         row = conn.execute(
             text(_SHACL_SCORE_SQL),
             {"named_graph": named_graph},
         ).fetchone()
-        conn.execute(text("RELEASE SAVEPOINT shacl_score_sp"))
         return float(row[0]) if row else 1.0
     except Exception as exc:  # noqa: BLE001
-        conn.execute(text("ROLLBACK TO SAVEPOINT shacl_score_sp"))
-        msg = str(exc).lower()
-        if _is_missing_extension(msg):
-            logger.debug(
-                "pg_ripple not available — shacl_score returns 1.0 (pass-through). error=%s",
-                exc,
-            )
-            return 1.0
         raise
 
 
