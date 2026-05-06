@@ -354,3 +354,163 @@ class DocumentPreprocessor:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Preprocessing: entity catalog extraction failed: %s", exc)
             return [], 0, 0
+
+
+# ---------------------------------------------------------------------------
+# Few-Shot Golden Example Injector (Strategy 6)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FewShotExample:
+    """One verified (subject, predicate, object) triple used as a few-shot example."""
+
+    subject: str         # e.g. "ex:sesam-pipe"
+    predicate: str       # e.g. "schema:isPartOf"
+    object_value: str    # e.g. "ex:sesam-system"
+    confidence: float    # e.g. 0.95
+    source: str = ""     # optional: which file this came from
+
+
+@dataclass
+class FewShotConfig:
+    """Configuration for the few-shot injector, typically from the profile YAML."""
+
+    enabled: bool = False
+    source: str = "tests/golden/"          # directory of .ttl or .yaml example files
+    max_examples: int = 3
+    selection: str = "random"              # "random" | "fixed" | (future: "semantic")
+
+
+class FewShotInjector:
+    """Inject verified golden triples as few-shot examples into extraction prompts.
+
+    The examples are loaded once and cached for the lifetime of the injector.
+    They are prepended to the extraction prompt as ``EXAMPLES (correct triples
+    for this corpus):``, giving the extraction LLM a concrete anchor for the
+    expected output format and ontology.
+
+    Falls back gracefully when no golden examples exist — the unmodified base
+    prompt is returned.
+
+    Supported source formats:
+    - ``.yaml`` files with a ``triples:`` list  (riverbank golden format)
+    - ``.ttl`` files are planned but not yet supported
+
+    Profile YAML::
+
+        few_shot:
+          enabled: true
+          source: tests/golden/
+          max_examples: 3
+          selection: random
+    """
+
+    def __init__(self, cfg: FewShotConfig | None = None) -> None:
+        self._cfg: FewShotConfig = cfg or FewShotConfig()
+        self._examples: list[FewShotExample] | None = None  # lazy-loaded
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_profile(cls, profile: Any) -> "FewShotInjector":
+        """Create a ``FewShotInjector`` from a ``CompilerProfile``."""
+        raw: dict = getattr(profile, "few_shot", {})
+        if not raw or not raw.get("enabled", False):
+            return cls(FewShotConfig(enabled=False))
+        cfg = FewShotConfig(
+            enabled=True,
+            source=raw.get("source", "tests/golden/"),
+            max_examples=int(raw.get("max_examples", 3)),
+            selection=raw.get("selection", "random"),
+        )
+        return cls(cfg)
+
+    def inject(self, prompt: str, profile: Any | None = None) -> str:
+        """Return *prompt* with a FEW-SHOT EXAMPLES block prepended.
+
+        Returns *prompt* unchanged when disabled or when no examples are found.
+        """
+        if not self._cfg.enabled:
+            return prompt
+
+        examples = self._load_examples()
+        if not examples:
+            return prompt
+
+        selected = self._select(examples)
+        if not selected:
+            return prompt
+
+        lines = ["FEW-SHOT EXAMPLES (correct triples for this corpus — use the same style):"]
+        for ex in selected:
+            lines.append(
+                f"  {ex.subject}  {ex.predicate}  {ex.object_value}"
+                f"  (confidence: {ex.confidence:.2f})"
+            )
+        examples_block = "\n".join(lines)
+
+        return f"{examples_block}\n\n{prompt}"
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _load_examples(self) -> list[FewShotExample]:
+        """Load and cache examples from disk. Returns [] on any failure."""
+        if self._examples is not None:
+            return self._examples
+
+        from pathlib import Path  # noqa: PLC0415
+
+        source_path = Path(self._cfg.source)
+        examples: list[FewShotExample] = []
+
+        if not source_path.exists():
+            logger.debug("FewShotInjector: source path %s does not exist", source_path)
+            self._examples = examples
+            return examples
+
+        # Load from .yaml files
+        for yaml_file in sorted(source_path.glob("**/*.yaml")):
+            try:
+                import yaml  # noqa: PLC0415
+
+                data = yaml.safe_load(yaml_file.read_text())
+                if not isinstance(data, dict):
+                    continue
+                for triple in data.get("triples", []):
+                    examples.append(
+                        FewShotExample(
+                            subject=triple.get("subject", ""),
+                            predicate=triple.get("predicate", ""),
+                            object_value=triple.get("object_value", ""),
+                            confidence=float(triple.get("confidence", 0.9)),
+                            source=str(yaml_file),
+                        )
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("FewShotInjector: failed to load %s: %s", yaml_file, exc)
+
+        logger.debug("FewShotInjector: loaded %d examples from %s", len(examples), source_path)
+        self._examples = examples
+        return examples
+
+    def _select(self, examples: list[FewShotExample]) -> list[FewShotExample]:
+        """Select up to ``max_examples`` examples according to the selection strategy."""
+        if not examples:
+            return []
+
+        n = self._cfg.max_examples
+
+        if self._cfg.selection == "fixed":
+            return examples[:n]
+
+        # Default: random
+        import random  # noqa: PLC0415
+
+        pool = list(examples)
+        random.shuffle(pool)
+        return pool[:n]

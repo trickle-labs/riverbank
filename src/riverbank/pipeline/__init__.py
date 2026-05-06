@@ -57,6 +57,8 @@ class CompilerProfile:
     ner_model: str = "en_core_web_sm"
     # v0.11.0: LLM preprocessing (document summary + entity catalog)
     preprocessing: dict = field(default_factory=dict)
+    # v0.11.0: Few-shot golden example injection (Strategy 6)
+    few_shot: dict = field(default_factory=dict)
     # id is set after the profile is registered in the catalog DB
     id: Optional[int] = None
 
@@ -252,6 +254,10 @@ class IngestPipeline:
                 from riverbank.preprocessors import DocumentPreprocessor  # noqa: PLC0415
                 preprocessor = DocumentPreprocessor(self._settings)
 
+            # Strategy 6: few-shot golden example injector (built once, used per fragment)
+            from riverbank.preprocessors import FewShotInjector  # noqa: PLC0415
+            few_shot_injector = FewShotInjector.from_profile(profile)
+
             for source in sources:
                 with tracer.start_as_current_span("ingest_pipeline.source") as src_span:
                     src_span.set_attribute("source.iri", source.iri)
@@ -270,6 +276,7 @@ class IngestPipeline:
                             mode=mode,
                             progress_callback=progress_callback,
                             preprocessor=preprocessor,
+                            few_shot_injector=few_shot_injector,
                         )
                     except Exception as exc:  # noqa: BLE001
                         logger.error("Failed to process %s: %s", source.iri, exc)
@@ -293,6 +300,7 @@ class IngestPipeline:
         mode: str = "full",
         progress_callback: Callable[[str, dict], None] | None = None,
         preprocessor: Any = None,
+        few_shot_injector: Any = None,
     ) -> None:
         from riverbank.catalog.graph import (  # noqa: PLC0415
             delete_artifact_deps,
@@ -432,8 +440,17 @@ class IngestPipeline:
             # Extract triples
             with tracer.start_as_current_span("ingest_pipeline.extract") as ex_span:
                 ex_span.set_attribute("fragment.key", frag.fragment_key)
+                # Strategy 6: inject few-shot examples into the extraction prompt
+                frag_profile = extraction_profile
+                if few_shot_injector is not None and not dry_run:
+                    from dataclasses import replace as _dc_replace2  # noqa: PLC0415
+                    enriched_with_shots = few_shot_injector.inject(
+                        extraction_profile.prompt_text, profile
+                    )
+                    if enriched_with_shots != extraction_profile.prompt_text:
+                        frag_profile = _dc_replace2(extraction_profile, prompt_text=enriched_with_shots)
                 try:
-                    result = extractor.extract(fragment=frag, profile=extraction_profile, trace=None)
+                    result = extractor.extract(fragment=frag, profile=frag_profile, trace=None)
                 except Exception as ex_exc:  # noqa: BLE001
                     logger.warning(
                         "Extraction failed for fragment %s: %s",

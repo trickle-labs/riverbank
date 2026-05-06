@@ -1,0 +1,27 @@
+# Golden few-shot examples for the docs-policy-v1 corpus
+#
+# These verified triples are injected into extraction prompts when
+# few_shot.enabled: true is set in the compiler profile.
+# They serve as concrete anchors for the expected output format and ontology.
+#
+# Bootstrapped from: examples/markdown-corpus/ (manual review)
+triples:
+  - subject: "ex:Confidence"
+    predicate: "rdf:type"
+    object_value: "ex:Concept"
+    confidence: 0.95
+
+  - subject: "ex:EvidenceSpan"
+    predicate: "schema:isPartOf"
+    object_value: "ex:ExtractionResult"
+    confidence: 0.92
+
+  - subject: "ex:EvidenceSpan"
+    predicate: "schema:description"
+    object_value: "Exact character offsets and a verbatim excerpt from the source text"
+    confidence: 0.90
+
+  - subject: "ex:Confidence"
+    predicate: "rdfs:label"
+    object_value: "Confidence"
+    confidence: 0.98

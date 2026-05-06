@@ -1679,3 +1679,113 @@ def sbom(
     rprint(vuln_table)
     raise typer.Exit(code=1)
 
+
+@app.command("validate-graph")
+def validate_graph(
+    profile_name: str = typer.Option(
+        "default", "--profile", "-p", help="Compiler profile name or YAML file path"
+    ),
+    named_graph: str | None = typer.Option(
+        None, "--graph", "-g", help="Named graph IRI to validate against (defaults to profile named_graph)"
+    ),
+    fail_below: float = typer.Option(
+        0.0, "--fail-below",
+        help="Exit with code 1 if coverage fraction is below this threshold (0.0–1.0)",
+    ),
+) -> None:
+    """Run the profile's competency questions against the compiled graph and report coverage.
+
+    Reads the ``competency_questions`` list from the compiler profile (SPARQL ASK
+    queries) and executes each one.  Prints a results table and a coverage score.
+
+    Use ``--fail-below 1.0`` to fail CI unless all questions pass.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.catalog.graph import sparql_query  # noqa: PLC0415
+    from riverbank.pipeline import CompilerProfile  # noqa: PLC0415
+
+    # Resolve profile
+    profile_path = Path(profile_name)
+    if profile_path.exists() and profile_path.suffix in {".yaml", ".yml"}:
+        profile = CompilerProfile.from_yaml(profile_path)
+    else:
+        profile = CompilerProfile(name=profile_name)
+
+    cqs = profile.competency_questions
+    if not cqs:
+        rprint("[yellow]No competency_questions defined in the profile.[/yellow]")
+        raise typer.Exit(code=0)
+
+    graph = named_graph or profile.named_graph
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+
+    table = Table(
+        title=f"Competency question coverage — {profile.name} → {graph}",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("ID", style="dim", no_wrap=True)
+    table.add_column("Description")
+    table.add_column("Result", justify="center")
+
+    passed = 0
+    failed_ids: list[str] = []
+
+    try:
+        with engine.connect() as conn:
+            for cq in cqs:
+                cq_id = cq.get("id", "?")
+                description = cq.get("description", "")
+                sparql = cq.get("sparql", "").strip()
+
+                if not sparql:
+                    table.add_row(cq_id, description, "[dim]—[/dim]")
+                    continue
+
+                # Execute ASK query
+                try:
+                    rows = sparql_query(conn, sparql, named_graph=graph)
+                    # ASK returns {"result": True/False} or {"ASK": True/False}
+                    ok = False
+                    if rows:
+                        row = rows[0]
+                        ok = bool(row.get("result", row.get("ASK", row.get("ask", False))))
+                except Exception as exc:  # noqa: BLE001
+                    table.add_row(cq_id, description, f"[red]ERROR: {exc}[/red]")
+                    failed_ids.append(cq_id)
+                    continue
+
+                if ok:
+                    passed += 1
+                    table.add_row(cq_id, description, "[green bold]PASS[/green bold]")
+                else:
+                    failed_ids.append(cq_id)
+                    table.add_row(cq_id, description, "[red bold]FAIL[/red bold]")
+    finally:
+        engine.dispose()
+
+    rprint(table)
+
+    total = len(cqs)
+    coverage = passed / total if total > 0 else 0.0
+    coverage_pct = f"{coverage * 100:.0f}%"
+
+    if failed_ids:
+        rprint(f"\n[red]Failed:[/red] {', '.join(failed_ids)}")
+    rprint(f"\n[bold]Coverage:[/bold] {passed}/{total} ({coverage_pct})")
+
+    if coverage < fail_below:
+        rprint(
+            f"[red bold]Coverage {coverage_pct} is below threshold {fail_below * 100:.0f}% "
+            f"— exiting with code 1[/red bold]"
+        )
+        raise typer.Exit(code=1)
+
+    if not failed_ids:
+        rprint("[green bold]All competency questions passed.[/green bold]")
+
