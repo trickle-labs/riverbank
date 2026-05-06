@@ -1,0 +1,98 @@
+---
+# procedural-v1 — Built-in compiler profile for procedural knowledge (v0.8.0)
+#
+# Targets runbooks, SOPs, incident-response guides, and onboarding flows.
+# Aligned with the Procedural Knowledge Ontology (PKO) from Cefriel.
+#
+# Vocabulary pass: extracts step names and tool/resource names into <vocab>.
+# Full pass: extracts step sequences, decision points, preconditions,
+#            required expertise levels, and error-handling paths.
+#
+# Standard competency questions are generated automatically.
+name: procedural-v1
+version: 1
+
+extractor: noop
+
+model_provider: ollama
+model_name: llama3.2
+embed_model: nomic-embed-text
+max_fragment_tokens: 2000
+
+named_graph: "http://riverbank.example/graph/trusted"
+
+# Vocabulary pass first — extracts step names and tool/resource names
+run_mode_sequence:
+  - vocabulary
+  - full
+
+prompt_text: |
+  You are a procedural knowledge compiler.  Extract procedural facts from the
+  following operational document section as RDF triples aligned with the
+  Procedural Knowledge Ontology (PKO).
+
+  For each step or procedure provide:
+  - subject: prefixed IRI (e.g. pko:Step_1)
+  - predicate: a PKO predicate (pko:nextStep, pko:previousStep,
+               pko:nextAlternativeStep, pko:hasPrecondition,
+               pko:requiresExpertiseLevel, pko:hasErrorHandlingPath)
+  - object_value: prefixed IRI or literal
+  - confidence: float 0.0–1.0
+  - evidence: exact character offsets and a verbatim excerpt
+
+  Extract step sequences (pko:nextStep, pko:previousStep), decision points
+  (pko:nextAlternativeStep), preconditions, required expertise levels, and
+  error-handling paths.
+
+  Only extract claims directly supported by the text.
+  Do NOT fabricate evidence.
+
+editorial_policy:
+  min_fragment_length: 50
+  max_fragment_length: 8000
+  min_heading_depth: 0
+  confidence_threshold: 0.7
+  allowed_languages:
+    - en
+
+# Absence rules: if no error-handling path is found, record negative knowledge
+absence_rules:
+  - predicate: "http://procedural-knowledge.example/hasErrorHandlingPath"
+    summary: "No error-handling path was found for this procedure step."
+
+# Standard competency questions for procedural knowledge
+competency_questions:
+  - id: pko-cq-01
+    description: "The corpus defines at least one procedural step sequence"
+    sparql: |
+      ASK {
+        ?s ?p ?o .
+        FILTER(CONTAINS(STR(?p), "nextStep") || CONTAINS(STR(?p), "previousStep"))
+      }
+  - id: pko-cq-02
+    description: "What happens if a step fails? (error-handling paths exist)"
+    sparql: |
+      ASK {
+        ?s ?p ?o .
+        FILTER(CONTAINS(STR(?p), "hasErrorHandlingPath") || CONTAINS(STR(?p), "errorHandling"))
+      }
+  - id: pko-cq-03
+    description: "Which steps require admin access? (expertise level annotations)"
+    sparql: |
+      ASK {
+        ?s ?p ?o .
+        FILTER(CONTAINS(STR(?p), "requiresExpertiseLevel") || CONTAINS(STR(?o), "admin"))
+      }
+  - id: pko-cq-04
+    description: "What is the rollback path? (alternative step annotations)"
+    sparql: |
+      ASK {
+        ?s ?p ?o .
+        FILTER(CONTAINS(STR(?p), "nextAlternativeStep") || CONTAINS(STR(?o), "rollback"))
+      }
+  - id: pko-cq-05
+    description: "The corpus contains at least one subject–predicate–object triple"
+    sparql: |
+      ASK {
+        ?s ?p ?o .
+      }

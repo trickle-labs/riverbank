@@ -657,3 +657,79 @@ def write_audit_log(
         logger.debug("write_audit_log failed: %s", exc)
         return False
 
+
+# ---------------------------------------------------------------------------
+# Contradiction explanation  (v0.8.0)
+# ---------------------------------------------------------------------------
+
+def explain_contradiction(
+    conn: Any,
+    iri: str,
+    named_graph: str = "http://riverbank.example/graph/trusted",
+) -> dict:
+    """Explain contradictions for an entity or fact via pg_ripple.
+
+    A thin wrapper around ``pg_ripple.explain_contradiction(iri, named_graph)``.
+    The minimal-cause reasoning engine (SAT-style hitting-set over the inference
+    dependency graph) lives in pg-ripple.
+
+    Returns a dict with contradiction explanation fields on success, or
+    ``{}`` when pg_ripple is unavailable or no contradictions are found.
+
+    Per the roadmap mitigation policy, this feature is deferred gracefully
+    when ``pg_ripple.explain_contradiction`` is not yet available — SHACL-based
+    contradiction detection still works.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT * FROM pg_ripple.explain_contradiction($1, $2)",
+            (iri, named_graph),
+        ).fetchall()
+        if not rows:
+            return {}
+        row = rows[0]
+        if hasattr(row, "_mapping"):
+            return dict(row._mapping)
+        return dict(enumerate(row))
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc).lower()
+        if _is_missing_extension(msg) or "explain_contradiction" in msg:
+            logger.warning(
+                "pg_ripple.explain_contradiction not available — "
+                "contradiction explanation deferred (roadmap mitigation). error=%s",
+                exc,
+            )
+            return {}
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Coverage map refresh  (v0.8.0)
+# ---------------------------------------------------------------------------
+
+def refresh_coverage_map_graph(
+    conn: Any,
+    named_graph: str = "http://riverbank.example/graph/trusted",
+    coverage_graph: str = "http://riverbank.example/graph/coverage",
+) -> bool:
+    """Refresh the coverage map via ``pg_ripple.refresh_coverage_map()``.
+
+    Delegating to pg_ripple; falls back gracefully per roadmap mitigation.
+    """
+    try:
+        conn.execute(
+            "SELECT pg_ripple.refresh_coverage_map($1, $2)",
+            (named_graph, coverage_graph),
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc).lower()
+        if _is_missing_extension(msg) or "refresh_coverage_map" in msg:
+            logger.warning(
+                "pg_ripple.refresh_coverage_map not available — "
+                "coverage map deferred (roadmap mitigation). error=%s",
+                exc,
+            )
+            return False
+        raise
+

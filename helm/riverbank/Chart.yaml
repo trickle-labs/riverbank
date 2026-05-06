@@ -2,8 +2,8 @@ apiVersion: v2
 name: riverbank
 description: Compiled knowledge-base worker for pg-ripple, pg-trickle, and pg-tide
 type: application
-version: 0.7.0
-appVersion: "0.7.0"
+version: 0.8.0
+appVersion: "0.8.0"
 keywords:
   - knowledge-graph
   - nlp
