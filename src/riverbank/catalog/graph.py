@@ -680,7 +680,7 @@ def write_audit_log(
         conn.execute(
             text(
                 "INSERT INTO _riverbank.log (operation, payload, actor) "
-                "VALUES (:operation, :payload::jsonb, :actor)"
+                "VALUES (:operation, cast(:payload as jsonb), :actor)"
             ),
             {
                 "operation": operation,

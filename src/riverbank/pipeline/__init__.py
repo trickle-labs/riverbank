@@ -470,8 +470,8 @@ class IngestPipeline:
                     "(name, version, schema_json, prompt_hash, prompt_text, "
                     " editorial_policy, model_provider, model_name, embedding_model, "
                     " max_fragment_tokens) "
-                    "VALUES (:name, :version, :schema_json::jsonb, :prompt_hash, :prompt_text, "
-                    "        :editorial_policy::jsonb, :model_provider, :model_name, "
+                    "VALUES (:name, :version, cast(:schema_json as jsonb), :prompt_hash, :prompt_text, "
+                    "        cast(:editorial_policy as jsonb), :model_provider, :model_name, "
                     "        :embed_model, :max_fragment_tokens) "
                     "RETURNING id"
                 ),
@@ -608,7 +608,7 @@ class IngestPipeline:
                     " prompt_tokens, completion_tokens, cost_usd, diagnostics) "
                     "VALUES (:fragment_id, :profile_id, :started_at, :finished_at, "
                     "        :outcome, :prompt_tokens, :completion_tokens, "
-                    "        :cost_usd, :diagnostics::jsonb)"
+                    "        :cost_usd, cast(:diagnostics as jsonb))"
                 ),
                 {
                     "fragment_id": fragment_row[0],

@@ -117,7 +117,7 @@ def store_entity_embedding(
         # abort the surrounding transaction.
         with conn.begin_nested():
             conn.execute(
-                text("SELECT pg_ripple.store_embedding(:iri, :emb::vector)"),
+                text("SELECT pg_ripple.store_embedding(:iri, cast(:emb as vector))"),
                 {"iri": entity_iri, "emb": json.dumps(embedding)},
             )
         return True
