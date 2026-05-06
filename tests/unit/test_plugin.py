@@ -22,6 +22,16 @@ def test_load_parsers_includes_markdown() -> None:
     assert "markdown" in plugins
 
 
+def test_load_parsers_includes_docling() -> None:
+    """Docling parser must be registered as a riverbank.parsers entry point."""
+    from riverbank.plugin import load_plugins
+
+    plugins = load_plugins("parsers")
+    assert "docling" in plugins
+    parser_cls = plugins["docling"]
+    assert parser_cls.name == "docling"
+
+
 def test_load_connectors_includes_filesystem() -> None:
     from riverbank.plugin import load_plugins
 

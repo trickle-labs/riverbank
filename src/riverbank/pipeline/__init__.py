@@ -52,6 +52,9 @@ class CompilerProfile:
     vocab_graph: str = "http://riverbank.example/graph/vocab"
     run_mode_sequence: list = field(default_factory=lambda: ["full"])
     competency_questions: list = field(default_factory=list)
+    # v0.5.0: Singer tap configuration; NER and embedding model settings
+    singer_taps: list = field(default_factory=list)
+    ner_model: str = "en_core_web_sm"
     # id is set after the profile is registered in the catalog DB
     id: Optional[int] = None
 
@@ -336,6 +339,26 @@ class IngestPipeline:
             # Upsert source record (needed before we can upsert fragments)
             self._ensure_source(conn, source, profile)
 
+            # NER pre-resolution step (v0.5.0) — runs before the LLM call.
+            # When a vocabulary pass has run, matched concept IRIs are injected
+            # into the structured context block passed to the extractor.
+            ner_context: dict = {}
+            try:
+                from riverbank.ner import SpacyNERExtractor, lookup_vocabulary  # noqa: PLC0415
+
+                _ner = SpacyNERExtractor(model_name=profile.ner_model)
+                ner_result = _ner.extract(frag.text)
+                if ner_result.entities:
+                    vocab_matches: dict[str, str] = {}
+                    for entity in ner_result.entities:
+                        iri_match = lookup_vocabulary(conn, entity.text)
+                        if iri_match:
+                            vocab_matches[entity.text] = iri_match
+                    if vocab_matches:
+                        ner_context = {"vocabulary_matches": vocab_matches}
+            except Exception as _ner_exc:  # noqa: BLE001
+                logger.debug("NER pre-resolution step failed: %s", _ner_exc)
+
             # Extract triples
             with tracer.start_as_current_span("ingest_pipeline.extract") as ex_span:
                 ex_span.set_attribute("fragment.key", frag.fragment_key)
@@ -378,6 +401,12 @@ class IngestPipeline:
                     _record_triples_deps(
                         conn, result.triples, frag_iri, profile, record_artifact_dep
                     )
+
+                # Embedding generation step (v0.5.0) — generate embeddings for
+                # each unique subject and store them via pg_ripple / pgVector.
+                _generate_and_store_embeddings(
+                    conn, result.triples, profile, frag.text
+                )
 
             # Record fragment + run in the catalog
             self._upsert_fragment(conn, source, frag)
@@ -461,7 +490,15 @@ class IngestPipeline:
             )
             conn.commit()
             row = result.fetchone()
-            return int(row[0]) if row else None
+            db_id = int(row[0]) if row else None
+
+            # v0.5.0: Register singer tap configurations in tide.relay_inlet_config
+            if profile.singer_taps and db_id is not None:
+                from riverbank.catalog.graph import register_singer_taps  # noqa: PLC0415
+
+                register_singer_taps(conn, profile.singer_taps, profile.name)
+
+            return db_id
         except Exception as exc:  # noqa: BLE001
             logger.debug("Could not register profile: %s", exc)
             return None
@@ -606,6 +643,44 @@ class IngestPipeline:
         from riverbank.extractors.noop import NoOpExtractor  # noqa: PLC0415
 
         return NoOpExtractor()
+
+
+# ---------------------------------------------------------------------------
+# v0.5.0 helpers
+# ---------------------------------------------------------------------------
+
+
+def _generate_and_store_embeddings(
+    conn: Any,
+    triples: list,
+    profile: CompilerProfile,
+    fragment_text: str,
+) -> None:
+    """Generate embeddings for unique triple subjects and store them.
+
+    Uses :class:`~riverbank.embeddings.EmbeddingGenerator` with the profile's
+    ``embed_model``.  Falls back silently when sentence-transformers is not
+    installed or pg_ripple / pgVector are unavailable.
+    """
+    if not triples:
+        return
+    try:
+        from riverbank.embeddings import EmbeddingGenerator, store_entity_embedding  # noqa: PLC0415
+
+        generator = EmbeddingGenerator(model_name=profile.embed_model)
+        seen_subjects: set[str] = set()
+        for triple in triples:
+            subject = getattr(triple, "subject", None)
+            if not subject or subject in seen_subjects:
+                continue
+            seen_subjects.add(subject)
+            # Use the object value or the fragment text as the embedding input.
+            text_for_embedding = getattr(triple, "object_value", None) or fragment_text
+            embedding = generator.generate(text_for_embedding)
+            if embedding:
+                store_entity_embedding(conn, subject, embedding)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Embedding generation step failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------

@@ -311,6 +311,177 @@ def run_shape_bundle(
         raise
 
 
+def suggest_sameas(
+    conn: Any,
+    iri: str,
+    named_graph: str | None = None,
+) -> list[str]:
+    """Suggest ``owl:sameAs`` candidates for *iri* via pg_ripple.
+
+    Calls ``pg_ripple.suggest_sameas(iri)`` and returns a list of candidate
+    IRI strings.  Used by ``riverbank explain`` to surface near-duplicate
+    entity suggestions alongside the dependency tree.
+
+    Falls back to ``[]`` when pg_ripple is not available.
+    """
+    try:
+        if named_graph:
+            rows = conn.execute(
+                "SELECT * FROM pg_ripple.suggest_sameas($1, $2)",
+                (iri, named_graph),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM pg_ripple.suggest_sameas($1)",
+                (iri,),
+            ).fetchall()
+        if not rows:
+            return []
+        result: list[str] = []
+        for row in rows:
+            if hasattr(row, "_mapping"):
+                row_dict = dict(row._mapping)
+                result.append(str(next(iter(row_dict.values()))))
+            else:
+                result.append(str(row[0]))
+        return result
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc).lower()
+        if _is_missing_extension(msg):
+            logger.debug(
+                "suggest_sameas: pg_ripple.suggest_sameas not available: %s", exc
+            )
+        else:
+            logger.debug("suggest_sameas failed: %s", exc)
+        return []
+
+
+def find_duplicate_entities(
+    conn: Any,
+    named_graph: str,
+) -> list[dict]:
+    """Find duplicate entity candidates via pg_ripple PageRank dedup.
+
+    Calls ``pg_ripple.pagerank_find_duplicates(named_graph)`` and returns a
+    list of candidate duplicate pair dicts.
+
+    Falls back to ``[]`` when pg_ripple is not available.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT * FROM pg_ripple.pagerank_find_duplicates($1)",
+            (named_graph,),
+        ).fetchall()
+        if not rows:
+            return []
+        return [
+            dict(row._mapping) if hasattr(row, "_mapping") else dict(enumerate(row))
+            for row in rows
+        ]
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc).lower()
+        if _is_missing_extension(msg):
+            logger.debug(
+                "find_duplicate_entities: pg_ripple.pagerank_find_duplicates "
+                "not available: %s",
+                exc,
+            )
+        else:
+            logger.debug("find_duplicate_entities failed: %s", exc)
+        return []
+
+
+def fuzzy_match_entities(
+    conn: Any,
+    query: str,
+    named_graph: str,
+) -> list[dict]:
+    """Query-time fuzzy match via pg_ripple GIN trigram index.
+
+    Calls ``pg_ripple.fuzzy_match(query, named_graph)`` and returns match
+    dicts.  Falls back to ``[]`` when pg_ripple is not available.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT * FROM pg_ripple.fuzzy_match($1, $2)",
+            (query, named_graph),
+        ).fetchall()
+        if not rows:
+            return []
+        return [
+            dict(row._mapping) if hasattr(row, "_mapping") else dict(enumerate(row))
+            for row in rows
+        ]
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc).lower()
+        if _is_missing_extension(msg):
+            logger.debug(
+                "fuzzy_match_entities: pg_ripple.fuzzy_match not available: %s", exc
+            )
+        else:
+            logger.debug("fuzzy_match_entities failed: %s", exc)
+        return []
+
+
+def register_singer_taps(
+    conn: Any,
+    singer_taps: list[dict],
+    profile_name: str,
+) -> int:
+    """Register Singer tap configurations in ``tide.relay_inlet_config``.
+
+    Maps each entry in the profile's ``singer_taps`` block to a row in
+    ``tide.relay_inlet_config``, which pg-tide picks up via ``NOTIFY`` hot
+    reload.  No Python tap-invocation code runs in riverbank.
+
+    Args:
+        conn:          Active SQLAlchemy connection.
+        singer_taps:   List of tap config dicts from the compiler profile.
+        profile_name:  Profile name used as a namespace for the tap configs.
+
+    Returns:
+        Number of tap configurations upserted; 0 on graceful fallback.
+    """
+    if not singer_taps:
+        return 0
+
+    import json as _json  # noqa: PLC0415
+
+    count = 0
+    for tap in singer_taps:
+        tap_name = str(tap.get("tap_name", ""))
+        if not tap_name:
+            continue
+        config_json = _json.dumps(tap.get("config", {}))
+        stream_maps_json = _json.dumps(tap.get("stream_maps", {}))
+        inlet_key = f"{profile_name}/{tap_name}"
+        try:
+            conn.execute(
+                "INSERT INTO tide.relay_inlet_config "
+                "(inlet_key, tap_name, config, stream_maps) "
+                "VALUES ($1, $2, $3::jsonb, $4::jsonb) "
+                "ON CONFLICT (inlet_key) DO UPDATE SET "
+                "  config       = EXCLUDED.config, "
+                "  stream_maps  = EXCLUDED.stream_maps",
+                (inlet_key, tap_name, config_json, stream_maps_json),
+            )
+            conn.execute("SELECT pg_notify('tide_config_reload', $1)", (inlet_key,))
+            count += 1
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc).lower()
+            if any(
+                kw in msg
+                for kw in ("does not exist", "not found", "undefined function")
+            ):
+                logger.debug(
+                    "register_singer_taps: tide.relay_inlet_config not available: %s",
+                    exc,
+                )
+            else:
+                logger.debug("register_singer_taps failed for %r: %s", tap_name, exc)
+    return count
+
+
 def _is_missing_extension(error_msg: str) -> bool:
     """Return True when the error indicates a missing pg_ripple extension."""
     keywords = ("pg_ripple", "does not exist", "undefined function", "unknown function")

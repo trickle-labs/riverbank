@@ -29,7 +29,7 @@
 | Version | Description | Status | Size |
 |---|---|---|---|
 | v0.4.0 | Incremental compilation core — artifact dependency graph, `riverbank explain`, recompile flow, vocabulary pass, SKOS integrity shape bundle, `tenant_id` schema scaffold | **Done** | Large |
-| v0.5.0 | Multi-format parsing and enrichment — Docling, spaCy NER + vocabulary lookup, fuzzy entity matching, embedding generation, Singer tap configuration (pg-tide ≥ 0.14.0) | Planned | Large |
+| v0.5.0 | Multi-format parsing and enrichment — Docling, spaCy NER + vocabulary lookup, fuzzy entity matching, embedding generation, Singer tap configuration (pg-tide ≥ 0.14.0) | **Done** | Large |
 
 ### Quality Gates and Review (v0.6.x)
 
@@ -204,21 +204,21 @@ complete dependency tree.
 
 Goal: extend ingestion beyond Markdown to office documents and web content, and add the enrichment layer (NER, fuzzy matching, embeddings) that quality gates and epistemic features depend on.
 
-- **Docling integration.** PDF, DOCX, PPTX, HTML, and image OCR via Docling ≥
+- [x] **Docling integration.** PDF, DOCX, PPTX, HTML, and image OCR via Docling ≥
   2.92. `Docling` becomes the default parser for non-Markdown sources.
-- **spaCy NER pre-resolution + vocabulary lookup.** Named entities extracted
+- [x] **spaCy NER pre-resolution + vocabulary lookup.** Named entities extracted
   before the LLM call; when a vocabulary pass has run, the pre-resolution step
   also queries the `skos:prefLabel` / `skos:altLabel` index and injects matched
   preferred-label IRIs into the structured context block.
-- **Fuzzy entity matching.** pg_ripple `pg:fuzzy_match()` and
+- [x] **Fuzzy entity matching.** pg_ripple `pg:fuzzy_match()` and
   `pg:token_set_ratio()` (GIN trigram index) for query-time matching;
   `suggest_sameas()` and `pagerank_find_duplicates()` for dedup; RapidFuzz for
   pre-LLM Python-side candidate preparation.
-- **Embedding generation.** sentence-transformers produces embeddings for each
+- [x] **Embedding generation.** sentence-transformers produces embeddings for each
   compiled summary. Entity-cluster centroid views are maintained as
   `avg(embedding)::vector` pg_trickle stream tables (pgVector IVM, v0.37+):
   centroid updates incrementally with no full scan on each new fact.
-- **Singer tap configuration.** pg-tide ≥ 0.14.0 ships native Singer tap
+- [x] **Singer tap configuration.** pg-tide ≥ 0.14.0 ships native Singer tap
   mode: tap invocation, STATE checkpoint persistence (resumable taps across
   restarts), and SCHEMA drift detection are all handled by the pg-tide sidecar.
   riverbank's contribution is profile-side: a `singer_taps` block in the
