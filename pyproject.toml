@@ -50,6 +50,15 @@ hardening = [
     "aiobreaker>=1.0",
     "hvac>=2.0",
 ]
+# Documentation site
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.25",
+    "mkdocs-gen-files>=0.5",
+    "mkdocs-literate-nav>=0.6",
+    "mkdocs-section-index>=0.3",
+    "mike>=2.1",
+]
 # Developer tooling
 dev = [
     "pytest>=8.2",
