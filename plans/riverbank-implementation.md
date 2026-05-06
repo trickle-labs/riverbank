@@ -493,8 +493,8 @@ Fragment ─▶ editorial policy score ─▶ if below threshold: insert into _r
 
 | Service | Image | Ports |
 |---|---|---|
-| postgres | `postgres:18` with pg_ripple ≥ 0.93.0 and pg_trickle ≥ 0.46.0 installed | 5432 |
-| pg-tide | `ghcr.io/trickle-labs/pg-tide:v0.6.0` | 9090 (metrics) |
+| postgres | `postgres:18` with pg_ripple ≥ 0.98.0 and pg_trickle ≥ 0.48.0 installed | 5432 |
+| pg-tide | `ghcr.io/trickle-labs/pg-tide:v0.14.0` | 9090 (metrics) |
 | worker | `riverbank:latest` | — |
 | langfuse-web | `langfuse/langfuse:3` | 3000 |
 | langfuse-worker | `langfuse/langfuse-worker:3` | — |

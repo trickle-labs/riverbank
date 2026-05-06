@@ -6,8 +6,8 @@
 >
 > **Dependencies:** riverbank is built on top of
 > [pg-ripple](https://github.com/grove/pg-ripple) ≥ 0.98.0,
-> [pg-trickle](https://github.com/grove/pg-trickle) ≥ 0.46.0, and
-> [pg-tide](https://github.com/trickle-labs/pg-tide) ≥ 0.11.0.
+> [pg-trickle](https://github.com/grove/pg-trickle) ≥ 0.48.0, and
+> [pg-tide](https://github.com/trickle-labs/pg-tide) ≥ 0.14.0.
 > The implementation blueprint lives in
 > [plans/riverbank-implementation.md](plans/riverbank-implementation.md);
 > the strategy document lives in [plans/riverbank.md](plans/riverbank.md).
@@ -29,7 +29,7 @@
 | Version | Description | Status | Size |
 |---|---|---|---|
 | v0.4.0 | Incremental compilation core — artifact dependency graph, `riverbank explain`, recompile flow, vocabulary pass, SKOS integrity shape bundle, `tenant_id` schema scaffold | Planned | Large |
-| v0.5.0 | Multi-format parsing and enrichment — Docling, spaCy NER + vocabulary lookup, fuzzy entity matching, embedding generation, Singer tap configuration (pg-tide ≥ 0.11.0) | Planned | Large |
+| v0.5.0 | Multi-format parsing and enrichment — Docling, spaCy NER + vocabulary lookup, fuzzy entity matching, embedding generation, Singer tap configuration (pg-tide ≥ 0.14.0) | Planned | Large |
 
 ### Quality Gates and Review (v0.6.x)
 
@@ -96,8 +96,8 @@ Goal: prove the deployment story end-to-end with no LLM calls.
   pg_trickle, and pg_tide installed via `testcontainers-python`
 - [x] No-op extractor: records a run, emits an OTel span, writes nothing to the
   graph — verifying orchestration plumbing end-to-end
-- [x] `docker compose up` brings up: PostgreSQL with pg_ripple ≥ 0.93 + pg_trickle
-  ≥ 0.46, pg-tide v0.6, riverbank worker, Langfuse, Ollama
+- [x] `docker compose up` brings up: PostgreSQL with pg_ripple ≥ 0.98 + pg_trickle
+  ≥ 0.48, pg-tide v0.14, riverbank worker, Langfuse, Ollama
 
 **Exit criterion:** `docker compose up -d && riverbank health` prints
 "all systems nominal" on a clean checkout.
@@ -218,7 +218,7 @@ Goal: extend ingestion beyond Markdown to office documents and web content, and 
   compiled summary. Entity-cluster centroid views are maintained as
   `avg(embedding)::vector` pg_trickle stream tables (pgVector IVM, v0.37+):
   centroid updates incrementally with no full scan on each new fact.
-- **Singer tap configuration.** pg-tide ≥ 0.11.0 ships native Singer tap
+- **Singer tap configuration.** pg-tide ≥ 0.14.0 ships native Singer tap
   mode: tap invocation, STATE checkpoint persistence (resumable taps across
   restarts), and SCHEMA drift detection are all handled by the pg-tide sidecar.
   riverbank's contribution is profile-side: a `singer_taps` block in the
