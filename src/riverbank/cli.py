@@ -224,7 +224,13 @@ def ingest(
         _counts: dict[str, int] = {"processed": 0, "skipped": 0, "errors": 0}
 
         def _on_progress(event: str, data: dict) -> None:
-            if event == "preprocessing_start":
+            if event == "corpus_analysis_start":
+                n = data.get("n_docs", "?")
+                progress.update(task, description=f"[magenta]corpus analysis[/magenta] ({n} docs)")
+            elif event == "corpus_analysis_done":
+                n = data.get("n_clusters", "?")
+                progress.update(task, description=f"[magenta]clustered → {n} clusters[/magenta]")
+            elif event == "preprocessing_start":
                 name = data["source"].rsplit("/", 1)[-1]
                 progress.update(task, description=f"[magenta]preprocessing[/magenta] {name}")
             elif event == "preprocessing_done":

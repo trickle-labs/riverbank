@@ -1,0 +1,51 @@
+# Example profile: docs-policy-v1 with Phase 2 corpus preprocessing enabled.
+# Run: riverbank ingest --profile examples/profiles/docs-policy-v1-corpus.yaml
+#
+# Phase 2 (corpus_preprocessing) requires >= min_docs documents.
+# Lower min_docs here for quick smoke tests with the small example corpus.
+
+name: docs-policy-v1-corpus
+version: "0.1"
+description: >
+  Full preprocessing stack: Phase 1 document summary + entity catalog,
+  Phase 2 corpus clustering (3 cluster target for the 3-doc example corpus).
+prompt_text: |
+  Extract RDF triples from the following document fragment.
+  Return a JSON object with a "triples" array. Each triple must have:
+    subject, predicate, object (all fully qualified IRIs or literals).
+  Focus on the entities and relationships described in the text.
+
+# Phase 1: per-document summary + entity catalog
+preprocessing:
+  enabled: true
+  strategies:
+    - document_summary
+    - entity_catalog
+  max_entities: 50
+  predefined_predicates:
+    - rdf:type
+    - rdfs:label
+    - rdfs:comment
+    - schema:isPartOf
+    - schema:hasPart
+    - schema:name
+    - schema:description
+
+# Phase 2: corpus-level hierarchical clustering
+# Requires: pip install 'riverbank[embed]'  (sentence-transformers + scikit-learn)
+corpus_preprocessing:
+  enabled: true
+  min_docs: 3               # low threshold for the 3-doc example corpus
+  target_cluster_size: 2   # produces ~2 clusters from 3 docs
+  cache: true              # skip re-analysis when corpus content is unchanged
+
+# Ontology namespace hints
+ontology_namespaces:
+  ex: "http://example.org/ns/"
+  schema: "https://schema.org/"
+  rdf: "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  rdfs: "http://www.w3.org/2000/01/rdf-schema#"
+
+# LLM settings
+model_name: llama3.2
+temperature: 0.0

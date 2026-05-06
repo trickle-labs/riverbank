@@ -663,6 +663,8 @@ riverbank query "SELECT (COUNT(DISTINCT ?s) AS ?subjects) WHERE { ?s ?p ?o }"
 
 ## Implementation Checklist
 
+### Phase 1 (document-level preprocessing)
+
 - [x] Create `src/riverbank/preprocessors/__init__.py` with `DocumentPreprocessor` class
 - [x] Define `PreprocessingResult` dataclass
 - [x] Implement entity catalog extraction prompt
@@ -678,6 +680,19 @@ riverbank query "SELECT (COUNT(DISTINCT ?s) AS ?subjects) WHERE { ?s ?p ?o }"
 - [x] Create example profile: `examples/profiles/docs-policy-v1-preprocessed.yaml`
 - [x] Update progress callback to report preprocessing step (`preprocessing_start` / `preprocessing_done` events)
 - [x] Document in `docs/concepts/preprocessing.md`
+
+### Phase 2 (corpus-level clustering)
+
+- [x] Define `ClusterSummary` and `CorpusAnalysis` dataclasses
+- [x] Implement `CorpusPreprocessor` with `analyze()`, `build_context()`, `_embed_summaries()`, `_cluster()`, `_summarize_cluster()`, `_summarize_corpus()`, `_hash_corpus()`
+- [x] Add `corpus_preprocessing: dict` field to `CompilerProfile`
+- [x] Wire `CorpusPreprocessor.analyze()` into `_run_inner()` (runs before the source loop)
+- [x] Inject tiered CORPUS/CLUSTER/DOCUMENT context via `_process_source()` `corpus_analysis` param
+- [x] Add `corpus_analysis_start` / `corpus_analysis_done` progress events to CLI display
+- [x] Write 18 unit tests (`tests/unit/test_corpus_preprocessor.py`)
+- [x] Create example profile: `examples/profiles/docs-policy-v1-corpus.yaml`
+- [ ] Write integration test comparing extraction quality with/without Phase 2
+- [ ] Persist `CorpusAnalysis` in a DB cache table (keyed by `corpus_hash`) for large corpora
 
 ---
 

@@ -514,3 +514,383 @@ class FewShotInjector:
         pool = list(examples)
         random.shuffle(pool)
         return pool[:n]
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Corpus-Level Preprocessing — hierarchical clustering
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ClusterSummary:
+    """Summary of one document cluster produced by CorpusPreprocessor."""
+
+    cluster_id: int
+    label: str                          # e.g. "Architecture"
+    doc_iris: list[str]                 # source IRIs of documents in this cluster
+    summary: str                        # cluster-level 2-3 sentence summary
+    entity_vocabulary: list[str] = field(default_factory=list)   # canonical ex: IRIs seen
+    predicate_vocabulary: list[str] = field(default_factory=list) # predicates seen
+
+
+@dataclass
+class CorpusAnalysis:
+    """Output of CorpusPreprocessor.analyze() — cached per corpus content hash."""
+
+    corpus_summary: str                       # 2-3 sentences covering the whole corpus
+    clusters: list[ClusterSummary]            # one entry per cluster
+    doc_cluster_map: dict[str, int]           # source_iri → cluster_id
+    corpus_hash: str = ""                     # hex hash of all source IRIs+hashes (for cache)
+    _doc_summaries: dict = field(default_factory=dict, repr=False)  # source_iri → summary (internal)
+
+
+_CORPUS_SUMMARY_PROMPT = """\
+You are given summaries of all documents in a knowledge corpus.
+Write a single cohesive summary (2-3 sentences) that describes:
+- What domain or system the corpus covers
+- The main topic areas present
+- The intended audience or purpose
+
+Return only the summary text. Maximum 120 words.
+"""
+
+_CLUSTER_SUMMARY_PROMPT = """\
+You are given summaries of a group of related documents.
+Write a short summary (2-3 sentences) that describes what this group has in common:
+- The shared domain or sub-topic
+- The main concepts and entity types involved
+- The key relationships typically described
+
+Also propose a short label (1-3 words, title-case) for this cluster, e.g. "Architecture", "Configuration", "Operations".
+
+Return JSON with keys: label (string), summary (string).
+"""
+
+
+class CorpusPreprocessor:
+    """Phase 2 preprocessing: corpus-level clustering and context generation.
+
+    Runs once before any document preprocessing.  Embeds all document summaries,
+    clusters them into topic groups, and generates:
+      - A corpus-wide summary
+      - A per-cluster summary with entity and predicate vocabulary
+
+    These are injected into every fragment extraction call as a tiered context
+    hierarchy:  CORPUS → CLUSTER → DOCUMENT → fragment.
+
+    Requires ``sentence-transformers`` for embedding (``pip install riverbank[embed]``).
+    Falls back gracefully when unavailable — Phase 1 doc-level context still works.
+
+    Profile YAML::
+
+        corpus_preprocessing:
+          enabled: true
+          min_docs: 20              # skip clustering below this corpus size
+          target_cluster_size: 15  # target documents per cluster
+          cache: true              # re-use analysis when corpus hash unchanged
+
+    Usage::
+
+        cp = CorpusPreprocessor(settings)
+        analysis = cp.analyze(doc_summaries, profile)  # {source_iri: summary_text}
+        context = cp.build_context(source_iri, analysis, doc_summary)
+    """
+
+    def __init__(self, settings: Any = None) -> None:
+        self._settings = settings
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def analyze(
+        self,
+        doc_summaries: dict[str, str],   # source_iri → summary_text
+        profile: Any,
+    ) -> CorpusAnalysis | None:
+        """Embed + cluster *doc_summaries*, summarise each cluster, return analysis.
+
+        Returns ``None`` when corpus is too small, clustering is disabled, or
+        ``sentence-transformers`` is unavailable.
+        """
+        cfg: dict = getattr(profile, "corpus_preprocessing", {})
+        if not cfg.get("enabled", False):
+            return None
+
+        min_docs: int = cfg.get("min_docs", 20)
+        if len(doc_summaries) < min_docs:
+            logger.info(
+                "CorpusPreprocessor: corpus has %d docs (< min_docs=%d), skipping clustering",
+                len(doc_summaries),
+                min_docs,
+            )
+            return None
+
+        try:
+            embeddings = self._embed_summaries(doc_summaries, profile)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("CorpusPreprocessor: embedding failed (%s), skipping Phase 2", exc)
+            return None
+
+        target_size: int = cfg.get("target_cluster_size", 15)
+        n_clusters = max(2, round(len(doc_summaries) / target_size))
+        cluster_assignments = self._cluster(embeddings, n_clusters)
+
+        # Build per-cluster doc lists
+        cluster_docs: dict[int, list[str]] = {}
+        for iri, cid in cluster_assignments.items():
+            cluster_docs.setdefault(cid, []).append(iri)
+
+        # Summarise each cluster
+        clusters: list[ClusterSummary] = []
+        for cid, iris in sorted(cluster_docs.items()):
+            summaries_for_cluster = {iri: doc_summaries[iri] for iri in iris if iri in doc_summaries}
+            cs = self._summarize_cluster(cid, iris, summaries_for_cluster, profile)
+            clusters.append(cs)
+
+        # Summarise the whole corpus
+        corpus_summary = self._summarize_corpus(
+            [cs.summary for cs in clusters], profile
+        )
+
+        corpus_hash = self._hash_corpus(doc_summaries)
+        analysis = CorpusAnalysis(
+            corpus_summary=corpus_summary,
+            clusters=clusters,
+            doc_cluster_map=cluster_assignments,
+            corpus_hash=corpus_hash,
+            _doc_summaries=dict(doc_summaries),
+        )
+        logger.info(
+            "CorpusPreprocessor: analyzed %d docs → %d clusters",
+            len(doc_summaries),
+            len(clusters),
+        )
+        return analysis
+
+    def build_context(
+        self,
+        source_iri: str,
+        analysis: CorpusAnalysis | None,
+        doc_summary: str = "",
+    ) -> str:
+        """Return a tiered CORPUS → CLUSTER → DOCUMENT context block for injection.
+
+        Returns an empty string when *analysis* is None (Phase 2 disabled / unavailable).
+        """
+        if analysis is None:
+            return ""
+
+        parts: list[str] = []
+
+        if analysis.corpus_summary:
+            parts.append(f"CORPUS CONTEXT:\n{analysis.corpus_summary}")
+
+        cluster_id = analysis.doc_cluster_map.get(source_iri)
+        if cluster_id is not None:
+            cluster = next((c for c in analysis.clusters if c.cluster_id == cluster_id), None)
+            if cluster:
+                cluster_ctx = f"CLUSTER CONTEXT ({cluster.label}):\n{cluster.summary}"
+                if cluster.entity_vocabulary:
+                    cluster_ctx += "\n  Expected entities: " + ", ".join(cluster.entity_vocabulary[:10])
+                if cluster.predicate_vocabulary:
+                    cluster_ctx += "\n  Expected predicates: " + ", ".join(cluster.predicate_vocabulary[:8])
+                parts.append(cluster_ctx)
+
+        if doc_summary:
+            parts.append(f"DOCUMENT CONTEXT:\n{doc_summary}")
+
+        return "\n\n".join(parts)
+
+    # ------------------------------------------------------------------
+    # Private: embedding
+    # ------------------------------------------------------------------
+
+    def _embed_summaries(
+        self,
+        doc_summaries: dict[str, str],
+        profile: Any,
+    ) -> dict[str, list[float]]:
+        """Embed each document summary using sentence-transformers.
+
+        Returns ``{source_iri: embedding_vector}``.
+        Raises ``ImportError`` when sentence-transformers is absent.
+        """
+        try:
+            from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+        except ImportError as exc:
+            raise ImportError(
+                "sentence-transformers is required for corpus clustering. "
+                "Install with: pip install 'riverbank[embed]'"
+            ) from exc
+
+        embed_model: str = getattr(profile, "embed_model", "nomic-embed-text")
+        # nomic-embed-text is Ollama-specific; fall back to a model ST ships with
+        st_model = embed_model if "/" in embed_model or embed_model.startswith("all-") else "all-MiniLM-L6-v2"
+        logger.debug("CorpusPreprocessor: embedding with %s", st_model)
+
+        model = SentenceTransformer(st_model)
+        iris = list(doc_summaries.keys())
+        texts = [doc_summaries[iri] for iri in iris]
+        vectors = model.encode(texts, show_progress_bar=False)
+        return {iri: vec.tolist() for iri, vec in zip(iris, vectors)}
+
+    # ------------------------------------------------------------------
+    # Private: clustering
+    # ------------------------------------------------------------------
+
+    def _cluster(
+        self,
+        embeddings: dict[str, list[float]],
+        n_clusters: int,
+    ) -> dict[str, int]:
+        """K-means cluster embeddings, return {source_iri: cluster_id}."""
+        import numpy as np  # noqa: PLC0415
+
+        try:
+            from sklearn.cluster import KMeans  # noqa: PLC0415
+        except ImportError as exc:
+            raise ImportError(
+                "scikit-learn is required for corpus clustering. "
+                "Install with: pip install 'riverbank[embed]'"
+            ) from exc
+
+        iris = list(embeddings.keys())
+        X = np.array([embeddings[iri] for iri in iris])
+
+        n = min(n_clusters, len(iris))
+        km = KMeans(n_clusters=n, random_state=42, n_init="auto")
+        labels = km.fit_predict(X)
+        return {iri: int(label) for iri, label in zip(iris, labels)}
+
+    # ------------------------------------------------------------------
+    # Private: LLM summarisation
+    # ------------------------------------------------------------------
+
+    def _summarize_cluster(
+        self,
+        cluster_id: int,
+        doc_iris: list[str],
+        summaries: dict[str, str],
+        profile: Any,
+    ) -> ClusterSummary:
+        """Ask the LLM to summarise a cluster and give it a label."""
+        combined = "\n\n".join(
+            f"Document: {iri}\n{summary}"
+            for iri, summary in list(summaries.items())[:10]  # cap to avoid huge prompts
+        )
+        try:
+            from pydantic import BaseModel  # noqa: PLC0415
+
+            class _ClusterSummaryResponse(BaseModel):
+                label: str
+                summary: str
+
+            client, model_name = self._get_llm_client(profile)
+            resp, _completion = client.chat.completions.create_with_completion(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": _CLUSTER_SUMMARY_PROMPT},
+                    {"role": "user", "content": combined},
+                ],
+                response_model=_ClusterSummaryResponse,
+            )
+            return ClusterSummary(
+                cluster_id=cluster_id,
+                label=resp.label.strip(),
+                doc_iris=doc_iris,
+                summary=resp.summary.strip(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("CorpusPreprocessor: cluster %d summarization failed: %s", cluster_id, exc)
+            doc_names = [iri.rsplit("/", 1)[-1] for iri in doc_iris[:3]]
+            return ClusterSummary(
+                cluster_id=cluster_id,
+                label=f"Cluster-{cluster_id}",
+                doc_iris=doc_iris,
+                summary=f"A group of {len(doc_iris)} related documents: {', '.join(doc_names)}…",
+            )
+
+    def _summarize_corpus(
+        self,
+        cluster_summaries: list[str],
+        profile: Any,
+    ) -> str:
+        """Summarise the entire corpus from the cluster summaries."""
+        combined = "\n\n".join(
+            f"Cluster {i+1}: {s}" for i, s in enumerate(cluster_summaries)
+        )
+        try:
+            from pydantic import BaseModel  # noqa: PLC0415
+
+            class _CorpusSummary(BaseModel):
+                summary: str
+
+            client, model_name = self._get_llm_client(profile)
+            resp, _completion = client.chat.completions.create_with_completion(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": _CORPUS_SUMMARY_PROMPT},
+                    {"role": "user", "content": combined},
+                ],
+                response_model=_CorpusSummary,
+            )
+            return resp.summary.strip()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("CorpusPreprocessor: corpus summarization failed: %s", exc)
+            return f"A corpus of {len(cluster_summaries)} topic clusters."
+
+    def _get_llm_client(self, profile: Any) -> tuple[Any, str]:
+        """Return an (instructor_client, model_name) pair — same pattern as DocumentPreprocessor."""
+        try:
+            import instructor  # noqa: PLC0415
+            from openai import OpenAI  # noqa: PLC0415
+        except ImportError as exc:
+            raise ImportError(
+                "instructor and openai are required for corpus preprocessing. "
+                "Install with: pip install 'riverbank[ingest]'"
+            ) from exc
+
+        settings = self._settings
+        if settings is None:
+            from riverbank.config import get_settings  # noqa: PLC0415
+            settings = get_settings()
+
+        llm = getattr(settings, "llm", None)
+        provider: str = getattr(llm, "provider", "ollama")
+        api_base: str = getattr(llm, "api_base", "http://localhost:11434/v1")
+        api_key: str = getattr(llm, "api_key", "ollama")
+        model_name: str = getattr(llm, "model", getattr(profile, "model_name", "llama3.2"))
+
+        if provider == "copilot":
+            mode = instructor.Mode.JSON
+            client = instructor.from_openai(
+                OpenAI(base_url="https://models.inference.ai.azure.com", api_key=api_key),
+                mode=mode,
+            )
+        else:
+            mode = (
+                instructor.Mode.MD_JSON
+                if provider in ("ollama", "vllm")
+                else instructor.Mode.JSON
+            )
+            client = instructor.from_openai(
+                OpenAI(base_url=api_base, api_key=api_key),
+                mode=mode,
+            )
+        return client, model_name
+
+    # ------------------------------------------------------------------
+    # Private: cache key
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _hash_corpus(doc_summaries: dict[str, str]) -> str:
+        """Stable hash of the corpus content (IRI + summary pairs, sorted)."""
+        import hashlib  # noqa: PLC0415
+
+        h = hashlib.sha256()
+        for iri in sorted(doc_summaries):
+            h.update(iri.encode())
+            h.update(doc_summaries[iri].encode())
+        return h.hexdigest()[:16]

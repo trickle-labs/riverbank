@@ -59,6 +59,8 @@ class CompilerProfile:
     preprocessing: dict = field(default_factory=dict)
     # v0.11.0: Few-shot golden example injection (Strategy 6)
     few_shot: dict = field(default_factory=dict)
+    # v0.11.0: Corpus-level hierarchical clustering (Phase 2)
+    corpus_preprocessing: dict = field(default_factory=dict)
     # id is set after the profile is registered in the catalog DB
     id: Optional[int] = None
 
@@ -258,6 +260,40 @@ class IngestPipeline:
             from riverbank.preprocessors import FewShotInjector  # noqa: PLC0415
             few_shot_injector = FewShotInjector.from_profile(profile)
 
+            # Phase 2 preprocessing: corpus-level clustering.
+            # Requires Phase 1 summaries — collect them first via a lightweight pre-scan,
+            # then analyze once before the full extraction loop.
+            corpus_analysis = None
+            if getattr(profile, "corpus_preprocessing", {}).get("enabled", False):
+                from riverbank.preprocessors import CorpusPreprocessor, DocumentPreprocessor as _DP  # noqa: PLC0415
+                _cp_pre = _DP(self._settings) if preprocessor is None else preprocessor
+                doc_summaries: dict[str, str] = {}
+                if progress_callback:
+                    progress_callback("corpus_analysis_start", {"n_docs": len(sources)})
+                for _src in sources:
+                    try:
+                        _doc = parser.parse(_src)
+                        _summary_text, _pt, _ct = _cp_pre._extract_summary(_doc.raw_text, profile)
+                        if _summary_text:
+                            doc_summaries[_src.iri] = _summary_text
+                            stats["preprocessing_prompt_tokens"] += _pt
+                            stats["preprocessing_completion_tokens"] += _ct
+                    except Exception as _exc:  # noqa: BLE001
+                        logger.debug("Phase 2 pre-scan failed for %s: %s", _src.iri, _exc)
+                _corpus_proc = CorpusPreprocessor(self._settings)
+                corpus_analysis = _corpus_proc.analyze(doc_summaries, profile)
+                if corpus_analysis is not None:
+                    if progress_callback:
+                        progress_callback(
+                            "corpus_analysis_done",
+                            {"n_clusters": len(corpus_analysis.clusters)},
+                        )
+                    logger.info(
+                        "Phase 2: corpus analysis complete — %d clusters, corpus_hash=%s",
+                        len(corpus_analysis.clusters),
+                        corpus_analysis.corpus_hash,
+                    )
+
             for source in sources:
                 with tracer.start_as_current_span("ingest_pipeline.source") as src_span:
                     src_span.set_attribute("source.iri", source.iri)
@@ -277,6 +313,7 @@ class IngestPipeline:
                             progress_callback=progress_callback,
                             preprocessor=preprocessor,
                             few_shot_injector=few_shot_injector,
+                            corpus_analysis=corpus_analysis,
                         )
                     except Exception as exc:  # noqa: BLE001
                         logger.error("Failed to process %s: %s", source.iri, exc)
@@ -301,6 +338,7 @@ class IngestPipeline:
         progress_callback: Callable[[str, dict], None] | None = None,
         preprocessor: Any = None,
         few_shot_injector: Any = None,
+        corpus_analysis: Any = None,
     ) -> None:
         from riverbank.catalog.graph import (  # noqa: PLC0415
             delete_artifact_deps,
@@ -346,6 +384,25 @@ class IngestPipeline:
                     )
                 if progress_callback:
                     progress_callback("preprocessing_done", {"source": source.iri})
+
+        # Phase 2: inject corpus + cluster context on top of Phase 1 enrichment
+        if corpus_analysis is not None and not dry_run:
+            from dataclasses import replace as _dc_replace_p2  # noqa: PLC0415
+            from riverbank.preprocessors import CorpusPreprocessor as _CorpusProc  # noqa: PLC0415
+            _cp = _CorpusProc(self._settings)
+            doc_summary_text = corpus_analysis._doc_summaries.get(source.iri, "")
+            corpus_ctx = _cp.build_context(source.iri, corpus_analysis, doc_summary_text)
+            if corpus_ctx:
+                current_prompt = extraction_profile.prompt_text
+                extraction_profile = _dc_replace_p2(
+                    extraction_profile,
+                    prompt_text=f"{corpus_ctx}\n\n{current_prompt}",
+                )
+                logger.debug(
+                    "Phase 2: injected corpus/cluster context for %s (cluster %s)",
+                    source.iri,
+                    corpus_analysis.doc_cluster_map.get(source.iri, "?"),
+                )
 
         if progress_callback:
             progress_callback("source_start", {"source": source.iri, "total_fragments": len(fragments)})
