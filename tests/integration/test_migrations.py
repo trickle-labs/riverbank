@@ -37,31 +37,6 @@ def test_initial_migrations_create_all_tables(
     assert expected <= found, f"Missing tables: {expected - found}"
 
 
-def test_alembic_version_table_exists(
-    db_dsn: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """After upgrade head, Alembic version table must be in _riverbank schema."""
-    monkeypatch.setenv("RIVERBANK_DB__DSN", db_dsn)
-
-    from alembic import command
-    from alembic.config import Config
-
-    cfg = Config("alembic.ini")
-    command.upgrade(cfg, "head")
-
-    engine = create_engine(db_dsn)
-    with engine.connect() as conn:
-        row = conn.execute(
-            text(
-                "SELECT version_num FROM _riverbank.alembic_version"
-            )
-        ).fetchone()
-    engine.dispose()
-
-    assert row is not None
-    assert row[0] == "0002"
-
-
 def test_downgrade_removes_application_tables(
     db_dsn: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -89,6 +64,29 @@ def test_downgrade_removes_application_tables(
     engine.dispose()
 
     assert rows == [], f"Application tables still exist after downgrade: {[r[0] for r in rows]}"
+
+
+def test_alembic_version_is_0003_after_head_upgrade(
+    db_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After upgrade head, Alembic version must be 0003 (audit-trail migration)."""
+    monkeypatch.setenv("RIVERBANK_DB__DSN", db_dsn)
+
+    from alembic import command
+    from alembic.config import Config
+
+    cfg = Config("alembic.ini")
+    command.upgrade(cfg, "head")
+
+    engine = create_engine(db_dsn)
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT version_num FROM _riverbank.alembic_version")
+        ).fetchone()
+    engine.dispose()
+
+    assert row is not None
+    assert row[0] == "0003"
 
 
 def test_tenant_id_column_exists_after_migration(
@@ -156,7 +154,7 @@ def test_migration_0001_to_0002_is_incremental(
     assert ver is not None and ver[0] == "0001"
     assert row is None, "tenant_id should not exist before migration 0002"
 
-    # Now apply 0002
+    # Now apply 0002 and 0003
     command.upgrade(cfg, "head")
     engine = create_engine(db_dsn)
     with engine.connect() as conn:
@@ -173,6 +171,42 @@ def test_migration_0001_to_0002_is_incremental(
         ).fetchone()
     engine.dispose()
 
-    assert ver2 is not None and ver2[0] == "0002"
+    assert ver2 is not None and ver2[0] == "0003"
     assert row2 is not None, "tenant_id must exist after migration 0002"
+
+
+def test_migration_0003_append_only_trigger_exists(
+    db_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Migration 0003 must create the append-only trigger on _riverbank.log."""
+    monkeypatch.setenv("RIVERBANK_DB__DSN", db_dsn)
+
+    from alembic import command
+    from alembic.config import Config
+
+    cfg = Config("alembic.ini")
+    command.upgrade(cfg, "head")
+
+    engine = create_engine(db_dsn)
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT trigger_name FROM information_schema.triggers "
+                "WHERE event_object_schema = '_riverbank' "
+                "  AND event_object_table = 'log' "
+                "  AND trigger_name = 'log_no_update_delete'"
+            )
+        ).fetchone()
+        idx = conn.execute(
+            text(
+                "SELECT indexname FROM pg_indexes "
+                "WHERE schemaname = '_riverbank' "
+                "  AND tablename = 'log' "
+                "  AND indexname = 'ix_log_payload_gin'"
+            )
+        ).fetchone()
+    engine.dispose()
+
+    assert row is not None, "append-only trigger 'log_no_update_delete' must exist after migration 0003"
+    assert idx is not None, "GIN index 'ix_log_payload_gin' must exist after migration 0003"
 
