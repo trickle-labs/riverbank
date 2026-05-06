@@ -76,6 +76,8 @@ class CompilerProfile:
     token_optimization: dict = field(default_factory=dict)
     # v0.12.1: Functional predicate hints — max_cardinality: 1 annotations
     predicate_constraints: dict = field(default_factory=dict)
+    # v0.13.0: Tentative cleanup TTL in days (0 = disabled)
+    tentative_ttl_days: int = 30
     # id is set after the profile is registered in the catalog DB
     id: Optional[int] = None
 

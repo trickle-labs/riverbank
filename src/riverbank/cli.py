@@ -2390,3 +2390,674 @@ def verify_triples(
     else:
         rprint("[green bold]verification pass complete[/green bold]")
 
+
+# ---------------------------------------------------------------------------
+# v0.13.0 — Entity Convergence commands
+# ---------------------------------------------------------------------------
+
+
+@app.command("normalize-predicates")
+def normalize_predicates(
+    named_graph: str = typer.Option(
+        "http://riverbank.example/graph/trusted",
+        "--graph", "-g",
+        help="Named graph to normalize predicates in",
+    ),
+    threshold: float = typer.Option(
+        0.88, "--threshold",
+        help="Cosine-similarity threshold for predicate clustering (0.0–1.0)",
+    ),
+    rewrite: bool = typer.Option(
+        False, "--rewrite",
+        help="Rewrite existing triples to use canonical predicate IRIs (in addition to equivalentProperty)",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Show clusters without writing owl:equivalentProperty triples",
+    ),
+) -> None:
+    """Cluster near-duplicate predicates and write owl:equivalentProperty links.
+
+    Embeds predicate labels using sentence-transformers and clusters predicates
+    by cosine similarity.  Within each cluster the most-frequent predicate is
+    promoted as canonical; non-canonical predicates receive
+    ``owl:equivalentProperty`` links.
+
+    Use ``--rewrite`` to also rewrite existing triples to the canonical form.
+
+    Example::
+
+        riverbank normalize-predicates --graph http://riverbank.example/graph/trusted --dry-run
+    """
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.postprocessors.predicate_norm import PredicateNormalizer  # noqa: PLC0415
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+
+    rprint(
+        f"[bold]riverbank normalize-predicates[/bold]  "
+        f"graph=<{named_graph}>  threshold={threshold}"
+    )
+    if dry_run:
+        rprint("[dim]dry-run mode — no changes will be written[/dim]")
+
+    normalizer = PredicateNormalizer(threshold=threshold, rewrite=rewrite)
+    try:
+        with engine.connect() as conn:
+            result = normalizer.normalize(conn, named_graph, dry_run=dry_run)
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]normalize-predicates failed: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+    table = Table(
+        title="Predicate normalization summary" + (" (DRY RUN)" if dry_run else ""),
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("Predicates examined", str(result.predicates_examined))
+    table.add_row("Clusters found", str(result.clusters_found))
+    table.add_row("owl:equivalentProperty written", str(result.equivalent_property_written))
+    if rewrite:
+        table.add_row("Triples rewritten", str(result.triples_rewritten))
+    rprint(table)
+
+    if result.clusters_found > 0:
+        cluster_table = Table(
+            title="Predicate clusters",
+            show_header=True,
+            header_style="bold cyan",
+        )
+        cluster_table.add_column("Canonical", max_width=50)
+        cluster_table.add_column("Aliases", max_width=60)
+        cluster_table.add_column("Sim", justify="right")
+        for cluster in result.clusters[:20]:
+            cluster_table.add_row(
+                cluster.canonical[:50],
+                ", ".join(a[:25] for a in cluster.aliases[:3]),
+                f"{cluster.similarity:.3f}",
+            )
+        rprint(cluster_table)
+
+    if dry_run:
+        rprint("\n[yellow]DRY RUN — no changes written[/yellow]")
+    else:
+        rprint(
+            f"\n[green bold]Normalization complete. "
+            f"{result.equivalent_property_written} owl:equivalentProperty triple(s) written.[/green bold]"
+        )
+
+
+# ---------------------------------------------------------------------------
+# entities sub-app
+# ---------------------------------------------------------------------------
+
+entities_app = typer.Typer(
+    name="entities",
+    help="Entity registry management — list, merge, and inspect entity synonym rings.",
+    no_args_is_help=True,
+)
+app.add_typer(entities_app)
+
+
+@entities_app.command("list")
+def entities_list(
+    named_graph: str = typer.Option(
+        "http://riverbank.example/graph/trusted",
+        "--graph", "-g",
+        help="Named graph to list entities from",
+    ),
+    limit: int = typer.Option(
+        50, "--limit", "-n",
+        help="Maximum number of entities to show",
+    ),
+) -> None:
+    """List entities in the registry with their synonym rings.
+
+    Displays all entity IRIs, labels, types, and known surface-form variants
+    (``skos:altLabel`` synonym rings).
+
+    Example::
+
+        riverbank entities list --graph http://riverbank.example/graph/trusted
+    """
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.postprocessors.entity_linker import EntityLinker  # noqa: PLC0415
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+
+    linker = EntityLinker()
+    try:
+        with engine.connect() as conn:
+            registry = linker.load_registry(conn, named_graph, limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]entities list failed: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+    if not registry.entities:
+        rprint(f"[dim]No entities found in <{named_graph}>.[/dim]")
+        return
+
+    table = Table(
+        title=f"Entity registry — <{named_graph}> ({len(registry.entities)} entities)",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("IRI", max_width=50)
+    table.add_column("Label", max_width=30)
+    table.add_column("Type", max_width=30)
+    table.add_column("Variants", max_width=40)
+
+    for entity in registry.entities[:limit]:
+        table.add_row(
+            entity.iri[:50],
+            entity.label[:30],
+            (entity.entity_type or "—")[:30],
+            ", ".join(entity.variants[:3]) or "—",
+        )
+
+    rprint(table)
+
+
+@entities_app.command("merge")
+def entities_merge(
+    entity: str = typer.Option(..., "--entity", help="IRI of the entity to merge FROM"),
+    into: str = typer.Option(..., "--into", help="IRI of the canonical entity to merge INTO"),
+    named_graph: str = typer.Option(
+        "http://riverbank.example/graph/trusted",
+        "--graph", "-g",
+        help="Named graph to operate on",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Preview the merge without writing changes",
+    ),
+) -> None:
+    """Merge one entity into another, writing a skos:altLabel for the alias.
+
+    Rewrites all triples that reference the FROM entity to use the INTO entity
+    IRI, and writes a ``skos:altLabel`` for the old label.
+
+    Example::
+
+        riverbank entities merge \\
+            --entity ex:dataset \\
+            --into ex:Dataset \\
+            --graph http://riverbank.example/graph/trusted
+    """
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.postprocessors.entity_linker import EntityLinker  # noqa: PLC0415
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+
+    linker = EntityLinker()
+    try:
+        with engine.connect() as conn:
+            registry = linker.load_registry(conn, named_graph, limit=5000)
+            merged = registry.merge(into_iri=into, from_iri=entity)
+            if merged and not dry_run:
+                # Write skos:altLabel for the merged entity's label
+                from_record_label = entity.split("/")[-1].split("#")[-1]
+                linker._write_alt_label(conn, named_graph, into, from_record_label)
+                conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]entities merge failed: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+    if not merged:
+        rprint(f"[red]Merge failed — entity {entity!r} or {into!r} not found in registry[/red]")
+        raise typer.Exit(code=1)
+
+    if dry_run:
+        rprint(
+            f"[yellow]DRY RUN — would merge {entity!r} → {into!r}[/yellow]"
+        )
+    else:
+        rprint(
+            f"[green bold]Merged {entity!r} → {into!r}[/green bold]"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Contradiction detection
+# ---------------------------------------------------------------------------
+
+
+@app.command("detect-contradictions")
+def detect_contradictions(
+    profile_name: str = typer.Argument(
+        ..., help="Profile name or path to YAML file"
+    ),
+    named_graph: str = typer.Option(
+        "http://riverbank.example/graph/trusted",
+        "--graph", "-g",
+        help="Named graph to inspect for contradictions",
+    ),
+    tentative_graph: str = typer.Option(
+        "http://riverbank.example/graph/tentative",
+        "--tentative-graph",
+        help="Tentative graph where demoted triples are moved",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Detect conflicts but do not apply penalties or move triples",
+    ),
+) -> None:
+    """Detect and demote contradicting triples for functional predicates.
+
+    For each predicate annotated with ``max_cardinality: 1`` in the profile's
+    ``predicate_constraints`` block, finds subjects with more than one distinct
+    object value.  Reduces confidence of conflicting triples by 30%; demotes
+    below-threshold triples to the tentative graph.  Writes ``pgc:ConflictRecord``
+    provenance records.
+
+    Example::
+
+        riverbank detect-contradictions docs-policy-v1 --dry-run
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.pipeline import CompilerProfile  # noqa: PLC0415
+    from riverbank.postprocessors.contradiction import ContradictionDetector  # noqa: PLC0415
+
+    profile_path = Path(profile_name)
+    if profile_path.exists() and profile_path.suffix in {".yaml", ".yml"}:
+        profile = CompilerProfile.from_yaml(profile_path)
+    else:
+        profile = CompilerProfile(name=profile_name)
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+
+    rprint(
+        f"[bold]riverbank detect-contradictions[/bold]  "
+        f"profile={profile.name!r}  graph=<{named_graph}>"
+    )
+    if dry_run:
+        rprint("[dim]dry-run mode — no changes will be written[/dim]")
+
+    detector = ContradictionDetector()
+    try:
+        with engine.connect() as conn:
+            result = detector.detect(
+                conn, profile, named_graph,
+                tentative_graph=tentative_graph,
+                dry_run=dry_run,
+            )
+            if not dry_run:
+                conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]detect-contradictions failed: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+    table = Table(
+        title="Contradiction detection summary" + (" (DRY RUN)" if dry_run else ""),
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("Functional predicates checked", str(result.functional_predicates_checked))
+    table.add_row("Conflicts found", str(result.conflicts_found))
+    table.add_row("Triples penalised (−30% confidence)", str(result.triples_penalised))
+    table.add_row("Triples demoted → tentative", str(result.triples_demoted))
+    rprint(table)
+
+    if result.conflict_records:
+        cr_table = Table(
+            title="Conflict records",
+            show_header=True,
+            header_style="bold red",
+        )
+        cr_table.add_column("Subject", max_width=40)
+        cr_table.add_column("Predicate", max_width=30)
+        cr_table.add_column("Conflicting objects")
+        for cr in result.conflict_records[:20]:
+            cr_table.add_row(
+                cr.subject[:40],
+                cr.predicate[:30],
+                " | ".join(str(o)[:20] for o in cr.conflicting_objects[:3]),
+            )
+        rprint(cr_table)
+
+    if result.conflicts_found == 0:
+        rprint("[green]No contradictions detected.[/green]")
+    elif dry_run:
+        rprint(
+            f"\n[yellow bold]DRY RUN — {result.conflicts_found} conflict(s) detected. "
+            "Remove --dry-run to apply penalties.[/yellow bold]"
+        )
+    else:
+        rprint(
+            f"\n[green bold]Done. {result.conflicts_found} conflict(s) processed.[/green bold]"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Schema induction
+# ---------------------------------------------------------------------------
+
+
+@app.command("induce-schema")
+def induce_schema(
+    named_graph: str = typer.Option(
+        "http://riverbank.example/graph/trusted",
+        "--graph", "-g",
+        help="Named graph to analyse for schema induction",
+    ),
+    output: str = typer.Option(
+        "ontology/induced.ttl",
+        "--output", "-o",
+        help="Output path for the induced Turtle ontology",
+    ),
+    profile_name: str = typer.Option(
+        "", "--profile", "-p",
+        help="Profile name or YAML path (optional; updates allowed_predicates/classes if given)",
+    ),
+    top_predicates: int = typer.Option(
+        20, "--top-predicates",
+        help="Maximum number of predicates to include in the LLM prompt",
+    ),
+    top_types: int = typer.Option(
+        10, "--top-types",
+        help="Maximum number of entity types to include in the LLM prompt",
+    ),
+) -> None:
+    """Cold-start schema induction: propose an OWL ontology from graph statistics.
+
+    Collects unique predicates and entity types from the graph, asks the LLM
+    to propose a minimal OWL ontology, and writes it to ``--output`` for human
+    review.
+
+    After reviewing and editing ``ontology/induced.ttl``, run a second ingest
+    pass with the induced ontology loaded into the profile's
+    ``allowed_predicates`` and ``allowed_classes`` blocks.
+
+    Example::
+
+        riverbank induce-schema \\
+            --graph http://riverbank.example/graph/trusted \\
+            --output ontology/induced.ttl
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.schema_induction import SchemaInducer  # noqa: PLC0415
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+
+    rprint(
+        f"[bold]riverbank induce-schema[/bold]  "
+        f"graph=<{named_graph}>  output={output!r}"
+    )
+    rprint("[dim]Collecting graph statistics…[/dim]")
+
+    inducer = SchemaInducer(
+        settings=settings,
+        top_predicates=top_predicates,
+        top_types=top_types,
+    )
+
+    try:
+        with engine.connect() as conn:
+            stats = inducer.collect_statistics(conn, named_graph)
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]Failed to collect statistics: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+    rprint(
+        f"[dim]Statistics: {len(stats.predicates)} predicates, "
+        f"{len(stats.types)} entity types found.[/dim]"
+    )
+
+    if not stats.predicates and not stats.types:
+        rprint(
+            "[yellow]No predicates or types found in the graph. "
+            "Run riverbank ingest first to populate the graph.[/yellow]"
+        )
+        return
+
+    rprint("[dim]Requesting ontology proposal from LLM…[/dim]")
+    proposal = inducer.propose(stats)
+
+    # Write the Turtle file
+    output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(proposal.ttl_text)
+
+    rprint(f"\n[green bold]Ontology written to {output_path}[/green bold]")
+    rprint(
+        f"[dim]Predicates addressed: {len(proposal.predicates_addressed)}, "
+        f"types: {len(proposal.types_addressed)}, "
+        f"model: {proposal.model_used}[/dim]"
+    )
+    rprint(
+        f"[dim]Prompt tokens: {proposal.prompt_tokens}, "
+        f"completion tokens: {proposal.completion_tokens}[/dim]"
+    )
+
+    if proposal.allowed_predicates:
+        rprint(
+            f"\n[bold]Suggested profile additions:[/bold]\n"
+            f"  allowed_predicates: {proposal.allowed_predicates[:5]}...\n"
+            f"  allowed_classes: {proposal.allowed_classes[:5]}..."
+        )
+
+    rprint(
+        "\n[dim]Review the induced ontology, then run a second ingest pass "
+        "with the updated profile for improved precision.[/dim]"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tentative cleanup
+# ---------------------------------------------------------------------------
+
+
+@app.command("gc-tentative")
+def gc_tentative(
+    tentative_graph: str = typer.Option(
+        "http://riverbank.example/graph/tentative",
+        "--graph", "-g",
+        help="IRI of the tentative graph to clean up",
+    ),
+    older_than: str = typer.Option(
+        "30d",
+        "--older-than",
+        help="Archive triples older than this duration (e.g. 30d, 7d, 48h)",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Identify stale triples but do not archive them",
+    ),
+    limit: int = typer.Option(
+        1000, "--limit", "-n",
+        help="Maximum number of triples to process per run",
+    ),
+) -> None:
+    """Archive stale tentative triples that were never promoted.
+
+    Tentative triples that were extracted but never promoted to the trusted
+    graph and whose ``pgc:firstSeen`` timestamp is older than ``--older-than``
+    are moved to the ``_riverbank.log`` archive table.
+
+    Run periodically (or automatically after each ingest) to prevent the
+    tentative graph from growing indefinitely.
+
+    Example::
+
+        # Preview what would be archived
+        riverbank gc-tentative --older-than 30d --dry-run
+
+        # Archive stale triples
+        riverbank gc-tentative --older-than 30d
+    """
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.postprocessors.tentative_gc import TentativeGraphCleaner  # noqa: PLC0415
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+
+    rprint(
+        f"[bold]riverbank gc-tentative[/bold]  "
+        f"graph=<{tentative_graph}>  older-than={older_than!r}"
+    )
+    if dry_run:
+        rprint("[dim]dry-run mode — no changes will be written[/dim]")
+
+    cleaner = TentativeGraphCleaner(batch_size=limit)
+    try:
+        with engine.connect() as conn:
+            result = cleaner.gc(conn, tentative_graph, ttl=older_than, dry_run=dry_run)
+            if not dry_run:
+                conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]gc-tentative failed: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+    table = Table(
+        title="Tentative cleanup summary" + (" (DRY RUN)" if dry_run else ""),
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("Cutoff date", result.cutoff_date[:19] if result.cutoff_date else "—")
+    table.add_row("Triples examined", str(result.triples_examined))
+    table.add_row("Triples archived", str(result.triples_archived))
+    table.add_row("Triples within TTL (kept)", str(result.triples_skipped))
+    if result.errors:
+        table.add_row("[red]Errors[/red]", f"[red]{result.errors}[/red]")
+    rprint(table)
+
+    if dry_run:
+        rprint(
+            f"\n[yellow bold]DRY RUN — {result.triples_archived} triple(s) would be archived. "
+            "Remove --dry-run to apply.[/yellow bold]"
+        )
+    elif result.triples_archived > 0:
+        rprint(
+            f"\n[green bold]Archived {result.triples_archived} stale tentative triple(s).[/green bold]"
+        )
+    else:
+        rprint("[green]Tentative graph is clean — no stale triples found.[/green]")
+
+
+# ---------------------------------------------------------------------------
+# Quality regression tracking (benchmark)
+# ---------------------------------------------------------------------------
+
+
+@app.command("benchmark")
+def benchmark(
+    profile_name: str = typer.Option(
+        ..., "--profile", "-p",
+        help="Profile name or path to YAML file",
+    ),
+    golden: str = typer.Option(
+        ..., "--golden",
+        help="Path to the golden corpus directory (must contain ground_truth.yaml)",
+    ),
+    fail_below_f1: float = typer.Option(
+        0.85, "--fail-below-f1",
+        help="Exit non-zero when F1 drops below this threshold (0.0–1.0)",
+    ),
+) -> None:
+    """Re-extract a golden corpus and compare against ground truth for quality regression.
+
+    Loads ground truth triples from ``<golden>/ground_truth.yaml``, re-extracts
+    the corpus using the current pipeline, and computes precision, recall, and F1.
+
+    Exits with code 1 when ``F1 < --fail-below-f1``.  Designed for use in CI.
+
+    Example::
+
+        riverbank benchmark \\
+            --profile docs-policy-v1 \\
+            --golden tests/golden/docs-policy-v1 \\
+            --fail-below-f1 0.85
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from riverbank.benchmark import BenchmarkRunner  # noqa: PLC0415
+    from riverbank.pipeline import CompilerProfile  # noqa: PLC0415
+
+    profile_path = Path(profile_name)
+    if profile_path.exists() and profile_path.suffix in {".yaml", ".yml"}:
+        profile = CompilerProfile.from_yaml(profile_path)
+    else:
+        profile = CompilerProfile(name=profile_name)
+
+    golden_dir = Path(golden)
+    if not golden_dir.exists():
+        rprint(f"[red]Golden corpus directory not found: {golden_dir}[/red]")
+        raise typer.Exit(code=1)
+
+    rprint(
+        f"[bold]riverbank benchmark[/bold]  "
+        f"profile={profile.name!r}  golden={golden!r}  fail-below-f1={fail_below_f1}"
+    )
+
+    runner = BenchmarkRunner()
+    report = runner.run(
+        golden_dir=golden_dir,
+        profile=profile,
+        fail_below_f1=fail_below_f1,
+    )
+
+    table = Table(
+        title="Benchmark report",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("Ground truth triples", str(report.total_ground_truth))
+    table.add_row("Extracted triples", str(report.total_extracted))
+    table.add_row("True positives", str(report.true_positives))
+    table.add_row("False positives", str(report.false_positives))
+    table.add_row("False negatives", str(report.false_negatives))
+    table.add_row("Precision", f"{report.precision:.3f}")
+    table.add_row("Recall", f"{report.recall:.3f}")
+    table.add_row(
+        "[bold]F1[/bold]",
+        f"[bold {'green' if report.pass_threshold else 'red'}]{report.f1:.3f}[/bold {'green' if report.pass_threshold else 'red'}]",
+    )
+    table.add_row("Threshold", f"{fail_below_f1:.3f}")
+    table.add_row("Result", "[green bold]PASS[/green bold]" if report.pass_threshold else "[red bold]FAIL[/red bold]")
+    rprint(table)
+
+    if not report.pass_threshold:
+        rprint(
+            f"\n[red bold]F1 {report.f1:.3f} is below threshold {fail_below_f1:.3f} — "
+            "benchmark FAILED[/red bold]"
+        )
+        raise typer.Exit(code=1)
+    else:
+        rprint(f"\n[green bold]Benchmark PASSED (F1={report.f1:.3f})[/green bold]")
+
+

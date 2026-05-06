@@ -69,7 +69,7 @@
 | v0.11.1 | Token efficiency — per-fragment entity catalog filtering, adaptive preprocessing for small documents, Phase 2 pre-scan deduplication, Ollama keep-alive prompt caching, noise section filtering | **Done** | Small |
 | v0.12.0 | Permissive extraction (Phase A) — ontology-grounded & CQ-guided prompts, permissive extraction prompt, per-triple confidence routing, `graph/tentative`, two-tier query model, safety cap, pre-write structural filtering, overlapping fragments, literal normalization | **Done** | Large |
 | v0.12.1 | Permissive extraction (Phase B) — confidence consolidation (noisy-OR) with source diversity scoring, `riverbank promote-tentative`, functional predicate hints, `riverbank explain-rejections` | **Done** | Medium |
-| v0.13.0 | Entity convergence — predicate normalization, incremental entity linking with synonym ring extraction, `riverbank induce-schema`, contradiction detection, tentative cleanup, quality regression tracking | Planned | Large |
+| v0.13.0 | Entity convergence — predicate normalization, incremental entity linking with synonym ring extraction, `riverbank induce-schema`, contradiction detection, tentative cleanup, quality regression tracking | **Done** | Large |
 | v0.13.1 | Extraction feedback loops — auto few-shot expansion, semantic few-shot selection, batched verification, knowledge-prefix adapter | Planned | Medium |
 
 ### Structural Improvements & Stable Release (v0.14.x – v1.0.0)
@@ -686,10 +686,10 @@ lifecycle with contradiction detection and automatic cleanup. These are the
 critical correctness foundations — without stable vocabularies, the extraction
 feedback loops planned for v0.13.1 learn from noisy data.
 
-- [ ] **Predicate normalization.** Embed predicate labels, cluster by similarity,
+- [x] **Predicate normalization.** Embed predicate labels, cluster by similarity,
   map non-canonical predicates to ontology-defined canonical forms. Companion
   to entity deduplication — reduces predicate vocabulary by 30–50%.
-- [ ] **Incremental entity linking with synonym rings.** Persistent
+- [x] **Incremental entity linking with synonym rings.** Persistent
   `entity_registry` table (IRI, label, type, embedding, first_seen, doc_count)
   grows as documents are processed. Before extraction, top-K relevant entities
   are injected as "KNOWN ENTITIES — prefer these IRIs." New CLI:
@@ -700,13 +700,13 @@ feedback loops planned for v0.13.1 learn from noisy data.
   validates synonymy before writing. Synonym rings improve query recall and
   anchor the entity linker to attested surface forms rather than canonical-only
   matching.
-- [ ] **Contradiction detection & demotion.** For functional predicates annotated
+- [x] **Contradiction detection & demotion.** For functional predicates annotated
   in the profile YAML (from v0.12.0), detect when new `(s, p, o₂)` conflicts
   with existing `(s, p, o₁)`. Reduce confidence of both triples by 30%; demote
   below threshold. Create `pgc:ConflictRecord`. Works as an identity
   verification layer: triples that survive contradiction detection are
   demonstrably more trustworthy.
-- [ ] **`riverbank induce-schema`.** Cold-start onboarding: after an initial
+- [x] **`riverbank induce-schema`.** Cold-start onboarding: after an initial
   unconstrained extraction pass, collect all unique predicates and entity types
   from the graph, compute frequency statistics, and ask the LLM to propose a
   minimal OWL ontology (class hierarchy, domain/range, cardinality constraints).
@@ -714,14 +714,14 @@ feedback loops planned for v0.13.1 learn from noisy data.
   pass with the induced ontology as constraints produces 2x better precision.
   Removes the adoption bottleneck: users no longer need ontology expertise to
   get quality results.
-- [ ] **Automatic tentative cleanup.** Track `first_seen` timestamp for tentative
+- [x] **Automatic tentative cleanup.** Track `first_seen` timestamp for tentative
   triples. Auto-run after each ingest: archive tentative triples that were
   never promoted and have not been corroborated within the configurable TTL
   (default 30 days). `riverbank gc-tentative --older-than 30d` available
   for manual invocation; `tentative_ttl_days` in profile YAML to configure.
   Without automatic cleanup, the tentative graph grows indefinitely and
   becomes noise.
-- [ ] **Quality regression tracking.** `riverbank benchmark --profile <name>
+- [x] **Quality regression tracking.** `riverbank benchmark --profile <name>
   --golden tests/golden/<name>/ --fail-below-f1 0.85` re-extracts the golden
   corpus and compares against ground truth (precision, recall, F1). Runs in
   CI on every release; fails the build if quality drops.

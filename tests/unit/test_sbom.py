@@ -386,9 +386,9 @@ class TestPyprojectExtras:
         sbom_deps = data["project"]["optional-dependencies"]["sbom"]
         assert any("pip-audit" in dep for dep in sbom_deps)
 
-    def test_version_is_0_12_1(self):
+    def test_version_is_0_13_0(self):
         data = self._load_toml()
-        assert data["project"]["version"] == "0.12.1"
+        assert data["project"]["version"] == "0.13.0"
 
 
 # ---------------------------------------------------------------------------
