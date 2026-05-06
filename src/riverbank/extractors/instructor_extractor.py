@@ -99,9 +99,9 @@ class InstructorExtractor:
         api_base: str = getattr(llm, "api_base", "http://localhost:11434/v1")
         api_key: str = getattr(llm, "api_key", "ollama")
         model_name: str = getattr(
-            profile,
-            "model_name",
-            getattr(llm, "model", "llama3.2"),
+            llm,
+            "model",
+            getattr(profile, "model_name", "llama3.2"),
         )
         prompt_text: str = getattr(profile, "prompt_text", _DEFAULT_PROMPT)
 
