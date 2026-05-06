@@ -132,8 +132,10 @@ def test_migration_0001_to_0002_is_incremental(
     from alembic.config import Config
 
     cfg = Config("alembic.ini")
-    # Upgrade to the specific revision 0001 only
-    command.upgrade(cfg, "0001")
+    # Start from a clean state: downgrade to base, then upgrade to 0001 only
+    command.upgrade(cfg, "head")   # ensure schema exists first
+    command.downgrade(cfg, "base")  # tear down to base
+    command.upgrade(cfg, "0001")   # re-apply only the first migration
 
     engine = create_engine(db_dsn)
     with engine.connect() as conn:
