@@ -135,29 +135,16 @@ class InstructorExtractor:
             client = instructor.from_anthropic(anthropic_sdk.Anthropic(api_key=api_key))
             mode_kwargs: dict = {}
         elif provider == "copilot":
-            # Exchange GitHub PAT for a Copilot session token, then use the
-            # OpenAI-compatible Copilot API endpoint.
-            import urllib.request  # noqa: PLC0415
-            import json as _json  # noqa: PLC0415
-
-            req = urllib.request.Request(
-                "https://api.github.com/copilot_internal/v2/token",
-                headers={
-                    "Authorization": f"token {api_key}",
-                    "Accept": "application/json",
-                    "User-Agent": "riverbank",
-                },
-            )
-            with urllib.request.urlopen(req) as resp:  # noqa: S310
-                copilot_token = _json.loads(resp.read())["token"]
-
+            # GitHub Models API — OpenAI-compatible, authenticates with a GitHub PAT.
+            # Available models: gpt-4o, gpt-4o-mini, claude-3.5-sonnet, etc.
+            # https://github.com/marketplace/models
+            mode = instructor.Mode.JSON
             client = instructor.from_openai(
                 OpenAI(
-                    base_url="https://api.githubcopilot.com",
-                    api_key=copilot_token,
-                    default_headers={"Copilot-Integration-Id": "riverbank"},
+                    base_url="https://models.inference.ai.azure.com",
+                    api_key=api_key,
                 ),
-                mode=instructor.Mode.JSON,
+                mode=mode,
             )
             mode_kwargs = {}
         else:
