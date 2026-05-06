@@ -103,6 +103,8 @@ def test_write_audit_log_operation_stored_correctly() -> None:
     call_args = conn.execute.call_args
     params = call_args[0][1] if len(call_args[0]) > 1 else call_args[1]
     assert params.get("operation") == "review_decision"
+    # The log table uses 'operation' column (set in migration 0001); no 'event' column
+    assert "event" not in params
 
 
 def test_audit_trail_migration_sets_append_only() -> None:

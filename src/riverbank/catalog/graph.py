@@ -643,13 +643,12 @@ def write_audit_log(
     try:
         conn.execute(
             text(
-                "INSERT INTO _riverbank.log (event, payload, operation, actor) "
-                "VALUES (:event, :payload::jsonb, :operation, :actor)"
+                "INSERT INTO _riverbank.log (operation, payload, actor) "
+                "VALUES (:operation, :payload::jsonb, :actor)"
             ),
             {
-                "event": operation,
-                "payload": _json.dumps(payload),
                 "operation": operation,
+                "payload": _json.dumps(payload),
                 "actor": actor,
             },
         )
