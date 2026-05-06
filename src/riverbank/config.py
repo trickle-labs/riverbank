@@ -18,7 +18,7 @@ DEFAULT_CONFIG_FILE: Path = Path.home() / ".riverbank" / "config.toml"
 class LLMSettings(BaseModel):
     """LLM provider configuration."""
 
-    provider: Literal["ollama", "openai", "anthropic", "vllm", "azure-openai"] = "ollama"
+    provider: Literal["ollama", "openai", "anthropic", "vllm", "azure-openai", "copilot"] = "ollama"
     api_base: str = "http://localhost:11434/v1"
     api_key: str = "ollama"
     model: str = "llama3.2"

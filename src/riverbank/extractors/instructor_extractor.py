@@ -95,6 +95,7 @@ class InstructorExtractor:
             settings = get_settings()
 
         llm = getattr(settings, "llm", None)
+        provider: str = getattr(llm, "provider", "ollama")
         api_base: str = getattr(llm, "api_base", "http://localhost:11434/v1")
         api_key: str = getattr(llm, "api_key", "ollama")
         model_name: str = getattr(
@@ -122,12 +123,56 @@ class InstructorExtractor:
             confidence: float
             evidence: _EvidenceSpanIn
 
-        # --- call the LLM ---
-        # For local LLMs (Ollama), use md_json mode to avoid tool-calling issues
-        client = instructor.from_openai(
-            OpenAI(base_url=api_base, api_key=api_key),
-            mode=instructor.Mode.MD_JSON,
-        )
+        # --- build provider-specific instructor client ---
+        if provider == "anthropic":
+            try:
+                import anthropic as anthropic_sdk  # noqa: PLC0415
+            except ImportError as exc:
+                raise ImportError(
+                    "anthropic package is required for the anthropic provider. "
+                    "Install with: pip install anthropic"
+                ) from exc
+            client = instructor.from_anthropic(anthropic_sdk.Anthropic(api_key=api_key))
+            mode_kwargs: dict = {}
+        elif provider == "copilot":
+            # Exchange GitHub PAT for a Copilot session token, then use the
+            # OpenAI-compatible Copilot API endpoint.
+            import urllib.request  # noqa: PLC0415
+            import json as _json  # noqa: PLC0415
+
+            req = urllib.request.Request(
+                "https://api.github.com/copilot_internal/v2/token",
+                headers={
+                    "Authorization": f"token {api_key}",
+                    "Accept": "application/json",
+                    "User-Agent": "riverbank",
+                },
+            )
+            with urllib.request.urlopen(req) as resp:  # noqa: S310
+                copilot_token = _json.loads(resp.read())["token"]
+
+            client = instructor.from_openai(
+                OpenAI(
+                    base_url="https://api.githubcopilot.com",
+                    api_key=copilot_token,
+                    default_headers={"Copilot-Integration-Id": "riverbank"},
+                ),
+                mode=instructor.Mode.JSON,
+            )
+            mode_kwargs = {}
+        else:
+            # ollama, openai, vllm, azure-openai — all OpenAI-compatible
+            # Use MD_JSON for local models (ollama/vllm), JSON_SCHEMA for hosted
+            mode = (
+                instructor.Mode.MD_JSON
+                if provider in ("ollama", "vllm")
+                else instructor.Mode.JSON
+            )
+            client = instructor.from_openai(
+                OpenAI(base_url=api_base, api_key=api_key),
+                mode=mode,
+            )
+            mode_kwargs = {}
 
         response, completion = client.chat.completions.create_with_completion(
             model=model_name,
@@ -136,6 +181,7 @@ class InstructorExtractor:
                 {"role": "user", "content": text},
             ],
             response_model=list[_TripleIn],
+            **mode_kwargs,
         )
 
         # --- validate and filter triples ---
