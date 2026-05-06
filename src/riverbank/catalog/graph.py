@@ -11,8 +11,8 @@ logger = logging.getLogger(__name__)
 # SQL functions provided by the pg_ripple extension
 # Note: cast(:triples_json as jsonb) avoids the SQLAlchemy text() parser treating
 # "::jsonb" as part of the bind parameter name.
-_LOAD_TRIPLES_SQL = "SELECT pg_ripple.load_triples_with_confidence(cast(:triples_json as jsonb), :named_graph)"
-_SHACL_SCORE_SQL = "SELECT pg_ripple.shacl_score(:named_graph)"
+_LOAD_TRIPLES_SQL = "SELECT pg_ripple.load_triples_with_confidence(cast(:triples_json as jsonb), cast(:named_graph as text))"
+_SHACL_SCORE_SQL = "SELECT pg_ripple.shacl_score(cast(:named_graph as text))"
 
 # pg_ripple is checked at call time (trying the call is simpler than probing)
 
