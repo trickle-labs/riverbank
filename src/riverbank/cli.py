@@ -588,13 +588,15 @@ def explain(
     """
     from sqlalchemy import create_engine  # noqa: PLC0415
 
-    from riverbank.catalog.graph import get_artifact_deps  # noqa: PLC0415
+    from riverbank.catalog.graph import get_artifact_deps, suggest_sameas  # noqa: PLC0415
 
     settings = get_settings()
     engine = create_engine(settings.db.dsn)
     try:
         with engine.connect() as conn:
             deps = get_artifact_deps(conn, artifact_iri)
+            # v0.5.0: fuzzy match suggestions from pg_ripple
+            sameas_candidates = suggest_sameas(conn, artifact_iri)
     except Exception as exc:  # noqa: BLE001
         rprint(f"[red]Could not query artifact deps: {exc}[/red]")
         raise typer.Exit(code=1) from exc
@@ -608,14 +610,19 @@ def explain(
         rprint(
             "[dim]Run 'riverbank ingest' first or check that the IRI is correct.[/dim]"
         )
-        return
+    else:
+        table = Table(title="Dependency tree", show_header=True, header_style="bold cyan")
+        table.add_column("Dependency kind")
+        table.add_column("Reference")
 
-    table = Table(title="Dependency tree", show_header=True, header_style="bold cyan")
-    table.add_column("Dependency kind")
-    table.add_column("Reference")
+        for dep in deps:
+            table.add_row(dep["dep_kind"], dep["dep_ref"])
 
-    for dep in deps:
-        table.add_row(dep["dep_kind"], dep["dep_ref"])
+        rprint(table)
 
-    rprint(table)
+    # v0.5.0: show fuzzy match / sameAs suggestions when available
+    if sameas_candidates:
+        rprint("\n[bold]Fuzzy match suggestions (owl:sameAs candidates)[/bold]")
+        for candidate in sameas_candidates:
+            rprint(f"  [cyan]→[/cyan]  {candidate}")
 

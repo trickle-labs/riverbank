@@ -46,3 +46,30 @@ def test_explain_artifact_iri_in_output() -> None:
         with mock.patch("sqlalchemy.create_engine"):
             result = runner.invoke(app, ["explain", "entity:Acme"])
     assert "entity:Acme" in result.output
+
+
+def test_explain_shows_fuzzy_sameas_suggestions() -> None:
+    """When suggest_sameas returns candidates they appear in the explain output."""
+    deps = [
+        {"dep_kind": "fragment", "dep_ref": "file:///doc.md#intro"},
+    ]
+    with mock.patch("riverbank.catalog.graph.get_artifact_deps", return_value=deps):
+        with mock.patch(
+            "riverbank.catalog.graph.suggest_sameas",
+            return_value=["entity:AcmeCorporation", "entity:AcmeCorp"],
+        ):
+            with mock.patch("sqlalchemy.create_engine"):
+                result = runner.invoke(app, ["explain", "entity:Acme"])
+    assert result.exit_code == 0
+    assert "entity:AcmeCorporation" in result.output
+    assert "entity:AcmeCorp" in result.output
+
+
+def test_explain_no_fuzzy_suggestions_when_empty() -> None:
+    """When suggest_sameas returns [] no suggestion section is shown."""
+    with mock.patch("riverbank.catalog.graph.get_artifact_deps", return_value=[]):
+        with mock.patch("riverbank.catalog.graph.suggest_sameas", return_value=[]):
+            with mock.patch("sqlalchemy.create_engine"):
+                result = runner.invoke(app, ["explain", "entity:X"])
+    assert result.exit_code == 0
+    assert "sameAs" not in result.output.lower() or "Fuzzy" not in result.output
