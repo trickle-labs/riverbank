@@ -5,9 +5,9 @@
 > needing to read Python code or SQL specifications.
 >
 > **Dependencies:** riverbank is built on top of
-> [pg-ripple](https://github.com/grove/pg-ripple) ≥ 0.93.0,
+> [pg-ripple](https://github.com/grove/pg-ripple) ≥ 0.98.0,
 > [pg-trickle](https://github.com/grove/pg-trickle) ≥ 0.46.0, and
-> [pg-tide](https://github.com/trickle-labs/pg-tide) ≥ 0.6.0.
+> [pg-tide](https://github.com/trickle-labs/pg-tide) ≥ 0.11.0.
 > The implementation blueprint lives in
 > [plans/riverbank-implementation.md](plans/riverbank-implementation.md);
 > the strategy document lives in [plans/riverbank.md](plans/riverbank.md).
@@ -29,7 +29,7 @@
 | Version | Description | Status | Size |
 |---|---|---|---|
 | v0.4.0 | Incremental compilation core — artifact dependency graph, `riverbank explain`, recompile flow, vocabulary pass, SKOS integrity shape bundle, `tenant_id` schema scaffold | Planned | Large |
-| v0.5.0 | Multi-format parsing and enrichment — Docling, spaCy NER + vocabulary lookup, fuzzy entity matching, embedding generation, Singer connector | Planned | Large |
+| v0.5.0 | Multi-format parsing and enrichment — Docling, spaCy NER + vocabulary lookup, fuzzy entity matching, embedding generation, Singer tap configuration (pg-tide ≥ 0.11.0) | Planned | Large |
 
 ### Quality Gates and Review (v0.6.x)
 
@@ -74,7 +74,6 @@ Several planned versions delegate implementation to pg-ripple or pg-tide rather 
 | `pg_ripple.refresh_coverage_map()` | pg-ripple | v0.8.0 | Coverage map generation deferred; competency-question coverage computed locally |
 | SPARQL `SERVICE` federation | pg-ripple | v0.9.0 | Federated compilation deferred; local compilation unaffected |
 | Relay circuit breakers, DLQ, backpressure | pg-tide | v0.7.0 | Relay health visible in `riverbank health`; manual configuration fallback |
-| Singer STATE checkpoint persistence, SCHEMA drift detection | pg-tide | v0.5.0 | Singer connector ships without resumable-tap guarantee; state managed by operator |
 
 **Policy:** if a dependency is unavailable at the start of a release cycle, the affected feature moves to the following minor version. All core ingestion, extraction, catalog, and provenance features are riverbank-owned and carry no upstream dependency.
 
@@ -182,13 +181,13 @@ Goal: prove the system rebuilds *only* what changed when a source updates, estab
   hygiene rather than downstream deduplication.
 - **SKOS structural integrity shape bundle.** `riverbank init` activates the
   built-in `pg:skos-integrity` shape bundle via
-  `pg_ripple.load_shape_bundle('skos-integrity')`. The six shapes (prefLabel
-  required, scopeNote recommended, broader-cycle detection, conflicting
-  match-type check, orphan concept warning, altLabel collision check) are
-  defined and maintained in pg-ripple — riverbank ships no Turtle files for
-  these rules. `riverbank lint --layer vocab` runs the bundle against the
-  `<vocab>` named graph. This is the machine-executable form of the Ontology
-  Pipeline output quality contract.
+  `pg_ripple.load_shape_bundle('skos-integrity')` (pg-ripple ≥ 0.98.0). The
+  six shapes (prefLabel required, scopeNote recommended, broader-cycle
+  detection, conflicting match-type check, orphan concept warning, altLabel
+  collision check) are defined and maintained in pg-ripple — riverbank ships
+  no Turtle files for these rules. `riverbank lint --layer vocab` runs the
+  bundle against the `<vocab>` named graph. This is the machine-executable
+  form of the Ontology Pipeline output quality contract.
 - **`tenant_id` schema scaffold.** A nullable `tenant_id` column is added to
   all `_riverbank` tables via Alembic migration. Row-level security is not
   activated yet — that lands in v0.9.0 — but the column is present so that
@@ -219,13 +218,13 @@ Goal: extend ingestion beyond Markdown to office documents and web content, and 
   compiled summary. Entity-cluster centroid views are maintained as
   `avg(embedding)::vector` pg_trickle stream tables (pgVector IVM, v0.37+):
   centroid updates incrementally with no full scan on each new fact.
-- **Singer-tap connector.** A `singer` connector wraps any Singer tap; ships
-  with `tap-github` and `tap-slack-search`. Alternative: pipe any tap directly
-  to pg-tide as a Singer target (`tap-github | pg-tide --target singer ...`),
-  writing RECORD messages straight to the pg_trickle inbox table. Singer STATE
-  checkpoint persistence (resumable taps across restarts) and SCHEMA drift
-  detection are handled by pg-tide; the Python connector wrapper requires no
-  STATE management code.
+- **Singer tap configuration.** pg-tide ≥ 0.11.0 ships native Singer tap
+  mode: tap invocation, STATE checkpoint persistence (resumable taps across
+  restarts), and SCHEMA drift detection are all handled by the pg-tide sidecar.
+  riverbank's contribution is profile-side: a `singer_taps` block in the
+  compiler profile YAML maps each tap (`tap-github`, `tap-slack-search`, etc.)
+  to a `tide.relay_inlet_config` row, which pg-tide picks up via `NOTIFY` hot
+  reload. No Python tap-invocation code lives in riverbank.
 
 **Exit criterion:** a PDF and a DOCX file ingest successfully alongside the
 existing Markdown corpus; entity-cluster centroid views are queryable via SQL;
