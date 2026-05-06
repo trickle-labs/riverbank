@@ -168,6 +168,9 @@ class IngestPipeline:
             "completion_tokens": 0,
             "cost_usd": 0.0,
             "errors": 0,
+            "preprocessing_calls": 0,
+            "preprocessing_prompt_tokens": 0,
+            "preprocessing_completion_tokens": 0,
         }
         with tracer.start_as_current_span("ingest_pipeline.run") as span:
             for run_mode in sequence:
@@ -214,6 +217,9 @@ class IngestPipeline:
             "completion_tokens": 0,
             "cost_usd": 0.0,
             "errors": 0,
+            "preprocessing_calls": 0,
+            "preprocessing_prompt_tokens": 0,
+            "preprocessing_completion_tokens": 0,
         }
 
         p = Path(corpus_path)
@@ -308,6 +314,8 @@ class IngestPipeline:
             with tracer.start_as_current_span("ingest_pipeline.preprocess") as pp_span:
                 pp_span.set_attribute("source.iri", source.iri)
                 from dataclasses import replace as _dc_replace  # noqa: PLC0415
+                if progress_callback:
+                    progress_callback("preprocessing_start", {"source": source.iri})
                 preprocess_result = preprocessor.preprocess(doc.raw_text, profile)
                 if preprocess_result is not None:
                     enriched_prompt = preprocessor.build_extraction_prompt(
@@ -315,11 +323,21 @@ class IngestPipeline:
                     )
                     extraction_profile = _dc_replace(profile, prompt_text=enriched_prompt)
                     stats["preprocessing_calls"] = stats.get("preprocessing_calls", 0) + 1
+                    stats["preprocessing_prompt_tokens"] = (
+                        stats.get("preprocessing_prompt_tokens", 0) + preprocess_result.prompt_tokens
+                    )
+                    stats["preprocessing_completion_tokens"] = (
+                        stats.get("preprocessing_completion_tokens", 0) + preprocess_result.completion_tokens
+                    )
                     logger.debug(
-                        "Preprocessing: enriched prompt for %s (%d entities)",
+                        "Preprocessing: enriched prompt for %s (%d entities, %d+%d tokens)",
                         source.iri,
                         len(preprocess_result.entity_catalog),
+                        preprocess_result.prompt_tokens,
+                        preprocess_result.completion_tokens,
                     )
+                if progress_callback:
+                    progress_callback("preprocessing_done", {"source": source.iri})
 
         if progress_callback:
             progress_callback("source_start", {"source": source.iri, "total_fragments": len(fragments)})

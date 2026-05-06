@@ -224,7 +224,12 @@ def ingest(
         _counts: dict[str, int] = {"processed": 0, "skipped": 0, "errors": 0}
 
         def _on_progress(event: str, data: dict) -> None:
-            if event == "source_start":
+            if event == "preprocessing_start":
+                name = data["source"].rsplit("/", 1)[-1]
+                progress.update(task, description=f"[magenta]preprocessing[/magenta] {name}")
+            elif event == "preprocessing_done":
+                pass  # source_start follows immediately
+            elif event == "source_start":
                 name = data["source"].rsplit("/", 1)[-1]
                 n = data["total_fragments"]
                 progress.update(task, description=f"[cyan]{name}[/cyan] ({n} fragments)")
@@ -266,6 +271,10 @@ def ingest(
     table.add_row("LLM calls", str(stats["llm_calls"]))
     table.add_row("Prompt tokens", str(stats["prompt_tokens"]))
     table.add_row("Completion tokens", str(stats["completion_tokens"]))
+    if stats.get("preprocessing_calls", 0) > 0:
+        table.add_row("Preprocessing calls", str(stats["preprocessing_calls"]))
+        table.add_row("Preprocessing prompt tokens", str(stats.get("preprocessing_prompt_tokens", 0)))
+        table.add_row("Preprocessing completion tokens", str(stats.get("preprocessing_completion_tokens", 0)))
     table.add_row("Estimated cost (USD)", f"{stats['cost_usd']:.6f}")
     table.add_row("Errors", str(stats["errors"]))
 

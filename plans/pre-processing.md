@@ -663,21 +663,21 @@ riverbank query "SELECT (COUNT(DISTINCT ?s) AS ?subjects) WHERE { ?s ?p ?o }"
 
 ## Implementation Checklist
 
-- [ ] Create `src/riverbank/preprocessors/__init__.py` with `DocumentPreprocessor` class
-- [ ] Define `PreprocessingResult` dataclass
-- [ ] Implement entity catalog extraction prompt
-- [ ] Implement document summary extraction prompt
-- [ ] Add `preprocessing` section to `CompilerProfile` dataclass
-- [ ] Add YAML support for preprocessing configuration in profiles
-- [ ] Integrate preprocessing into `_run_inner()` pipeline step
-- [ ] Build enriched prompt template with entity catalog injection
-- [ ] Add `--enable-preprocessing` CLI flag (or profile-based toggle)
-- [ ] Add preprocessing diagnostics to stats (preprocessing_tokens, preprocessing_calls)
-- [ ] Write unit tests for entity catalog parsing
+- [x] Create `src/riverbank/preprocessors/__init__.py` with `DocumentPreprocessor` class
+- [x] Define `PreprocessingResult` dataclass
+- [x] Implement entity catalog extraction prompt
+- [x] Implement document summary extraction prompt
+- [x] Add `preprocessing` section to `CompilerProfile` dataclass
+- [x] Add YAML support for preprocessing configuration in profiles
+- [x] Integrate preprocessing into `_run_inner()` pipeline step
+- [x] Build enriched prompt template with entity catalog injection
+- [x] Add profile-based toggle (`preprocessing.enabled: true` in YAML)
+- [x] Add preprocessing diagnostics to stats (`preprocessing_prompt_tokens`, `preprocessing_completion_tokens`, `preprocessing_calls`)
+- [x] Write unit tests for entity catalog parsing (`tests/unit/test_preprocessor.py`)
 - [ ] Write integration test comparing extraction with/without preprocessing
-- [ ] Create example profile: `examples/profiles/docs-policy-v1-preprocessed.yaml`
-- [ ] Update progress callback to report preprocessing step
-- [ ] Document in `docs/concepts/preprocessing.md`
+- [x] Create example profile: `examples/profiles/docs-policy-v1-preprocessed.yaml`
+- [x] Update progress callback to report preprocessing step (`preprocessing_start` / `preprocessing_done` events)
+- [x] Document in `docs/concepts/preprocessing.md`
 
 ---
 

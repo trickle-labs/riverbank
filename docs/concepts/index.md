@@ -6,6 +6,7 @@ This section explains the ideas behind riverbank. It's for readers who want to u
 |---------|-----------------|
 | [The compiler analogy](the-compiler-analogy.md) | Why treating documents as source code makes sense |
 | [Pipeline stages](pipeline-stages.md) | What happens at each step of compilation |
+| [Preprocessing](preprocessing.md) | LLM document preprocessing (entity catalog, document summary) |
 | [Compiler profiles](compiler-profiles.md) | The primary configuration surface |
 | [Fragment and artifact model](fragment-and-artifact-model.md) | How documents become queryable units |
 | [Incremental compilation](incremental-compilation.md) | Why only changed content gets recompiled |

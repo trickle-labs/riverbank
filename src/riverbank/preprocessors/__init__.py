@@ -52,6 +52,8 @@ class PreprocessingResult:
     summary: str                                   # 2-3 sentence document summary
     entity_catalog: list[EntityCatalogEntry]       # canonical entities with aliases
     noise_sections: list[str] = field(default_factory=list)  # heading paths to skip
+    prompt_tokens: int = 0                         # tokens consumed by preprocessing calls
+    completion_tokens: int = 0                     # tokens produced by preprocessing calls
 
 
 # ---------------------------------------------------------------------------
@@ -130,17 +132,26 @@ class DocumentPreprocessor:
 
         summary = ""
         entity_catalog: list[EntityCatalogEntry] = []
+        prompt_tokens_total = 0
+        completion_tokens_total = 0
 
         if "document_summary" in strategies:
-            summary = self._extract_summary(raw_text, profile) or ""
+            summary_text, pt, ct = self._extract_summary(raw_text, profile)
+            summary = summary_text or ""
+            prompt_tokens_total += pt
+            completion_tokens_total += ct
 
         if "entity_catalog" in strategies:
             max_entities: int = preprocessing_cfg.get("max_entities", 50)
-            entity_catalog = self._extract_entity_catalog(raw_text, profile, max_entities)
+            entity_catalog, pt, ct = self._extract_entity_catalog(raw_text, profile, max_entities)
+            prompt_tokens_total += pt
+            completion_tokens_total += ct
 
         return PreprocessingResult(
             summary=summary,
             entity_catalog=entity_catalog,
+            prompt_tokens=prompt_tokens_total,
+            completion_tokens=completion_tokens_total,
         )
 
     def build_extraction_prompt(
@@ -249,9 +260,12 @@ class DocumentPreprocessor:
 
         return client, model_name
 
-    def _extract_summary(self, raw_text: str, profile: Any) -> str | None:
-        """Call the LLM to produce a 2-3 sentence document summary."""
-        # Truncate very long documents for the summary call
+    def _extract_summary(self, raw_text: str, profile: Any) -> tuple[str | None, int, int]:
+        """Call the LLM to produce a 2-3 sentence document summary.
+
+        Returns ``(summary_text, prompt_tokens, completion_tokens)``.
+        All token counts are 0 when the call fails.
+        """
         text_for_summary = raw_text[:8000] if len(raw_text) > 8000 else raw_text
         try:
             from pydantic import BaseModel  # noqa: PLC0415
@@ -260,7 +274,7 @@ class DocumentPreprocessor:
                 summary: str
 
             client, model_name = self._get_llm_client(profile)
-            result = client.chat.completions.create(
+            result, completion = client.chat.completions.create_with_completion(
                 model=model_name,
                 messages=[
                     {"role": "system", "content": _SUMMARY_PROMPT},
@@ -268,23 +282,28 @@ class DocumentPreprocessor:
                 ],
                 response_model=_Summary,
             )
+            usage = completion.usage if completion else None
+            prompt_tokens = usage.prompt_tokens if usage else 0
+            completion_tokens = usage.completion_tokens if usage else 0
             summary = result.summary.strip()
             logger.debug("Preprocessing summary (%d chars): %s…", len(summary), summary[:80])
-            return summary
+            return summary, prompt_tokens, completion_tokens
         except Exception as exc:  # noqa: BLE001
             logger.warning("Preprocessing: summary extraction failed: %s", exc)
-            return None
+            return None, 0, 0
 
     def _extract_entity_catalog(
         self,
         raw_text: str,
         profile: Any,
         max_entities: int,
-    ) -> list[EntityCatalogEntry]:
-        """Call the LLM to produce a canonical entity catalog for the document."""
+    ) -> tuple[list[EntityCatalogEntry], int, int]:
+        """Call the LLM to produce a canonical entity catalog for the document.
+
+        Returns ``(entries, prompt_tokens, completion_tokens)``.
+        """
         text_for_catalog = raw_text[:12000] if len(raw_text) > 12000 else raw_text
         try:
-            import json  # noqa: PLC0415
             from pydantic import BaseModel  # noqa: PLC0415
 
             class _Entry(BaseModel):
@@ -297,7 +316,7 @@ class DocumentPreprocessor:
                 entities: list[_Entry]
 
             client, model_name = self._get_llm_client(profile)
-            result = client.chat.completions.create(
+            result, completion = client.chat.completions.create_with_completion(
                 model=model_name,
                 messages=[
                     {"role": "system", "content": _ENTITY_CATALOG_PROMPT},
@@ -305,16 +324,17 @@ class DocumentPreprocessor:
                 ],
                 response_model=_Catalog,
             )
+            usage = completion.usage if completion else None
+            prompt_tokens = usage.prompt_tokens if usage else 0
+            completion_tokens = usage.completion_tokens if usage else 0
 
             entries: list[EntityCatalogEntry] = []
             for entry in result.entities[:max_entities]:
-                # Validate canonical_name is URL-safe
                 safe_name = (
                     entry.canonical_name.lower()
                     .replace(" ", "-")
                     .replace("_", "-")
                 )
-                # Validate aliases are present in the text
                 valid_aliases = [
                     a for a in entry.aliases if a and a in raw_text
                 ]
@@ -330,7 +350,7 @@ class DocumentPreprocessor:
             logger.debug(
                 "Preprocessing: extracted %d entities from catalog", len(entries)
             )
-            return entries
+            return entries, prompt_tokens, completion_tokens
         except Exception as exc:  # noqa: BLE001
             logger.warning("Preprocessing: entity catalog extraction failed: %s", exc)
-            return []
+            return [], 0, 0
