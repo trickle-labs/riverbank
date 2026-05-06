@@ -302,20 +302,16 @@ def query_unanswered_objections(
     Useful for finding policy conclusions that are contested but unresolved.
     Falls back to ``[]`` when pg_ripple is unavailable.
     """
+    from riverbank.catalog.graph import sparql_query  # noqa: PLC0415
+    
     sparql = _UNANSWERED_OBJECTIONS_SPARQL.replace(
         "http://riverbank.example/graph/trusted", named_graph
     )
     try:
-        rows = conn.execute(
-            "SELECT * FROM pg_ripple.sparql_query($1, $2)",
-            (sparql, named_graph),
-        ).fetchall()
+        rows = sparql_query(conn, sparql, named_graph=named_graph)
         if not rows:
             return []
-        return [
-            dict(row._mapping) if hasattr(row, "_mapping") else dict(enumerate(row))
-            for row in rows
-        ]
+        return rows
     except Exception as exc:  # noqa: BLE001
         msg = str(exc).lower()
         if any(

@@ -43,7 +43,7 @@ class FilesystemConnector:
         - ``path``: str or Path — root directory to walk
         - ``patterns``: list[str] — glob patterns (default ``["**/*.md"]``)
         """
-        root = Path(config["path"])
+        root = Path(config["path"]).resolve()  # Resolve to absolute path
         patterns: list[str] = config.get("patterns", ["**/*.md", "**/*.markdown"])
 
         seen: set[Path] = set()

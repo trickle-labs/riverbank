@@ -204,17 +204,15 @@ SELECT ?assumption_text WHERE {{
   }}
 }}
 """
+    from riverbank.catalog.graph import sparql_query  # noqa: PLC0415
+    
     try:
-        rows = conn.execute(
-            "SELECT * FROM pg_ripple.sparql_query($1, $2)",
-            (sparql, named_graph),
-        ).fetchall()
+        rows = sparql_query(conn, sparql, named_graph=named_graph)
         if not rows:
             return []
         result = []
         for row in rows:
-            row_dict = dict(row._mapping) if hasattr(row, "_mapping") else dict(enumerate(row))
-            val = next(iter(row_dict.values()), None)
+            val = next(iter(row.values())) if isinstance(row, dict) else next(iter(row))
             if val:
                 result.append(str(val))
         return result

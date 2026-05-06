@@ -2,14 +2,21 @@
 
 pg-ripple provides SQL functions that wrap common SPARQL patterns. These are used by riverbank internally and are available for direct use.
 
-## `pg_ripple.sparql_query(query, named_graph)`
+## `pg_ripple.sparql(query)`
 
-Execute a SPARQL SELECT or ASK query against the compiled graph.
+Execute a SPARQL SELECT, ASK, or CONSTRUCT query against the compiled graph. Returns JSONB results.
 
 ```sql
-SELECT * FROM pg_ripple.sparql_query(
-  'SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10',
-  'http://riverbank.example/graph/trusted'
+SELECT * FROM pg_ripple.sparql(
+  'SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10'
+);
+```
+
+To restrict queries to a named graph, use a SPARQL `FROM` clause:
+
+```sql
+SELECT * FROM pg_ripple.sparql(
+  'SELECT ?s FROM <http://riverbank.example/graph/trusted> WHERE { ?s ?p ?o } LIMIT 10'
 );
 ```
 

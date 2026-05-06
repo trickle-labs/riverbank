@@ -112,18 +112,33 @@ def sparql_query(
     not installed — this allows the catalog plumbing to be tested against
     stock PostgreSQL in CI.
     """
-    sql = (
-        "SELECT * FROM pg_ripple.sparql_query(:sparql, :named_graph)"
-        if named_graph
-        else "SELECT * FROM pg_ripple.sparql_query(:sparql)"
-    )
+    import json
+    
+    # pg_ripple 0.99.0+ uses pg_ripple.sparql() function
+    # Build the SPARQL query with FROM clause if named_graph is specified
+    sparql_with_graph = sparql
+    if named_graph:
+        # Insert FROM clause after SELECT/ASK
+        if sparql.strip().upper().startswith("SELECT"):
+            sparql_with_graph = sparql.replace("SELECT", f"SELECT FROM <{named_graph}>", 1)
+        elif sparql.strip().upper().startswith("ASK"):
+            sparql_with_graph = sparql.replace("ASK", f"ASK FROM <{named_graph}>", 1)
+    
     try:
-        params = {"sparql": sparql, "named_graph": named_graph} if named_graph else {"sparql": sparql}
-        rows = conn.execute(text(sql), params).fetchall()
+        rows = conn.execute(text("SELECT * FROM pg_ripple.sparql(:query)"), {"query": sparql_with_graph}).fetchall()
         if not rows:
             return []
-        # Convert each Row to a plain dict
-        return [dict(row._mapping) if hasattr(row, "_mapping") else dict(row) for row in rows]
+        # Convert JSONB results to dicts
+        result = []
+        for row in rows:
+            result_val = row[0]  # Single column "result"
+            if isinstance(result_val, str):
+                result.append(json.loads(result_val))
+            elif isinstance(result_val, dict):
+                result.append(result_val)
+            else:
+                result.append({"result": result_val})
+        return result
     except Exception as exc:  # noqa: BLE001
         msg = str(exc).lower()
         if _is_missing_extension(msg):

@@ -57,16 +57,30 @@ def health() -> None:
     dsn = settings.db.dsn.replace("postgresql+psycopg://", "postgresql://")
 
     try:
+        import json  # noqa: PLC0415
+        
         with psycopg.connect(dsn) as conn:
-            # pg-trickle preflight — returns (check_name, ok, detail)
-            rows = conn.execute("SELECT * FROM pgtrickle.preflight()").fetchall()
-            for row in rows:
-                check, ok = row[0], row[1]
-                detail = row[2] if len(row) > 2 else ""
-                icon = "[green]✓[/green]" if ok else "[red]✗[/red]"
-                rprint(f"  {icon}  pg_trickle  {check:<32} {detail}")
-                if not ok:
-                    all_ok = False
+            # pg-trickle preflight — returns JSON object with check results
+            result = conn.execute("SELECT * FROM pgtrickle.preflight()").fetchone()
+            if result:
+                preflight_data = result[0]
+                # Handle both JSON string and dict formats
+                if isinstance(preflight_data, str):
+                    checks = json.loads(preflight_data)
+                else:
+                    checks = preflight_data
+                
+                # Checks that are critical for operation
+                critical_checks = {"scheduler_running", "wal_level"}
+                
+                for check_name, check_info in checks.items():
+                    ok = check_info.get("ok", False)
+                    detail = check_info.get("detail", "")
+                    icon = "[green]✓[/green]" if ok else "[red]✗[/red]"
+                    rprint(f"  {icon}  pg_trickle  {check_name:<32} {detail}")
+                    # Only fail health check on critical pg_trickle issues
+                    if not ok and check_name in critical_checks:
+                        all_ok = False
 
             # pg-ripple pg_tide availability check
             result = conn.execute("SELECT pg_ripple.pg_tide_available()").fetchone()
@@ -238,7 +252,7 @@ def query(
 ) -> None:
     """Execute a SPARQL SELECT or ASK query against the compiled knowledge graph.
 
-    Routes the query through pg_ripple.sparql_query().  Falls back with a
+    Routes the query through pg_ripple.sparql().  Falls back with a
     warning when pg_ripple is not installed.
 
     With ``--expand term1,term2`` the terms are looked up in the

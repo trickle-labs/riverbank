@@ -190,12 +190,11 @@ def federated_compile(
 
     sparql = build_service_query(endpoint, limit=limit)
 
-    # Step 1: fetch remote triples via pg_ripple.sparql_query
+    # Step 1: fetch remote triples via pg_ripple
     try:
-        rows = conn.execute(
-            "SELECT * FROM pg_ripple.sparql_query($1)",
-            (sparql,),
-        ).fetchall()
+        from riverbank.catalog.graph import sparql_query  # noqa: PLC0415
+        
+        rows = sparql_query(conn, sparql)
     except Exception as exc:  # noqa: BLE001
         msg = str(exc)
         logger.warning(

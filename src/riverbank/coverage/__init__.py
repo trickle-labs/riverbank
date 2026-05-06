@@ -116,23 +116,19 @@ def compute_unanswered_cq_count(
     if not competency_questions:
         return 0
 
+    from riverbank.catalog.graph import sparql_query
+    
     unanswered = 0
     for cq in competency_questions:
         sparql = str(cq.get("sparql", ""))
         if not sparql:
             continue
         try:
-            rows = conn.execute(
-                "SELECT * FROM pg_ripple.sparql_query($1, $2)",
-                (sparql, named_graph),
-            ).fetchall()
+            rows = sparql_query(conn, sparql, named_graph=named_graph)
             # ASK query returns a single row with the boolean result
             if rows:
                 row = rows[0]
-                row_dict = (
-                    dict(row._mapping) if hasattr(row, "_mapping") else dict(enumerate(row))
-                )
-                result_val = next(iter(row_dict.values()), False)
+                result_val = next(iter(row.values())) if isinstance(row, dict) else row[0]
                 answered = bool(result_val)
             else:
                 answered = False

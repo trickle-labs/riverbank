@@ -208,6 +208,8 @@ def get_epistemic_status(
         + hashlib.sha256(f"{subject}|{predicate}".encode()).hexdigest()[:16]
     )
 
+    from riverbank.catalog.graph import sparql_query  # noqa: PLC0415
+    
     sparql = f"""\
 SELECT ?status WHERE {{
   GRAPH <{named_graph}> {{
@@ -216,15 +218,11 @@ SELECT ?status WHERE {{
 }}
 """
     try:
-        rows = conn.execute(
-            "SELECT * FROM pg_ripple.sparql_query($1, $2)",
-            (sparql, named_graph),
-        ).fetchall()
+        rows = sparql_query(conn, sparql, named_graph=named_graph)
         if not rows:
             return None
         row = rows[0]
-        row_dict = dict(row._mapping) if hasattr(row, "_mapping") else dict(enumerate(row))
-        val = next(iter(row_dict.values()), None)
+        val = next(iter(row.values())) if isinstance(row, dict) else row.get("status")
         if val is None:
             return None
         try:

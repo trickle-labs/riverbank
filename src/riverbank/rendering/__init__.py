@@ -138,11 +138,10 @@ def _fetch_entity_facts(
         "}"
     )
     try:
-        rows = conn.execute(
-            "SELECT * FROM pg_ripple.sparql_query($1)",
-            (sparql,),
-        ).fetchall()
-        return [{"predicate": str(r[0]), "object": str(r[1])} for r in rows]
+        from riverbank.catalog.graph import sparql_query  # noqa: PLC0415
+        
+        rows = sparql_query(conn, sparql)
+        return [{"predicate": str(r.get("predicate", r.get(list(r.keys())[0] if r else None))), "object": str(r.get("object", r.get(list(r.keys())[1] if len(r) > 1 else None)))} for r in rows]
     except Exception as exc:  # noqa: BLE001
         logger.warning("_fetch_entity_facts failed for %s: %s", entity_iri, exc)
         return []
@@ -381,10 +380,9 @@ def mark_pages_stale(conn: Any, fact_iri: str) -> int:
         "}"
     )
     try:
-        rows = conn.execute(
-            "SELECT * FROM pg_ripple.sparql_query($1)",
-            (sparql_find,),
-        ).fetchall()
+        from riverbank.catalog.graph import sparql_query  # noqa: PLC0415
+        
+        rows = sparql_query(conn, sparql_find)
     except Exception as exc:  # noqa: BLE001
         logger.warning("mark_pages_stale: could not query pages: %s", exc)
         return 0
