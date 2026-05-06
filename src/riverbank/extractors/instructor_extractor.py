@@ -107,10 +107,9 @@ class InstructorExtractor:
         source_iri: str = getattr(fragment, "source_iri", "")
         text: str = getattr(fragment, "text", "")
 
-        # --- define Pydantic schemas local to this call so source_iri is in scope ---
+        # --- define Pydantic schemas local to this call ---
 
         class _EvidenceSpanIn(BaseModel):
-            source_iri: str = source_iri
             char_start: int
             char_end: int
             excerpt: str
