@@ -173,6 +173,11 @@ def ingest(
         "--mode", "-m",
         help="Extraction mode: full | vocabulary",
     ),
+    set_overrides: list[str] = typer.Option(
+        [],
+        "--set",
+        help="Override a config key at runtime, e.g. --set llm.provider=ollama (repeatable)",
+    ),
 ) -> None:
     """Ingest a document corpus into the knowledge graph.
 
@@ -200,7 +205,7 @@ def ingest(
     else:
         profile = CompilerProfile(name=profile_name)
 
-    pipeline = IngestPipeline()
+    pipeline = IngestPipeline(set_overrides=set_overrides)
 
     rprint(f"[bold]riverbank ingest[/bold]  corpus={corpus!r}  profile={profile.name!r}")
     if dry_run:

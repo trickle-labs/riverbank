@@ -73,6 +73,23 @@ class Settings(BaseSettings):
         return (init_settings, env_settings)
 
 
-def get_settings() -> Settings:
-    """Return a Settings instance resolved from env vars and optional config.toml."""
-    return Settings()
+def get_settings(overrides: dict | None = None) -> Settings:
+    """Return a Settings instance resolved from env vars and optional config.toml.
+
+    ``overrides`` is a flat dict of dotted-path keys to string values, e.g.
+    ``{"llm.provider": "ollama", "llm.model": "llama3.2"}``.  These are
+    applied on top of the TOML file and env vars (highest priority).
+    """
+    if not overrides:
+        return Settings()
+
+    # Build a nested dict from dotted keys and pass as init kwargs
+    nested: dict = {}
+    for dotted_key, value in overrides.items():
+        parts = dotted_key.split(".")
+        d = nested
+        for part in parts[:-1]:
+            d = d.setdefault(part, {})
+        d[parts[-1]] = value
+
+    return Settings(**nested)

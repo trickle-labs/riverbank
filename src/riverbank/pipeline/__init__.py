@@ -97,11 +97,21 @@ class IngestPipeline:
         self,
         settings: Any = None,
         db_engine: Any = None,
+        set_overrides: list[str] | None = None,
     ) -> None:
         if settings is None:
             from riverbank.config import get_settings  # noqa: PLC0415
 
-            settings = get_settings()
+            overrides: dict | None = None
+            if set_overrides:
+                overrides = {}
+                for item in set_overrides:
+                    if "=" not in item:
+                        raise ValueError(f"--set value must be in key=value format, got: {item!r}")
+                    key, _, value = item.partition("=")
+                    overrides[key.strip()] = value.strip()
+
+            settings = get_settings(overrides=overrides)
         self._settings = settings
         self._db_engine = db_engine
 
