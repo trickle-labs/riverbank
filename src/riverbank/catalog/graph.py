@@ -54,12 +54,15 @@ def load_triples_with_confidence(
         )
 
     try:
+        conn.execute(text("SAVEPOINT load_triples_sp"))
         conn.execute(
             text(_LOAD_TRIPLES_SQL),
             {"triples_json": json.dumps(rows), "named_graph": named_graph},
         )
+        conn.execute(text("RELEASE SAVEPOINT load_triples_sp"))
         return len(rows)
     except Exception as exc:  # noqa: BLE001
+        conn.execute(text("ROLLBACK TO SAVEPOINT load_triples_sp"))
         msg = str(exc).lower()
         if _is_missing_extension(msg):
             logger.warning(
@@ -84,12 +87,15 @@ def shacl_score(
     pg_ripple is not installed.
     """
     try:
+        conn.execute(text("SAVEPOINT shacl_score_sp"))
         row = conn.execute(
             text(_SHACL_SCORE_SQL),
             {"named_graph": named_graph},
         ).fetchone()
+        conn.execute(text("RELEASE SAVEPOINT shacl_score_sp"))
         return float(row[0]) if row else 1.0
     except Exception as exc:  # noqa: BLE001
+        conn.execute(text("ROLLBACK TO SAVEPOINT shacl_score_sp"))
         msg = str(exc).lower()
         if _is_missing_extension(msg):
             logger.debug(
