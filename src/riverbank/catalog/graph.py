@@ -4,11 +4,13 @@ import json
 import logging
 from typing import Any
 
+from sqlalchemy import text
+
 logger = logging.getLogger(__name__)
 
 # SQL functions provided by the pg_ripple extension
-_LOAD_TRIPLES_SQL = "SELECT pg_ripple.load_triples_with_confidence($1::jsonb, $2)"
-_SHACL_SCORE_SQL = "SELECT pg_ripple.shacl_score($1)"
+_LOAD_TRIPLES_SQL = "SELECT pg_ripple.load_triples_with_confidence(:triples_json::jsonb, :named_graph)"
+_SHACL_SCORE_SQL = "SELECT pg_ripple.shacl_score(:named_graph)"
 
 
 def load_triples_with_confidence(
@@ -50,7 +52,10 @@ def load_triples_with_confidence(
         )
 
     try:
-        conn.execute(_LOAD_TRIPLES_SQL, (json.dumps(rows), named_graph))
+        conn.execute(
+            text(_LOAD_TRIPLES_SQL),
+            {"triples_json": json.dumps(rows), "named_graph": named_graph},
+        )
         return len(rows)
     except Exception as exc:  # noqa: BLE001
         msg = str(exc).lower()
@@ -77,7 +82,10 @@ def shacl_score(
     pg_ripple is not installed.
     """
     try:
-        row = conn.execute(_SHACL_SCORE_SQL, (named_graph,)).fetchone()
+        row = conn.execute(
+            text(_SHACL_SCORE_SQL),
+            {"named_graph": named_graph},
+        ).fetchone()
         return float(row[0]) if row else 1.0
     except Exception as exc:  # noqa: BLE001
         msg = str(exc).lower()
@@ -105,13 +113,13 @@ def sparql_query(
     stock PostgreSQL in CI.
     """
     sql = (
-        "SELECT * FROM pg_ripple.sparql_query($1, $2)"
+        "SELECT * FROM pg_ripple.sparql_query(:sparql, :named_graph)"
         if named_graph
-        else "SELECT * FROM pg_ripple.sparql_query($1)"
+        else "SELECT * FROM pg_ripple.sparql_query(:sparql)"
     )
     try:
-        params = (sparql, named_graph) if named_graph else (sparql,)
-        rows = conn.execute(sql, params).fetchall()
+        params = {"sparql": sparql, "named_graph": named_graph} if named_graph else {"sparql": sparql}
+        rows = conn.execute(text(sql), params).fetchall()
         if not rows:
             return []
         # Convert each Row to a plain dict
@@ -266,8 +274,8 @@ def load_shape_bundle(conn: Any, bundle_name: str) -> bool:
     """
     try:
         conn.execute(
-            "SELECT pg_ripple.load_shape_bundle($1)",
-            (bundle_name,),
+            text("SELECT pg_ripple.load_shape_bundle(:bundle_name)"),
+            {"bundle_name": bundle_name},
         )
         return True
     except Exception as exc:  # noqa: BLE001
