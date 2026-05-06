@@ -123,7 +123,11 @@ class InstructorExtractor:
             evidence: _EvidenceSpanIn
 
         # --- call the LLM ---
-        client = instructor.from_openai(OpenAI(base_url=api_base, api_key=api_key))
+        # For local LLMs (Ollama), use md_json mode to avoid tool-calling issues
+        client = instructor.from_openai(
+            OpenAI(base_url=api_base, api_key=api_key),
+            mode=instructor.Mode.MD_JSON,
+        )
 
         response, completion = client.chat.completions.create_with_completion(
             model=model_name,
