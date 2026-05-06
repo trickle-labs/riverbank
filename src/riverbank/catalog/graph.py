@@ -14,25 +14,14 @@ logger = logging.getLogger(__name__)
 _LOAD_TRIPLES_SQL = "SELECT pg_ripple.load_triples_with_confidence(cast(:triples_json as jsonb), :named_graph)"
 _SHACL_SCORE_SQL = "SELECT pg_ripple.shacl_score(:named_graph)"
 
-# pg_ripple is checked before each use via _check_pg_ripple()
-# (checking pg_extension is cheap, so no need for complex caching)
+# pg_ripple is checked at call time (trying the call is simpler than probing)
 
 
-def _check_pg_ripple(conn: Any) -> bool:
-    """Return True if pg_ripple extension is installed in the connected database."""
-    try:
-        result = conn.execute(
-            text("SELECT COUNT(*) FROM pg_extension WHERE extname = 'pg_ripple'")
-        ).scalar()
-        is_installed = bool(result)
-        if not is_installed:
-            # Log what extensions ARE installed for debugging
-            ext_list = conn.execute(text("SELECT extname FROM pg_extension")).fetchall()
-            logger.debug(f"pg_ripple NOT found in pg_extension. Available: {[e[0] for e in ext_list]}")
-        return is_installed
-    except Exception as exc:  # noqa: BLE001
-        logger.debug(f"Error checking pg_ripple: {exc}")
-        return False
+def _is_function_missing(exc: Exception) -> bool:
+    """Return True if the error indicates a missing function or extension."""
+    msg = str(exc).lower()
+    keywords = ("does not exist", "undefined function", "unknown function", "pg_ripple")
+    return any(kw in msg for kw in keywords)
 
 
 def load_triples_with_confidence(
@@ -73,13 +62,6 @@ def load_triples_with_confidence(
             }
         )
 
-    if not _check_pg_ripple(conn):
-        logger.warning(
-            "pg_ripple not available — triples not written to graph. "
-            "Install pg_ripple to enable graph persistence."
-        )
-        return 0
-
     try:
         conn.execute(
             text(_LOAD_TRIPLES_SQL),
@@ -87,6 +69,13 @@ def load_triples_with_confidence(
         )
         return len(rows)
     except Exception as exc:  # noqa: BLE001
+        if _is_function_missing(exc):
+            logger.warning(
+                "pg_ripple not available — triples not written to graph. "
+                "Install pg_ripple to enable graph persistence. error=%s",
+                exc,
+            )
+            return 0
         raise
 
 
@@ -102,10 +91,6 @@ def shacl_score(
     Falls back to ``1.0`` (pass-through / treat all output as trusted) when
     pg_ripple is not installed.
     """
-    if not _check_pg_ripple(conn):
-        logger.debug("pg_ripple not available — shacl_score returns 1.0 (pass-through).")
-        return 1.0
-
     try:
         row = conn.execute(
             text(_SHACL_SCORE_SQL),
@@ -113,6 +98,9 @@ def shacl_score(
         ).fetchone()
         return float(row[0]) if row else 1.0
     except Exception as exc:  # noqa: BLE001
+        if _is_function_missing(exc):
+            logger.debug("pg_ripple not available — shacl_score returns 1.0 (pass-through). error=%s", exc)
+            return 1.0
         raise
 
 
