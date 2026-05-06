@@ -14,23 +14,19 @@ logger = logging.getLogger(__name__)
 _LOAD_TRIPLES_SQL = "SELECT pg_ripple.load_triples_with_confidence(cast(:triples_json as jsonb), :named_graph)"
 _SHACL_SCORE_SQL = "SELECT pg_ripple.shacl_score(:named_graph)"
 
-# Cache of pg_ripple availability, keyed by connection id to avoid repeated probes.
-_pg_ripple_available: dict[int, bool] = {}
+# pg_ripple is checked before each use via _check_pg_ripple()
+# (checking pg_extension is cheap, so no need for complex caching)
 
 
 def _check_pg_ripple(conn: Any) -> bool:
-    """Return True if pg_ripple is installed, caching the result per connection."""
-    conn_id = id(conn)
-    if conn_id not in _pg_ripple_available:
-        try:
-            conn.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'pg_ripple'")).fetchone()
-            result = conn.execute(
-                text("SELECT COUNT(*) FROM pg_extension WHERE extname = 'pg_ripple'")
-            ).scalar()
-            _pg_ripple_available[conn_id] = bool(result)
-        except Exception:  # noqa: BLE001
-            _pg_ripple_available[conn_id] = False
-    return _pg_ripple_available[conn_id]
+    """Return True if pg_ripple extension is installed in the connected database."""
+    try:
+        result = conn.execute(
+            text("SELECT COUNT(*) FROM pg_extension WHERE extname = 'pg_ripple'")
+        ).scalar()
+        return bool(result)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def load_triples_with_confidence(
