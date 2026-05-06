@@ -27,6 +27,8 @@ jobs:
         run: pip install -e ".[docs]"
 
       - name: Build docs (strict mode)
+        env:
+          DISABLE_MKDOCS_2_WARNING: "true"
         run: mkdocs build --strict
 
       - name: Deploy to GitHub Pages

@@ -43,6 +43,7 @@
 - Reference
     - [Overview](reference/index.md)
     - [CLI](reference/cli.md)
+    - [API Reference](reference/api/)
     - [Configuration](reference/configuration.md)
     - [Compiler profile schema](reference/compiler-profile-schema.md)
     - [Ontology](reference/ontology.md)
