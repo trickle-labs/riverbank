@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "riverbank.fullname" . }}-config
+  labels:
+    {{- include "riverbank.labels" . | nindent 4 }}
+data:
+  RIVERBANK_LLM__PROVIDER: {{ .Values.riverbank.llmProvider | quote }}
+  RIVERBANK_LLM__API_BASE: {{ .Values.riverbank.llmApiBase | quote }}
+  RIVERBANK_LANGFUSE__ENABLED: {{ .Values.riverbank.langfuseEnabled | quote }}
+  RIVERBANK_LANGFUSE__HOST: {{ .Values.riverbank.langfuseHost | quote }}

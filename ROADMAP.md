@@ -41,7 +41,7 @@
 
 | Version | Description | Status | Size |
 |---|---|---|---|
-| v0.7.0 | Production hardening — Helm chart, multi-replica workers, Prometheus/Perses dashboards, secret management, circuit breakers, audit trail, bulk reprocessing | Planned | Very Large |
+| v0.7.0 | Production hardening — Helm chart, multi-replica workers, Prometheus/Perses dashboards, secret management, circuit breakers, audit trail, bulk reprocessing | **Done** | Very Large |
 
 ### Advanced Epistemic Features (v0.8.x)
 
@@ -274,14 +274,14 @@ example bank has ≥ 20 entries after a one-week pilot.
 Goal: deployable in a regulated production environment with multi-replica
 workers, secret management, backups, and SLOs.
 
-- **Helm chart.** `riverbank/helm/` deploys the worker, Prefect server,
+- [x] **Helm chart.** `riverbank/helm/` deploys the worker, Prefect server,
   Langfuse, and Label Studio onto Kubernetes; depends on the existing
   pg_ripple chart.
-- **Multi-replica workers.** Fragment-level advisory locks
+- [x] **Multi-replica workers.** Fragment-level advisory locks
   (`pg_try_advisory_lock(hashtext(fragment_iri)::bigint)`) + run idempotency
   key (fragment_id + profile_id + content_hash) prevent duplicate work without
   an external coordinator.
-- **Prometheus metrics + Perses dashboard.** `/metrics` exposes
+- [x] **Prometheus metrics + Perses dashboard.** `/metrics` exposes
   `riverbank_runs_total`, `riverbank_run_duration_seconds`,
   `riverbank_llm_cost_usd_total`, `riverbank_shacl_score`,
   `riverbank_review_queue_depth`, `riverbank_context_efficiency_ratio` (graph
@@ -292,11 +292,11 @@ workers, secret management, backups, and SLOs.
   re-implemented in riverbank. The context efficiency panel shows the running
   ratio trend per profile, making the token-cost justification for graph-based
   retrieval quantitatively visible to operators and stakeholders.
-- **Secret management.** LLM API keys from environment variables, Kubernetes
+- [x] **Secret management.** LLM API keys from environment variables, Kubernetes
   Secrets, or HashiCorp Vault (`hvac`). Keys route through pg-tide's
   `${env:VAR}` / `${file:/path}` secret interpolation for relay credentials;
   no secret is ever logged.
-- **Rate limiting + circuit breakers.** Per-provider concurrency limits and a
+- [x] **Rate limiting + circuit breakers.** Per-provider concurrency limits and a
   circuit breaker (`aiobreaker`) protect against runaway LLM costs during API
   misbehaviour — this covers OpenAI, Anthropic, and Ollama provider calls only.
   Relay pipeline circuit breakers (pg-tide transport layer) are configured via
@@ -304,14 +304,14 @@ workers, secret management, backups, and SLOs.
   `riverbank health` surfaces open relay circuits from
   `tide.relay_circuit_breaker_status` alongside the existing extension stack
   checks.
-- **Audit trail.** Every graph-mutating operation writes to `_riverbank.log`;
+- [x] **Audit trail.** Every graph-mutating operation writes to `_riverbank.log`;
   append-only at the database level (`REVOKE UPDATE, DELETE`).
-- **Bulk reprocessing.** `riverbank recompile --profile docs-policy-v1
+- [x] **Bulk reprocessing.** `riverbank recompile --profile docs-policy-v1
   --version 2` queues all v1 sources for recompilation and produces a semantic
   diff report.
-- **OpenTelemetry export.** `OTEL_EXPORTER_OTLP_ENDPOINT` routes traces to any
+- [x] **OpenTelemetry export.** `OTEL_EXPORTER_OTLP_ENDPOINT` routes traces to any
   collector (Jaeger, Tempo, Honeycomb-OSS).
-- **Cost dashboard.** Perses panels: cost per source, cost per profile, cost
+- [x] **Cost dashboard.** Perses panels: cost per source, cost per profile, cost
   trend, projected monthly spend.
 
 **Load test exit criteria:** three worker replicas process 10,000

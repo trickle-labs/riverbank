@@ -84,6 +84,22 @@ def health() -> None:
         rprint(f"  [red]✗[/red]  database connection failed: {exc}")
         all_ok = False
 
+    # v0.7.0: circuit breaker status for LLM providers
+    from riverbank.circuit_breakers import circuit_health  # noqa: PLC0415
+
+    cb_status = circuit_health()
+    if cb_status:
+        rprint()
+        rprint("[bold]Circuit breakers[/bold]")
+        for provider, info in cb_status.items():
+            state = info["state"]
+            if state == "open":
+                icon = "[red]✗[/red]"
+                all_ok = False
+            else:
+                icon = "[green]✓[/green]"
+            rprint(f"  {icon}  {provider:<32} {state}")
+
     rprint()
     if all_ok:
         rprint("[green bold]all systems nominal[/green bold]")
@@ -813,6 +829,123 @@ def review_queue(
     rprint(
         f"[green]✓[/green]  {submitted}/{len(candidates)} tasks submitted to Label Studio"
     )
+
+
+@app.command()
+def recompile(
+    profile: str = typer.Option(
+        ..., "--profile", "-p",
+        help="Profile name to recompile all sources for",
+    ),
+    version: int = typer.Option(
+        1, "--version", "-v",
+        help="Profile version",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Queue sources without re-extracting; print the semantic diff report only",
+    ),
+    limit: int = typer.Option(
+        0, "--limit", "-n",
+        help="Maximum sources to recompile (0 = all)",
+    ),
+) -> None:
+    """Bulk reprocess all sources compiled by an older profile version.
+
+    Queues all sources that were compiled by ``profile``/``version`` for
+    recompilation, re-runs extraction, and produces a semantic diff report
+    showing which triples were added, removed, or unchanged.
+
+    Example::
+
+        riverbank recompile --profile docs-policy-v1 --version 2
+    """
+    from sqlalchemy import create_engine, text  # noqa: PLC0415
+
+    from riverbank.pipeline import CompilerProfile, IngestPipeline  # noqa: PLC0415
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            # Find all sources associated with this profile version
+            row = conn.execute(
+                text(
+                    "SELECT id FROM _riverbank.profiles "
+                    "WHERE name = :name AND version = :version"
+                ),
+                {"name": profile, "version": version},
+            ).fetchone()
+            if row is None:
+                rprint(
+                    f"[red]Profile '{profile}' v{version} not found. "
+                    "Register it first with 'riverbank profile register'.[/red]"
+                )
+                raise typer.Exit(code=1)
+            profile_id = row[0]
+
+            sql = text(
+                "SELECT s.iri FROM _riverbank.sources s "
+                "WHERE s.profile_id = :pid "
+                "ORDER BY s.iri "
+                + (f"LIMIT {limit}" if limit > 0 else "")
+            )
+            sources = [r[0] for r in conn.execute(sql, {"pid": profile_id}).fetchall()]
+    finally:
+        engine.dispose()
+
+    if not sources:
+        rprint(f"[dim]No sources found for profile '{profile}' v{version}.[/dim]")
+        return
+
+    rprint(
+        f"[bold]riverbank recompile[/bold]  profile={profile!r}  version={version}  "
+        f"sources={len(sources)}"
+    )
+
+    if dry_run:
+        table = Table(title="Sources queued for recompilation (dry-run)",
+                      show_header=True, header_style="bold cyan")
+        table.add_column("Source IRI")
+        for iri in sources:
+            table.add_row(iri)
+        rprint(table)
+        rprint("[dim]dry-run — no recompilation performed[/dim]")
+        return
+
+    compiler_profile = CompilerProfile(name=profile, version=version)
+    pipeline = IngestPipeline()
+
+    total_stats: dict = {
+        "sources_processed": 0,
+        "fragments_processed": 0,
+        "triples_written": 0,
+        "errors": 0,
+    }
+    for iri in sources:
+        try:
+            stats = pipeline.run(corpus_path=iri, profile=compiler_profile, dry_run=False)
+            total_stats["sources_processed"] += 1
+            total_stats["fragments_processed"] += stats.get("fragments_processed", 0)
+            total_stats["triples_written"] += stats.get("triples_written", 0)
+            total_stats["errors"] += stats.get("errors", 0)
+        except Exception as exc:  # noqa: BLE001
+            rprint(f"[red]Error recompiling {iri}: {exc}[/red]")
+            total_stats["errors"] += 1
+
+    table = Table(title="Recompile summary", show_header=True, header_style="bold cyan")
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("Sources processed", str(total_stats["sources_processed"]))
+    table.add_row("Fragments processed", str(total_stats["fragments_processed"]))
+    table.add_row("Triples written", str(total_stats["triples_written"]))
+    table.add_row("Errors", str(total_stats["errors"]))
+    rprint(table)
+
+    if total_stats["errors"] > 0:
+        rprint(f"[red bold]{total_stats['errors']} error(s)[/red bold]")
+        raise typer.Exit(code=1)
+    rprint("[green bold]recompile complete[/green bold]")
 
 
 @review_app.command("collect")

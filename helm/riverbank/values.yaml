@@ -1,0 +1,169 @@
+# Default values for riverbank Helm chart (v0.7.0)
+# Override these with --set or a custom values.yaml
+
+# ---------------------------------------------------------------------------
+# Worker deployment
+# ---------------------------------------------------------------------------
+replicaCount: 3
+
+image:
+  repository: ghcr.io/trickle-labs/riverbank
+  pullPolicy: IfNotPresent
+  tag: ""  # Defaults to .Chart.AppVersion
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8000"
+  prometheus.io/path: "/metrics"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# ---------------------------------------------------------------------------
+# Riverbank configuration
+# ---------------------------------------------------------------------------
+riverbank:
+  dbDsn: ""          # Set via secret; falls back to RIVERBANK_DB__DSN env var
+  llmProvider: ollama
+  llmApiBase: "http://ollama:11434/v1"
+  # API key — use secret reference:  ${env:OPENAI_API_KEY}  or  ${vault:secret/rb#key}
+  llmApiKey: "ollama"
+  langfuseEnabled: false
+  langfuseHost: "http://langfuse:3000"
+  # OTel endpoint — set to route traces to Jaeger/Tempo/Honeycomb
+  otelExporterOtlpEndpoint: ""
+
+# ---------------------------------------------------------------------------
+# Secret management
+# ---------------------------------------------------------------------------
+secrets:
+  # Name of an existing Kubernetes Secret containing sensitive values.
+  # Expected keys: RIVERBANK_DB__DSN, RIVERBANK_LLM__API_KEY
+  existingSecret: ""
+  # HashiCorp Vault integration (optional)
+  vault:
+    enabled: false
+    addr: "http://vault:8200"
+    # Kubernetes Service Account token path for Vault auth
+    authPath: "auth/kubernetes/login"
+    secretPath: "secret/riverbank"
+
+# ---------------------------------------------------------------------------
+# Metrics endpoint
+# ---------------------------------------------------------------------------
+metrics:
+  enabled: true
+  port: 8000
+  path: /metrics
+  serviceMonitor:
+    enabled: false
+    namespace: monitoring
+    interval: 30s
+
+service:
+  type: ClusterIP
+  port: 8000
+
+# ---------------------------------------------------------------------------
+# Circuit breakers (per-provider concurrency + fail-fast)
+# ---------------------------------------------------------------------------
+circuitBreakers:
+  openai:
+    failMax: 5
+    resetTimeoutSeconds: 60
+    maxConcurrency: 10
+  anthropic:
+    failMax: 5
+    resetTimeoutSeconds: 60
+    maxConcurrency: 5
+  ollama:
+    failMax: 10
+    resetTimeoutSeconds: 30
+    maxConcurrency: 20
+
+# ---------------------------------------------------------------------------
+# Resource limits
+# ---------------------------------------------------------------------------
+resources:
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+# ---------------------------------------------------------------------------
+# Autoscaling
+# ---------------------------------------------------------------------------
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+# ---------------------------------------------------------------------------
+# PostgreSQL (sub-chart — use when not providing an external DB)
+# ---------------------------------------------------------------------------
+postgresql:
+  enabled: false  # Set to true to deploy a local PostgreSQL instance
+  auth:
+    database: riverbank
+    username: riverbank
+    password: ""  # Auto-generated when empty
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+
+# ---------------------------------------------------------------------------
+# Prefect server (optional — disable when using managed Prefect Cloud)
+# ---------------------------------------------------------------------------
+prefect:
+  enabled: false
+  image:
+    repository: prefecthq/prefect
+    tag: "3-latest"
+  apiUrl: "http://prefect-server:4200/api"
+
+# ---------------------------------------------------------------------------
+# Label Studio (optional)
+# ---------------------------------------------------------------------------
+labelStudio:
+  enabled: false
+  image:
+    repository: heartexlabs/label-studio
+    tag: latest
+  persistence:
+    enabled: true
+    size: 10Gi
+
+# ---------------------------------------------------------------------------
+# Langfuse (optional)
+# ---------------------------------------------------------------------------
+langfuse:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# Affinity / tolerations / node selector
+# ---------------------------------------------------------------------------
+nodeSelector: {}
+tolerations: []
+affinity: {}

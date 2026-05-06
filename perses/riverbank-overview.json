@@ -1,0 +1,327 @@
+{
+  "kind": "Dashboard",
+  "metadata": {
+    "name": "riverbank-overview",
+    "project": "riverbank"
+  },
+  "spec": {
+    "display": {
+      "name": "Riverbank Overview",
+      "description": "Production metrics for the riverbank compiled knowledge-base worker"
+    },
+    "duration": "PT6H",
+    "refreshInterval": "PT1M",
+    "variables": [
+      {
+        "kind": "ListVariable",
+        "spec": {
+          "name": "profile",
+          "display": { "name": "Profile" },
+          "allowAllValue": true,
+          "allowMultiple": true,
+          "plugin": {
+            "kind": "PrometheusLabelValuesVariable",
+            "spec": {
+              "labelName": "profile",
+              "matchers": ["riverbank_runs_total"]
+            }
+          }
+        }
+      }
+    ],
+    "layouts": [
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": { "title": "Run Throughput" },
+          "items": [
+            { "x": 0, "y": 0, "width": 8, "height": 6, "content": { "$ref": "#/spec/panels/runs_rate" } },
+            { "x": 8, "y": 0, "width": 8, "height": 6, "content": { "$ref": "#/spec/panels/run_duration_p95" } },
+            { "x": 16, "y": 0, "width": 8, "height": 6, "content": { "$ref": "#/spec/panels/error_rate" } }
+          ]
+        }
+      },
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": { "title": "LLM Cost" },
+          "items": [
+            { "x": 0, "y": 0, "width": 8, "height": 6, "content": { "$ref": "#/spec/panels/cost_per_profile" } },
+            { "x": 8, "y": 0, "width": 8, "height": 6, "content": { "$ref": "#/spec/panels/cost_trend" } },
+            { "x": 16, "y": 0, "width": 8, "height": 6, "content": { "$ref": "#/spec/panels/cost_projected_monthly" } }
+          ]
+        }
+      },
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": { "title": "Quality" },
+          "items": [
+            { "x": 0, "y": 0, "width": 8, "height": 6, "content": { "$ref": "#/spec/panels/shacl_score" } },
+            { "x": 8, "y": 0, "width": 8, "height": 6, "content": { "$ref": "#/spec/panels/review_queue_depth" } },
+            { "x": 16, "y": 0, "width": 8, "height": 6, "content": { "$ref": "#/spec/panels/context_efficiency" } }
+          ]
+        }
+      },
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": { "title": "Circuit Breakers" },
+          "items": [
+            { "x": 0, "y": 0, "width": 24, "height": 6, "content": { "$ref": "#/spec/panels/circuit_breaker_state" } }
+          ]
+        }
+      }
+    ],
+    "panels": {
+      "runs_rate": {
+        "kind": "Panel",
+        "spec": {
+          "display": { "name": "Runs / minute", "description": "Fragment compilation runs per minute" },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": { "position": "bottom" },
+              "queries": [
+                {
+                  "kind": "TimeSeriesQuery",
+                  "spec": {
+                    "plugin": {
+                      "kind": "PrometheusTimeSeriesQuery",
+                      "spec": {
+                        "query": "sum by (profile) (rate(riverbank_runs_total{profile=~\"$profile\"}[5m])) * 60",
+                        "seriesNameFormat": "{{profile}}"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "run_duration_p95": {
+        "kind": "Panel",
+        "spec": {
+          "display": { "name": "Run duration p95 (s)", "description": "p95 fragment compilation duration in seconds" },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "TimeSeriesQuery",
+                  "spec": {
+                    "plugin": {
+                      "kind": "PrometheusTimeSeriesQuery",
+                      "spec": {
+                        "query": "histogram_quantile(0.95, sum by (le, profile) (rate(riverbank_run_duration_seconds_bucket{profile=~\"$profile\"}[5m])))",
+                        "seriesNameFormat": "p95 {{profile}}"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "error_rate": {
+        "kind": "Panel",
+        "spec": {
+          "display": { "name": "Error rate", "description": "Fraction of runs ending in error" },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "TimeSeriesQuery",
+                  "spec": {
+                    "plugin": {
+                      "kind": "PrometheusTimeSeriesQuery",
+                      "spec": {
+                        "query": "sum(rate(riverbank_runs_total{outcome=\"error\"}[5m])) / sum(rate(riverbank_runs_total[5m]))",
+                        "seriesNameFormat": "error fraction"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "cost_per_profile": {
+        "kind": "Panel",
+        "spec": {
+          "display": { "name": "LLM cost per profile (USD)", "description": "Cumulative LLM spend broken down by profile" },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "TimeSeriesQuery",
+                  "spec": {
+                    "plugin": {
+                      "kind": "PrometheusTimeSeriesQuery",
+                      "spec": {
+                        "query": "sum by (profile) (rate(riverbank_llm_cost_usd_total{profile=~\"$profile\"}[1h])) * 3600",
+                        "seriesNameFormat": "{{profile}}"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "cost_trend": {
+        "kind": "Panel",
+        "spec": {
+          "display": { "name": "LLM cost trend (USD/h)", "description": "Rolling hourly LLM cost across all profiles" },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "TimeSeriesQuery",
+                  "spec": {
+                    "plugin": {
+                      "kind": "PrometheusTimeSeriesQuery",
+                      "spec": {
+                        "query": "sum(rate(riverbank_llm_cost_usd_total[1h])) * 3600",
+                        "seriesNameFormat": "total USD/h"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "cost_projected_monthly": {
+        "kind": "Panel",
+        "spec": {
+          "display": { "name": "Projected monthly cost (USD)", "description": "Extrapolated monthly LLM spend at current rate" },
+          "plugin": {
+            "kind": "StatChart",
+            "spec": {
+              "query": {
+                "kind": "TimeSeriesQuery",
+                "spec": {
+                  "plugin": {
+                    "kind": "PrometheusTimeSeriesQuery",
+                    "spec": {
+                      "query": "sum(rate(riverbank_llm_cost_usd_total[24h])) * 86400 * 30",
+                      "seriesNameFormat": "projected monthly USD"
+                    }
+                  }
+                }
+              },
+              "format": { "unit": "dollars", "decimalPlaces": 2 }
+            }
+          }
+        }
+      },
+      "shacl_score": {
+        "kind": "Panel",
+        "spec": {
+          "display": { "name": "SHACL quality score", "description": "Current SHACL validation score per named graph [0–1]" },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "TimeSeriesQuery",
+                  "spec": {
+                    "plugin": {
+                      "kind": "PrometheusTimeSeriesQuery",
+                      "spec": {
+                        "query": "riverbank_shacl_score",
+                        "seriesNameFormat": "{{named_graph}}"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "review_queue_depth": {
+        "kind": "Panel",
+        "spec": {
+          "display": { "name": "Review queue depth", "description": "Items waiting for human review" },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "TimeSeriesQuery",
+                  "spec": {
+                    "plugin": {
+                      "kind": "PrometheusTimeSeriesQuery",
+                      "spec": {
+                        "query": "riverbank_review_queue_depth",
+                        "seriesNameFormat": "{{named_graph}}"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "context_efficiency": {
+        "kind": "Panel",
+        "spec": {
+          "display": { "name": "Context efficiency ratio", "description": "Graph tokens vs naive-RAG tokens per rag_context() call — higher is better" },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "TimeSeriesQuery",
+                  "spec": {
+                    "plugin": {
+                      "kind": "PrometheusTimeSeriesQuery",
+                      "spec": {
+                        "query": "riverbank_context_efficiency_ratio",
+                        "seriesNameFormat": "{{profile}}"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "circuit_breaker_state": {
+        "kind": "Panel",
+        "spec": {
+          "display": { "name": "LLM circuit breakers", "description": "Open circuits indicate provider outages; relay circuits are in the pg-tide sub-dashboard" },
+          "plugin": {
+            "kind": "TableChart",
+            "spec": {
+              "query": {
+                "kind": "TimeSeriesQuery",
+                "spec": {
+                  "plugin": {
+                    "kind": "PrometheusTimeSeriesQuery",
+                    "spec": {
+                      "query": "riverbank_circuit_breaker_open",
+                      "seriesNameFormat": "{{provider}}"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+apiVersion: v2
+name: riverbank
+description: Compiled knowledge-base worker for pg-ripple, pg-trickle, and pg-tide
+type: application
+version: 0.7.0
+appVersion: "0.7.0"
+keywords:
+  - knowledge-graph
+  - nlp
+  - rdf
+home: https://github.com/trickle-labs/riverbank
+sources:
+  - https://github.com/trickle-labs/riverbank
+maintainers:
+  - name: Trickle Labs
+dependencies:
+  - name: postgresql
+    version: ">=12.0.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled

@@ -66,18 +66,68 @@ except ImportError:
 def setup_tracing(service_name: str = "riverbank") -> None:
     """Configure the OpenTelemetry TracerProvider.
 
-    Phase 0: exports spans to console (stdout) when no OTLP endpoint is set.
-    Phase 1+: set OTEL_EXPORTER_OTLP_ENDPOINT to route spans to Langfuse or
-    any compatible collector.
+    When ``OTEL_EXPORTER_OTLP_ENDPOINT`` is set, spans are routed to the
+    configured OTLP collector (Jaeger, Tempo, Honeycomb-OSS, etc.) via
+    ``opentelemetry-exporter-otlp-proto-grpc`` if installed, falling back to
+    the OTLP HTTP exporter, and finally to the console exporter.
+
+    When no endpoint is set, spans are exported to stdout (console exporter).
     """
+    import os  # noqa: PLC0415
+
     global _initialized
     if _initialized:
         return
 
     provider = TracerProvider()
-    provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+    otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+
+    if otlp_endpoint:
+        exporter = _build_otlp_exporter(otlp_endpoint, service_name)
+        if exporter is not None:
+            provider.add_span_processor(BatchSpanProcessor(exporter))
+        else:
+            provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+    else:
+        provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+
     trace.set_tracer_provider(provider)
     _initialized = True
+
+
+def _build_otlp_exporter(endpoint: str, service_name: str) -> Any:
+    """Try to build an OTLP span exporter.
+
+    Attempts gRPC exporter first; falls back to HTTP exporter; returns None
+    when neither is installed.
+    """
+    # Try gRPC (opentelemetry-exporter-otlp-proto-grpc)
+    try:
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (  # type: ignore[import-untyped]
+            OTLPSpanExporter as GRPCExporter,
+        )
+        logger.debug("OTLP gRPC exporter configured: endpoint=%r", endpoint)
+        return GRPCExporter(endpoint=endpoint)
+    except ImportError:
+        pass
+
+    # Try HTTP (opentelemetry-exporter-otlp-proto-http)
+    try:
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (  # type: ignore[import-untyped]
+            OTLPSpanExporter as HTTPExporter,
+        )
+        logger.debug("OTLP HTTP exporter configured: endpoint=%r", endpoint)
+        return HTTPExporter(endpoint=endpoint)
+    except ImportError:
+        pass
+
+    logger.warning(
+        "OTEL_EXPORTER_OTLP_ENDPOINT=%r is set but no OTLP exporter package is installed. "
+        "Install opentelemetry-exporter-otlp-proto-grpc or "
+        "opentelemetry-exporter-otlp-proto-http to enable OTLP export.",
+        endpoint,
+    )
+    return None
 
 
 def get_tracer(name: str = "riverbank") -> trace.Tracer:

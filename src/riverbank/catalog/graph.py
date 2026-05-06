@@ -602,3 +602,59 @@ def sparql_query_with_thesaurus(
         return sparql_query(conn, augmented, named_graph=named_graph)
 
     return sparql_query(conn, sparql, named_graph=named_graph)
+
+
+# ---------------------------------------------------------------------------
+# Audit trail (v0.7.0)
+# ---------------------------------------------------------------------------
+
+
+def write_audit_log(
+    conn: Any,
+    operation: str,
+    payload: dict,
+    actor: str = "",
+) -> bool:
+    """Write one entry to the append-only ``_riverbank.log`` table.
+
+    ``operation`` is a short string naming the graph-mutating event
+    (e.g. ``"load_triples"``, ``"recompile"``, ``"review_decision"``).
+
+    ``payload`` is a dict with event-specific details; stored as JSONB.
+
+    ``actor`` identifies the worker or user that performed the operation.
+    Uses the value of ``RIVERBANK_ACTOR`` env var when not supplied.
+
+    The ``log`` table is append-only at the database level (enforced by the
+    trigger installed in migration 0003).  This function always INSERTs and
+    never UPDATEs or DELETEs.
+
+    Returns ``True`` on success, ``False`` on graceful fallback (e.g. when
+    the migration has not yet been applied in a test environment).
+    """
+    import json as _json  # noqa: PLC0415
+    import os  # noqa: PLC0415
+
+    from sqlalchemy import text  # noqa: PLC0415
+
+    if not actor:
+        actor = os.environ.get("RIVERBANK_ACTOR", "")
+
+    try:
+        conn.execute(
+            text(
+                "INSERT INTO _riverbank.log (event, payload, operation, actor) "
+                "VALUES (:event, :payload::jsonb, :operation, :actor)"
+            ),
+            {
+                "event": operation,
+                "payload": _json.dumps(payload),
+                "operation": operation,
+                "actor": actor,
+            },
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("write_audit_log failed: %s", exc)
+        return False
+

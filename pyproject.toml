@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "riverbank"
-version = "0.6.0"
+version = "0.7.0"
 description = "Compiled knowledge-base worker for pg-ripple, pg-trickle, and pg-tide"
 readme = "README.md"
 license = { text = "MIT" }
@@ -44,6 +44,12 @@ orchestration = [
     "apscheduler>=4.0",
     "prefect>=3.6",
 ]
+# Production hardening — v0.7.0
+hardening = [
+    "prometheus-client>=0.20",
+    "aiobreaker>=1.0",
+    "hvac>=2.0",
+]
 # Developer tooling
 dev = [
     "pytest>=8.2",
@@ -53,6 +59,7 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.10",
     "rapidfuzz>=3.9",
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]
