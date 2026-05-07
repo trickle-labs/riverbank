@@ -4,6 +4,8 @@ from __future__ import annotations
 import unittest.mock as mock
 
 from riverbank.catalog.graph import (
+    _normalise_iri_local,
+    _to_ntriples_term,
     emit_outbox_event,
     load_shape_bundle,
     run_shape_bundle,
@@ -61,3 +63,53 @@ def test_run_shape_bundle_returns_rows_as_dicts() -> None:
     results = run_shape_bundle(conn, "skos-integrity", "http://test/vocab")
     assert len(results) == 1
     assert results[0]["focus_node"] == "entity:X"
+
+
+# ---------------------------------------------------------------------------
+# _normalise_iri_local
+# ---------------------------------------------------------------------------
+
+def test_normalise_iri_local_no_spaces() -> None:
+    assert _normalise_iri_local("createdBy") == "createdBy"
+
+
+def test_normalise_iri_local_single_space() -> None:
+    assert _normalise_iri_local("links back to") == "links_back_to"
+
+
+def test_normalise_iri_local_multiple_spaces() -> None:
+    assert _normalise_iri_local("is  part  of") == "is_part_of"
+
+
+def test_normalise_iri_local_leading_trailing_space() -> None:
+    assert _normalise_iri_local(" hasState ") == "_hasState_"
+
+
+# ---------------------------------------------------------------------------
+# _to_ntriples_term — IRI local part normalisation
+# ---------------------------------------------------------------------------
+
+def test_to_ntriples_term_prefixed_no_spaces() -> None:
+    assert _to_ntriples_term("ex:createdBy") == "<http://riverbank.example/entities/createdBy>"
+
+
+def test_to_ntriples_term_prefixed_with_spaces() -> None:
+    # Multi-word predicate from LLM: spaces must become underscores
+    result = _to_ntriples_term("ex:links back to")
+    assert result == "<http://riverbank.example/entities/links_back_to>"
+    assert " " not in result
+
+
+def test_to_ntriples_term_already_bracketed_iri_unchanged() -> None:
+    # Pre-existing <…> IRIs with spaces are passed through unchanged
+    # (they were already invalid; we don't touch them)
+    iri = "<http://riverbank.example/entities/links back to>"
+    assert _to_ntriples_term(iri) == iri
+
+
+def test_to_ntriples_term_plain_literal() -> None:
+    assert _to_ntriples_term("Apache 2.0") == '"Apache 2.0"'
+
+
+def test_to_ntriples_term_rdf_prefix() -> None:
+    assert _to_ntriples_term("rdf:type") == "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"

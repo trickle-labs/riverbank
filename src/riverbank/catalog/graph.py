@@ -35,6 +35,19 @@ _PREFIXES: dict[str, str] = {
 }
 
 
+def _normalise_iri_local(local: str) -> str:
+    """Replace whitespace with underscores in an IRI local part.
+
+    N-Triples forbids unencoded whitespace inside IRIs.  When the LLM writes a
+    multi-word predicate like ``ex:links back to``, the local part
+    ``links back to`` must be normalised before embedding in ``<…>`` angle
+    brackets.  Underscores are preferred over percent-encoding for readability.
+    """
+    import re  # noqa: PLC0415
+
+    return re.sub(r"\s+", "_", local)
+
+
 def _to_ntriples_term(term: str) -> str:
     """Convert a prefixed name, URI, or literal value to N-Triples term."""
     # Already a full URI in angle brackets
@@ -58,7 +71,7 @@ def _to_ntriples_term(term: str) -> str:
     if ":" in term:
         prefix, local = term.split(":", 1)
         ns = _PREFIXES.get(prefix, f"http://riverbank.example/{prefix}/")
-        return f"<{ns}{local}>"
+        return f"<{ns}{_normalise_iri_local(local)}>"
     # Plain string with no prefix — treat as literal
     escaped = term.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
     return f'"{escaped}"'
