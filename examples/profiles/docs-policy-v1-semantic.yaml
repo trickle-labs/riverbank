@@ -39,7 +39,8 @@ prompt_text: |
 
   For each claim provide:
   - subject: prefixed IRI for named entities (e.g. ex:Ariadne, ex:DrElenaVasquez)
-  - predicate: prefixed camelCase IRI (e.g. ex:createdBy, ex:hasState, ex:provides)
+  - predicate: ALWAYS use the ex: prefix — write ex:createdBy NOT createdBy
+    (e.g. ex:createdBy, ex:hasState, ex:provides, ex:licensedUnder)
   - object_value: prefixed IRI for named entities; plain literal for everything else
     (e.g. "2023", "Apache 2.0", "Python library")
   - confidence: float 0.0–1.0

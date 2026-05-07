@@ -26,7 +26,8 @@ technical document section as RDF triples.
 
 For each claim provide:
 - subject: prefixed IRI for named entities (e.g. ex:Ariadne, ex:DrElenaVasquez)
-- predicate: prefixed camelCase IRI (e.g. ex:createdBy, ex:hasState, ex:provides)
+- predicate: ALWAYS use the ex: prefix — write ex:createdBy NOT createdBy
+  (e.g. ex:createdBy, ex:hasState, ex:provides, ex:licensedUnder)
 - object_value: prefixed IRI for named entities; plain literal for everything else
   (e.g. "2023", "Apache 2.0", "Python library")
 - confidence: float 0.0–1.0 reflecting how clearly the text supports the claim
@@ -456,6 +457,11 @@ class InstructorExtractor:
         for t in response:
             subj, pred, obj, conf, ev_in = _unpack(t)
             cs, ce, excerpt, page_number = _unpack_ev(ev_in)
+            # Auto-expand bare predicates: if the LLM omits the ex: prefix
+            # (e.g. "createdBy" instead of "ex:createdBy"), add it so that
+            # _to_ntriples_term() produces a proper IRI instead of a string literal.
+            if pred and ":" not in pred and not pred.startswith("<"):
+                pred = f"ex:{pred}"
             # Citation grounding: reject fabricated excerpts.
             # rapidfuzz.partial_ratio finds the best-matching same-length window
             # in the source text, tolerating minor LLM reformatting (decimal
