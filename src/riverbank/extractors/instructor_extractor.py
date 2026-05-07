@@ -22,21 +22,43 @@ _CITATION_SIMILARITY_THRESHOLD: int = 82
 
 
 _DEFAULT_PROMPT = """\
-You are a knowledge graph compiler.  Extract factual claims from the following
-technical document section as RDF triples.
+# INSTRUCTION: OUTPUT ONLY VALID JSON ARRAY
+You are a knowledge graph compiler. Extract factual claims from the technical document as RDF triples.
 
-For each claim provide:
-- subject: prefixed IRI for named entities (e.g. ex:Ariadne, ex:DrElenaVasquez)
-- predicate: ALWAYS use the ex: prefix — write ex:createdBy NOT createdBy
-  (e.g. ex:createdBy, ex:hasState, ex:provides, ex:licensedUnder)
-- object_value: prefixed IRI for named entities; plain literal for everything else
-  (e.g. "2023", "Apache 2.0", "Python library")
-- confidence: float 0.0–1.0 reflecting how clearly the text supports the claim
-- evidence: exact character offsets (char_start, char_end) and a verbatim
-  excerpt copied from the source text
+**OUTPUT FORMAT:** Respond with ONLY a valid JSON array. Do NOT include any explanatory text before or after the JSON. The JSON must be parseable by Python json.loads().
 
-Only extract claims directly supported by the text.
-Do NOT fabricate evidence — the excerpt must appear verbatim in the source.
+## JSON Schema (Example)
+```json
+[
+  {
+    "subject": "ex:Ariadne",
+    "predicate": "ex:createdBy",
+    "object_value": "ex:Author1",
+    "confidence": 0.95,
+    "evidence": {
+      "char_start": 142,
+      "char_end": 189,
+      "excerpt": "Ariadne was created by Author1 in 2023",
+      "page_number": null
+    }
+  }
+]
+```
+
+## Extraction Rules
+For each claim, provide:
+1. **subject**: prefixed IRI for named entities (e.g. ex:Ariadne, ex:DrElenaVasquez)
+2. **predicate**: ALWAYS use the ex: prefix — write ex:createdBy NOT createdBy
+   (e.g. ex:createdBy, ex:hasState, ex:provides, ex:licensedUnder)
+3. **object_value**: prefixed IRI for named entities; plain literal for everything else
+   (e.g. "2023", "Apache 2.0", "Python library")
+4. **confidence**: float 0.0–1.0 reflecting how clearly the text supports the claim
+5. **evidence**: exact character offsets (char_start, char_end) and verbatim excerpt
+
+## Critical Constraints
+- Only extract claims directly supported by the text.
+- Do NOT fabricate evidence — the excerpt MUST appear verbatim in the source.
+- Always return a JSON array, even if empty: []
 """
 
 _PERMISSIVE_TIER_GUIDANCE = """\
@@ -429,11 +451,19 @@ class InstructorExtractor:
         else:
             extra_body_kwargs = {}
 
+        # v0.14.1: Add explicit JSON-forcing prefix to user message
+        # This reinforces to local LLMs like Gemma4 that JSON output is required
+        user_message = (
+            "RESPOND WITH ONLY VALID JSON. NO EXPLANATIONS OR TEXT OUTSIDE JSON.\n\n"
+            "Analyze this document and extract RDF triples:\n\n"
+            f"{text}"
+        )
+
         response, completion = client.chat.completions.create_with_completion(
             model=model_name,
             messages=[
                 {"role": "system", "content": prompt_text},
-                {"role": "user", "content": text},
+                {"role": "user", "content": user_message},
             ],
             response_model=list[_TripleIn],
             **extra_body_kwargs,
