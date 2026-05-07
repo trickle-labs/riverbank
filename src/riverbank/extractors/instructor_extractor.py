@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any, ClassVar, Optional
+
+from rapidfuzz import fuzz as _fuzz
 
 from opentelemetry import trace as otel_trace
 
@@ -11,20 +12,12 @@ from riverbank.prov import EvidenceSpan, ExtractedTriple
 
 logger = logging.getLogger(__name__)
 
-
-def _normalize_excerpt(s: str) -> str:
-    """Normalise an excerpt for citation grounding.
-
-    Strips markdown formatting (bold, italic, inline code) and collapses
-    whitespace so that minor LLM reformatting doesn't cause false rejections.
-    Also removes spaces inserted by the LLM tokeniser around decimal points
-    (e.g. "2. 0" → "2.0") and inside bracketed numeric lists.
-    """
-    s = re.sub(r"\*+", "", s)            # strip bold/italic markers
-    s = re.sub(r"`([^`]*)`", r"\1", s)   # strip inline code backticks
-    s = re.sub(r"(\d)\.\s+(\d)", r"\1.\2", s)  # fix decimal spacing: "2. 0" → "2.0"
-    s = re.sub(r"\s+", " ", s).strip()   # collapse all whitespace
-    return s
+# Minimum rapidfuzz partial_ratio score (0–100) for an excerpt to be considered
+# grounded in the source text.  partial_ratio finds the best matching window of
+# the same length in the longer string, so it tolerates minor LLM reformatting
+# (decimal spacing artefacts, stripped markdown, em-dash variants) while still
+# rejecting outright fabrications.  88 gives ~1 character tolerance per 8 chars.
+_CITATION_SIMILARITY_THRESHOLD: int = 88
 
 
 _DEFAULT_PROMPT = """\
@@ -460,17 +453,19 @@ class InstructorExtractor:
 
         # --- validate and filter triples ---
         validated: list[ExtractedTriple] = []
-        _text_normalised = _normalize_excerpt(text)
         for t in response:
             subj, pred, obj, conf, ev_in = _unpack(t)
             cs, ce, excerpt, page_number = _unpack_ev(ev_in)
             # Citation grounding: reject fabricated excerpts.
-            # Normalise both sides so minor LLM reformatting (spacing around
-            # decimals, stripped markdown, em-dash variants) doesn't cause
-            # false rejections of genuinely grounded triples.
-            if excerpt and _normalize_excerpt(excerpt) not in _text_normalised:
+            # rapidfuzz.partial_ratio finds the best-matching same-length window
+            # in the source text, tolerating minor LLM reformatting (decimal
+            # spacing, stripped markdown, em-dash variants) while still catching
+            # hallucinated excerpts that share no real overlap with the source.
+            if excerpt and _fuzz.partial_ratio(excerpt, text) < _CITATION_SIMILARITY_THRESHOLD:
                 logger.warning(
-                    "Rejecting triple — excerpt not found in source text: %r",
+                    "Rejecting triple — excerpt similarity %.0f%% < %d%% threshold: %r",
+                    _fuzz.partial_ratio(excerpt, text),
+                    _CITATION_SIMILARITY_THRESHOLD,
                     excerpt[:80],
                 )
                 continue

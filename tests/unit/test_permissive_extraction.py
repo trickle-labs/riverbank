@@ -735,69 +735,68 @@ class TestExtractionStatKeys:
 
 
 # ---------------------------------------------------------------------------
-# _normalize_excerpt (citation grounding normaliser)
+# Citation grounding via rapidfuzz
 # ---------------------------------------------------------------------------
 
 
-class TestNormalizeExcerpt:
-    """Tests for the excerpt normaliser used in citation grounding."""
+class TestCitationGrounding:
+    """Tests for the rapidfuzz-based citation grounding used in the validator.
 
-    def test_strips_bold_markers(self):
-        from riverbank.extractors.instructor_extractor import _normalize_excerpt
+    These tests verify the behaviour that replaced the _normalize_excerpt()
+    approach: rapidfuzz.partial_ratio() finds the best-matching same-length
+    window in the source text, so minor LLM reformatting doesn't cause false
+    rejections.
+    """
 
-        assert _normalize_excerpt("**bold text**") == "bold text"
+    def test_exact_match_scores_100(self):
+        from rapidfuzz import fuzz
 
-    def test_strips_italic_markers(self):
-        from riverbank.extractors.instructor_extractor import _normalize_excerpt
+        text = "Ariadne is an open-source Python library created in 2023."
+        assert fuzz.partial_ratio(text, text) == 100
 
-        assert _normalize_excerpt("*italic*") == "italic"
+    def test_markdown_stripped_excerpt_scores_high(self):
+        """LLM strips bold markers from the source — should still pass."""
+        from rapidfuzz import fuzz
 
-    def test_strips_inline_code_backticks(self):
-        from riverbank.extractors.instructor_extractor import _normalize_excerpt
+        source = "Ariadne is an **open-source Python library** created in 2023."
+        excerpt = "Ariadne is an open-source Python library created in 2023."
+        assert fuzz.partial_ratio(excerpt, source) >= 88
 
-        assert _normalize_excerpt("`some.module`") == "some.module"
+    def test_decimal_spacing_artefact_scores_high(self):
+        """LLM inserts a space after a decimal point — should still pass."""
+        from rapidfuzz import fuzz
 
-    def test_collapses_internal_whitespace(self):
-        from riverbank.extractors.instructor_extractor import _normalize_excerpt
+        source = "The default prior is 2.0 for all claims."
+        excerpt = "The default prior is 2. 0 for all claims."
+        assert fuzz.partial_ratio(excerpt, source) >= 88
 
-        result = _normalize_excerpt("value  is  large  here")
-        assert result == "value is large here"
+    def test_complete_fabrication_scores_low(self):
+        """A completely fabricated excerpt unrelated to the source should fail."""
+        from rapidfuzz import fuzz
 
-    def test_fixes_decimal_spacing(self):
-        from riverbank.extractors.instructor_extractor import _normalize_excerpt
+        source = "Ariadne processes Markdown, DOCX, and plain text files."
+        fabricated = "The system uses a blockchain-based consensus mechanism."
+        assert fuzz.partial_ratio(fabricated, source) < 88
 
-        # LLM inserts space after decimal point due to tokenisation
-        assert _normalize_excerpt("score is 2. 0 out of 5") == "score is 2.0 out of 5"
-        assert _normalize_excerpt("[0. 0, 1. 0]") == "[0.0, 1.0]"
+    def test_threshold_constant_is_int(self):
+        from riverbank.extractors.instructor_extractor import _CITATION_SIMILARITY_THRESHOLD
 
-    def test_strips_leading_trailing_whitespace(self):
-        from riverbank.extractors.instructor_extractor import _normalize_excerpt
+        assert isinstance(_CITATION_SIMILARITY_THRESHOLD, int)
+        assert 80 <= _CITATION_SIMILARITY_THRESHOLD <= 95
 
-        assert _normalize_excerpt("  trimmed  ") == "trimmed"
+    def test_em_dash_variant_scores_high(self):
+        """LLM uses em-dash where source has a hyphen — should still pass."""
+        from rapidfuzz import fuzz
 
-    def test_no_change_for_plain_text(self):
-        from riverbank.extractors.instructor_extractor import _normalize_excerpt
+        source = "prov:wasAttributedTo - the human author"
+        excerpt = "prov:wasAttributedTo — the human author"
+        assert fuzz.partial_ratio(excerpt, source) >= 88
 
-        plain = "Ariadne is an open-source Python library"
-        assert _normalize_excerpt(plain) == plain
+    def test_truncated_excerpt_scores_high(self):
+        """partial_ratio handles excerpts shorter than source correctly."""
+        from rapidfuzz import fuzz
 
-    def test_grounding_passes_after_normalisation(self):
-        """Simulates the real-world LLM reformatting issue: excerpt has
-        markdown stripped and spacing normalised, but still appears in text."""
-        from riverbank.extractors.instructor_extractor import _normalize_excerpt
-
-        source_text = "Ariadne is an **open-source Python library** created in 2023."
-        # LLM might output the excerpt with markdown stripped:
-        llm_excerpt = "Ariadne is an open-source Python library created in 2023."
-        assert _normalize_excerpt(llm_excerpt) in _normalize_excerpt(source_text)
-
-    def test_grounding_passes_for_decimal_spacing(self):
-        """LLM tokenisation artefact: '2.0' becomes '2. 0'."""
-        from riverbank.extractors.instructor_extractor import _normalize_excerpt
-
-        source_text = "The default prior is 2.0 for all claims."
-        # LLM excerpt with space inserted after decimal point:
-        llm_excerpt = "The default prior is 2. 0 for all claims."
-        # After normalisation of the source, the excerpt should match
-        assert _normalize_excerpt(llm_excerpt) in _normalize_excerpt(source_text)
+        source = "Ariadne addresses the information fragmentation problem by providing a unified graph-based model."
+        excerpt = "Ariadne addresses the information fragmentation problem"
+        assert fuzz.partial_ratio(excerpt, source) >= 88
 
