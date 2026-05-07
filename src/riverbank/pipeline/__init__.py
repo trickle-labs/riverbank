@@ -182,7 +182,7 @@ class IngestPipeline:
         Returns a stats dict:
         ``fragments_processed``, ``fragments_skipped``, ``fragments_skipped_hash``,
         ``triples_written``, ``llm_calls``, ``prompt_tokens``, ``completion_tokens``,
-        ``cost_usd``, ``errors``.
+        ``cost_usd``, ``errors``, ``corpus_bytes``.
         """
         if profile is None:
             profile = CompilerProfile.default()
@@ -279,6 +279,8 @@ class IngestPipeline:
             "triples_capped": 0,
             # v0.12.1
             "triples_promoted": 0,
+            # Corpus size for yield metrics
+            "corpus_bytes": 0,
         }
 
         p = Path(corpus_path)
@@ -298,6 +300,9 @@ class IngestPipeline:
                     mime_type="text/markdown",
                 )
             ]
+
+        # Sum corpus bytes from all sources for yield metrics
+        stats["corpus_bytes"] = sum(len(src.content) for src in sources if src.content)
 
         tracer = otel_trace.get_tracer(__name__)
         with self._get_db() as conn:

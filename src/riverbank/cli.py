@@ -336,6 +336,11 @@ def ingest(
     gate_skipped = stats["fragments_skipped"] - stats["fragments_skipped_hash"]
     table.add_row("Fragments skipped (gate)", str(gate_skipped))
     table.add_row("Triples written", str(stats["triples_written"]))
+    # Triples per kilobyte of corpus
+    corpus_kb = stats.get("corpus_bytes", 0) / 1024
+    if corpus_kb > 0:
+        triples_per_kb = stats["triples_written"] / corpus_kb
+        table.add_row("Triples per kB", f"{triples_per_kb:.2f}")
     table.add_row("LLM calls", str(stats["llm_calls"]))
     table.add_row("Prompt tokens", str(stats["prompt_tokens"]))
     table.add_row("Completion tokens", str(stats["completion_tokens"]))
