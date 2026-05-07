@@ -324,6 +324,63 @@ def clear_graph(
     rprint(f"[green bold]clear-graph complete[/green bold]  graph={target}  deleted≈{deleted}")
 
 
+@app.command("reset-database")
+def reset_database(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+) -> None:
+    """Reset the entire database: clear all graphs and fragment metadata.
+
+    Use this to force a complete re-ingest from scratch (all fragments will be
+    processed again, LLM called for each).
+
+    Deletes:
+    - All named graphs and triples
+    - All fragment metadata (hashes, content)
+    - All source metadata
+    """
+    from sqlalchemy import create_engine, text  # noqa: PLC0415
+
+    from riverbank.catalog.graph import clear_graph as _clear_graph  # noqa: PLC0415
+
+    if not yes:
+        typer.confirm(
+            "Delete ALL graphs, fragments, and source metadata? This cannot be undone.",
+            abort=True,
+        )
+
+    settings = get_settings()
+    engine = create_engine(settings.db.dsn)
+    try:
+        with engine.connect() as conn:
+            # Step 1: Clear all graphs
+            _clear_graph(conn, named_graph=None)
+            rprint("[dim]✓ Cleared all named graphs[/dim]")
+
+            # Step 2: Truncate fragment and source metadata
+            try:
+                conn.execute(text("TRUNCATE _riverbank.fragments CASCADE"))
+                conn.execute(text("TRUNCATE _riverbank.sources CASCADE"))
+                conn.commit()
+                rprint("[dim]✓ Cleared fragment and source metadata[/dim]")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Could not truncate metadata tables: %s", exc)
+                # Try individual deletes if TRUNCATE fails (e.g., no CASCADE support)
+                try:
+                    conn.execute(text("DELETE FROM _riverbank.fragments"))
+                    conn.execute(text("DELETE FROM _riverbank.sources"))
+                    conn.commit()
+                    rprint("[dim]✓ Cleared fragment and source metadata (via DELETE)[/dim]")
+                except Exception as exc2:  # noqa: BLE001
+                    logger.warning("Could not delete metadata: %s", exc2)
+    finally:
+        engine.dispose()
+
+    rprint("[green bold]reset-database complete[/green bold]")
+    rprint(
+        "[yellow]Next ingest will process all fragments and call LLM for each.[/yellow]"
+    )
+
+
 @app.command()
 def query(
     sparql: str = typer.Argument(..., help="SPARQL SELECT or ASK query string"),
