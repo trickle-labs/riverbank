@@ -598,3 +598,237 @@ class TestCLIV014Commands:
 
         command_names = [c.name for c in app.registered_commands]
         assert "run-owl-rl" in command_names
+
+
+# ===========================================================================
+# v0.15.0 — CorpusScanner adaptive pre-scan
+# ===========================================================================
+
+
+class TestCorpusScanResult:
+    def test_default_fields(self):
+        from riverbank.fragmenters.scanner import CorpusScanResult
+
+        r = CorpusScanResult()
+        assert r.num_files == 0
+        assert r.total_bytes == 0
+        assert r.mean_words == 0.0
+        assert r.median_words == 0.0
+        assert r.band == "medium"
+        assert r.tuned_params == {}
+
+    def test_total_kb(self):
+        from riverbank.fragmenters.scanner import CorpusScanResult
+
+        r = CorpusScanResult(total_bytes=2048)
+        assert r.total_kb == 2.0
+
+    def test_total_mb(self):
+        from riverbank.fragmenters.scanner import CorpusScanResult
+
+        r = CorpusScanResult(total_bytes=1024 * 1024)
+        assert r.total_mb == 1.0
+
+
+class TestSelectBand:
+    def test_small_band_few_files_short_docs(self):
+        from riverbank.fragmenters.scanner import _select_band
+
+        assert _select_band(5, 200) == "small"
+
+    def test_small_band_boundary(self):
+        from riverbank.fragmenters.scanner import _select_band
+
+        # Exactly at small threshold
+        assert _select_band(30, 400) == "small"
+
+    def test_medium_band(self):
+        from riverbank.fragmenters.scanner import _select_band
+
+        assert _select_band(50, 800) == "medium"
+
+    def test_large_band_many_files(self):
+        from riverbank.fragmenters.scanner import _select_band
+
+        assert _select_band(500, 2000) == "large"
+
+    def test_large_band_long_docs(self):
+        from riverbank.fragmenters.scanner import _select_band
+
+        assert _select_band(10, 2000) == "large"
+
+
+class TestPercentile:
+    def test_median_odd(self):
+        from riverbank.fragmenters.scanner import _percentile
+
+        assert _percentile([1, 2, 3, 4, 5], 50) == 3.0
+
+    def test_median_even(self):
+        from riverbank.fragmenters.scanner import _percentile
+
+        assert _percentile([1, 2, 3, 4], 50) == 2.5
+
+    def test_p90(self):
+        from riverbank.fragmenters.scanner import _percentile
+
+        vals = list(range(1, 11))  # 1..10
+        result = _percentile(vals, 90)
+        assert 9.0 <= result <= 10.0
+
+    def test_empty_list(self):
+        from riverbank.fragmenters.scanner import _percentile
+
+        assert _percentile([], 50) == 0.0
+
+    def test_single_element(self):
+        from riverbank.fragmenters.scanner import _percentile
+
+        assert _percentile([42], 50) == 42.0
+
+
+class TestCorpusScannerScan:
+    def test_scan_empty_list(self):
+        from riverbank.fragmenters.scanner import CorpusScanner
+
+        scanner = CorpusScanner()
+        result = scanner.scan([])
+        assert result.num_files == 0
+
+    def test_scan_real_files(self, tmp_path):
+        from riverbank.fragmenters.scanner import CorpusScanner
+
+        # Create 3 text files with known content
+        (tmp_path / "a.md").write_text("Hello world. This is a sentence. Another one here.")
+        (tmp_path / "b.md").write_text("One two three four five six seven eight nine ten.")
+        (tmp_path / "c.md").write_text("Short text.")
+
+        scanner = CorpusScanner()
+        result = scanner.scan([tmp_path / "a.md", tmp_path / "b.md", tmp_path / "c.md"])
+
+        assert result.num_files == 3
+        assert result.total_bytes > 0
+        assert result.mean_words > 0
+        assert result.median_words > 0
+        assert 0.0 <= result.vocabulary_richness <= 1.0
+        assert result.band in ("small", "medium", "large")
+
+    def test_scan_skips_unreadable_file(self, tmp_path):
+        from riverbank.fragmenters.scanner import CorpusScanner
+
+        good = tmp_path / "good.md"
+        good.write_text("Hello world. Some words here.")
+        bad = tmp_path / "missing.md"  # does not exist
+
+        scanner = CorpusScanner()
+        result = scanner.scan([good, bad])
+        assert result.num_files == 1
+
+    def test_scan_band_small_for_tiny_corpus(self, tmp_path):
+        from riverbank.fragmenters.scanner import CorpusScanner
+
+        # 3 tiny files → should resolve to "small" band
+        for i in range(3):
+            (tmp_path / f"f{i}.md").write_text("Short file. Just a few words.")
+        paths = list(tmp_path.glob("*.md"))
+        result = CorpusScanner().scan(paths)
+        assert result.band == "small"
+
+
+class TestCorpusScannerTune:
+    def test_tune_returns_all_required_keys(self):
+        from riverbank.fragmenters.scanner import CorpusScanner, CorpusScanResult
+
+        scanner = CorpusScanner()
+        result = CorpusScanResult(band="medium")
+        tuned = scanner.tune(result)
+        for key in (
+            "similarity_threshold",
+            "min_sentences_per_chunk",
+            "max_sentences_per_chunk",
+            "min_fragment_length",
+            "max_fragment_length",
+        ):
+            assert key in tuned, f"missing key: {key}"
+
+    def test_manual_override_wins(self):
+        from riverbank.fragmenters.scanner import CorpusScanner, CorpusScanResult
+
+        scanner = CorpusScanner()
+        result = CorpusScanResult(band="small")
+        tuned = scanner.tune(result, profile_cfg={"similarity_threshold": 0.99})
+        assert tuned["similarity_threshold"] == 0.99
+
+    def test_control_keys_excluded(self):
+        from riverbank.fragmenters.scanner import CorpusScanner, CorpusScanResult
+
+        scanner = CorpusScanner()
+        result = CorpusScanResult(band="medium")
+        tuned = scanner.tune(result, profile_cfg={"auto_tune": True, "model": "all-MiniLM-L6-v2"})
+        assert "auto_tune" not in tuned
+        assert "model" not in tuned
+
+    def test_tuned_params_recorded(self):
+        from riverbank.fragmenters.scanner import CorpusScanner, CorpusScanResult
+
+        scanner = CorpusScanner()
+        result = CorpusScanResult(band="large")
+        scanner.tune(result, profile_cfg={})
+        # All band keys should be recorded as tuned (no manual overrides)
+        assert "similarity_threshold" in result.tuned_params
+
+    def test_small_band_defaults_larger_chunks(self):
+        from riverbank.fragmenters.scanner import CorpusScanner, CorpusScanResult, _BAND_DEFAULTS
+
+        scanner = CorpusScanner()
+        small_result = CorpusScanResult(band="small")
+        large_result = CorpusScanResult(band="large")
+        tuned_small = scanner.tune(small_result)
+        tuned_large = scanner.tune(large_result)
+        # Small corpus should prefer larger fragments
+        assert tuned_small["max_sentences_per_chunk"] > tuned_large["max_sentences_per_chunk"]
+        assert tuned_small["min_fragment_length"] > tuned_large["min_fragment_length"]
+
+    def test_rich_vocabulary_lowers_threshold(self):
+        from riverbank.fragmenters.scanner import CorpusScanner, CorpusScanResult, _BAND_DEFAULTS
+
+        scanner = CorpusScanner()
+        # vocabulary_richness > 0.60 should lower the threshold by 0.03
+        base = _BAND_DEFAULTS["medium"]["similarity_threshold"]
+        result = CorpusScanResult(band="medium", vocabulary_richness=0.75)
+        tuned = scanner.tune(result)
+        assert abs(tuned["similarity_threshold"] - (base - 0.03)) < 1e-6
+
+    def test_poor_vocabulary_raises_threshold(self):
+        from riverbank.fragmenters.scanner import CorpusScanner, CorpusScanResult, _BAND_DEFAULTS
+
+        scanner = CorpusScanner()
+        base = _BAND_DEFAULTS["medium"]["similarity_threshold"]
+        result = CorpusScanResult(band="medium", vocabulary_richness=0.10)
+        tuned = scanner.tune(result)
+        assert abs(tuned["similarity_threshold"] - (base + 0.03)) < 1e-6
+
+
+class TestCompilerProfileFragmenterField:
+    def test_fragmenter_default_is_heading(self):
+        from riverbank.pipeline import CompilerProfile
+
+        p = CompilerProfile(name="test")
+        assert p.fragmenter == "heading"
+
+    def test_fragmenter_can_be_set_to_semantic(self):
+        from riverbank.pipeline import CompilerProfile
+
+        p = CompilerProfile(name="test", fragmenter="semantic")
+        assert p.fragmenter == "semantic"
+
+    def test_from_yaml_loads_fragmenter(self, tmp_path):
+        import yaml
+        from riverbank.pipeline import CompilerProfile
+
+        cfg = {"name": "yaml-test", "fragmenter": "semantic", "semantic_chunking": {"auto_tune": True}}
+        path = tmp_path / "profile.yaml"
+        path.write_text(yaml.safe_dump(cfg))
+        p = CompilerProfile.from_yaml(path)
+        assert p.fragmenter == "semantic"
+        assert p.semantic_chunking.get("auto_tune") is True

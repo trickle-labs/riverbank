@@ -82,7 +82,10 @@ class CompilerProfile:
     knowledge_prefix: dict = field(default_factory=dict)
     # v0.14.0: Constrained decoding — force JSON schema conformance for Ollama backends
     constrained_decoding: bool = False
+    # v0.14.0: Fragmenter selection — "heading" (default) or "semantic"
+    fragmenter: str = "heading"
     # v0.14.0: Semantic chunking — embedding-based boundary detection
+    # v0.15.0: Set auto_tune: true to derive parameters from a corpus pre-scan
     semantic_chunking: dict = field(default_factory=dict)
     # v0.14.0: SPARQL CONSTRUCT inference rules (list of SPARQL CONSTRUCT query strings)
     construct_rules: list = field(default_factory=list)
@@ -247,7 +250,10 @@ class IngestPipeline:
         overlap_sentences: int = getattr(profile, "extraction_strategy", {}).get(
             "overlap_sentences", 0
         )
-        fragmenter = HeadingFragmenter(overlap_sentences=overlap_sentences)
+
+        # v0.14.0 / v0.15.0: select fragmenter from profile; run adaptive pre-scan
+        # when semantic chunking is enabled with auto_tune: true.
+        fragmenter = self._load_fragmenter(profile, corpus_path, overlap_sentences, progress_callback)
         gate = IngestGate()
         gate_config = _gate_config_from_profile(profile)
         extractor = self._load_extractor(profile)
@@ -996,6 +1002,107 @@ class IngestPipeline:
         from riverbank.extractors.noop import NoOpExtractor  # noqa: PLC0415
 
         return NoOpExtractor()
+
+    def _load_fragmenter(
+        self,
+        profile: CompilerProfile,
+        corpus_path: str,
+        overlap_sentences: int,
+        progress_callback: Callable[[str, dict], None] | None,
+    ) -> Any:
+        """Load the fragmenter declared in *profile.fragmenter*.
+
+        For the ``semantic`` fragmenter, also runs the corpus pre-scan when
+        ``semantic_chunking.auto_tune`` is ``true`` and applies adaptive
+        parameter tuning before constructing the fragmenter.
+
+        Falls back to ``HeadingFragmenter`` for unknown names.
+        """
+        from riverbank.fragmenters.heading import HeadingFragmenter  # noqa: PLC0415
+
+        fragmenter_name: str = getattr(profile, "fragmenter", "heading")
+
+        if fragmenter_name != "semantic":
+            return HeadingFragmenter(overlap_sentences=overlap_sentences)
+
+        # --- Semantic fragmenter path ---
+        cfg: dict = dict(getattr(profile, "semantic_chunking", {}) or {})
+        auto_tune: bool = bool(cfg.get("auto_tune", False))
+
+        if auto_tune:
+            cfg = self._auto_tune_semantic(corpus_path, cfg, profile, progress_callback)
+
+        try:
+            from riverbank.fragmenters.semantic import SemanticFragmenter  # noqa: PLC0415
+        except ImportError:
+            logger.warning(
+                "riverbank.fragmenters.semantic not available — using HeadingFragmenter"
+            )
+            return HeadingFragmenter(overlap_sentences=overlap_sentences)
+
+        return SemanticFragmenter(
+            model_name=cfg.get("model", "all-MiniLM-L6-v2"),
+            similarity_threshold=float(cfg.get("similarity_threshold", 0.75)),
+            min_sentences_per_chunk=int(cfg.get("min_sentences_per_chunk", 2)),
+            max_sentences_per_chunk=int(cfg.get("max_sentences_per_chunk", 20)),
+        )
+
+    def _auto_tune_semantic(
+        self,
+        corpus_path: str,
+        cfg: dict,
+        profile: CompilerProfile,
+        progress_callback: Callable[[str, dict], None] | None,
+    ) -> dict:
+        """Run a corpus pre-scan and merge adaptive defaults into *cfg*.
+
+        Manually-specified keys in *cfg* always win.  Returns the merged cfg.
+        """
+        from riverbank.connectors.fs import FilesystemConnector  # noqa: PLC0415
+        from riverbank.fragmenters.scanner import CorpusScanner  # noqa: PLC0415
+
+        p = Path(corpus_path)
+        if p.is_dir():
+            connector = FilesystemConnector()
+            source_paths = [
+                rec.path
+                for rec in connector.discover({"path": str(p)})
+                if rec.path is not None
+            ]
+        else:
+            source_paths = [p]
+
+        if progress_callback:
+            progress_callback("corpus_scan_start", {"n_files": len(source_paths)})
+
+        scanner = CorpusScanner()
+        scan_result = scanner.scan(source_paths)
+        # Store on the pipeline for external introspection
+        self._last_scan_result = scan_result
+
+        tuned_cfg = scanner.tune(scan_result, profile_cfg=cfg)
+
+        if progress_callback:
+            progress_callback(
+                "corpus_scan_done",
+                {
+                    "num_files": scan_result.num_files,
+                    "median_words": scan_result.median_words,
+                    "band": scan_result.band,
+                    "tuned_params": scan_result.tuned_params,
+                },
+            )
+
+        logger.info(
+            "Auto-tune: band=%s, threshold=%.2f, sentences=%d–%d, length=%d–%d",
+            scan_result.band,
+            tuned_cfg.get("similarity_threshold"),
+            tuned_cfg.get("min_sentences_per_chunk"),
+            tuned_cfg.get("max_sentences_per_chunk"),
+            tuned_cfg.get("min_fragment_length", 0),
+            tuned_cfg.get("max_fragment_length", 0),
+        )
+        return tuned_cfg
 
 
 # ---------------------------------------------------------------------------

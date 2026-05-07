@@ -47,17 +47,19 @@ prompt_text: |
   Only extract claims directly supported by the text.
   Do NOT fabricate evidence.
 
-# v0.14.0: Semantic chunking configuration — tuned for small corpus
-# Produces fragments ~250–800 words, giving LLM enough context for meaningful extraction
+# v0.14.0/v0.15.0: Semantic chunking configuration
+# auto_tune: true — performs a corpus pre-scan and selects optimal parameters
+# automatically.  Any key you add below will override the auto-tuned value.
+# Comment out auto_tune (or set to false) to use only the explicit values.
 semantic_chunking:
-  # Model for embedding sentences (fast, multilingual)
+  auto_tune: true
+  # Model for embedding sentences (fast, lightweight — NOT the generative model)
   model: "all-MiniLM-L6-v2"
-  # Cosine similarity threshold for chunk boundaries (0.75 = moderate, 0.70 = aggressive)
-  # Higher threshold = fewer splits = larger chunks (better context for small corpus)
-  similarity_threshold: 0.75
-  # Minimum/maximum sentences per chunk (enforces coherent semantic units)
-  min_sentences_per_chunk: 5
-  max_sentences_per_chunk: 12
+  # The keys below are only used when auto_tune: false.
+  # With auto_tune: true these act as manual overrides of the computed defaults.
+  # similarity_threshold: 0.75
+  # min_sentences_per_chunk: 5
+  # max_sentences_per_chunk: 12
 
 editorial_policy:
   # Minimum fragment size — ensures ~250 word baseline for context
