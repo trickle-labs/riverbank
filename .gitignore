@@ -41,3 +41,4 @@ htmlcov/
 
 # Internal research notes — not for distribution
 plans/ontology-pipeline-ideas.md
+.venv312/
