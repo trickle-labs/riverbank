@@ -79,6 +79,59 @@
 | v0.14.0 | Structural improvements — constrained decoding, semantic chunking, SHACL shape validation, SPARQL CONSTRUCT rules, OWL 2 RL inference | **Done** | Large |
 | v1.0.0 | Stable — full API stability guarantee, signed artifacts, Helm chart stability, SLOs in CI | Planned | Medium |
 
+### Wikidata Evaluation (v0.15.x)
+
+| Version | Description | Status | Size |
+|---|---|---|---|
+| v0.15.0 | Wikidata evaluation framework — `riverbank evaluate-wikidata` command, 1,000-article benchmark dataset (7 domains), property alignment table, entity resolution pipeline, calibration curves, per-domain and per-property breakdowns | Planned | Large |
+| v0.15.1 | Extraction improvement loop — per-property recall gap analysis, extraction prompt tuning from failure modes, 200+ novel-discovery annotations, published evaluation methodology | Planned | Medium |
+
+---
+
+### v0.15.0 — Wikidata Evaluation Framework
+
+Goal: establish an externally-validated, reproducible benchmark for riverbank's
+extraction quality by comparing compiled triples against Wikidata's 1.65 billion
+human-curated statements sourced from the same Wikipedia articles.
+
+- [ ] `riverbank evaluate-wikidata --dataset <path> --profile <name>` command
+- [ ] 1,000-article benchmark dataset stratified across 7 domains: biographies
+  (living + historical), organizations (commercial + non-profit), geographic
+  entities, creative works, scientific concepts, and events
+- [ ] Wikipedia → Markdown download pipeline via MediaWiki API
+- [ ] Wikidata SPARQL ground-truth fetcher with statement filtering (excludes
+  external identifiers, media, interwiki links)
+- [ ] Property alignment table mapping 50+ Wikidata P-ids to riverbank predicate
+  patterns (P31 instance-of, P106 occupation, P569 birth date, P159 HQ, etc.)
+- [ ] Entity resolution: sitelink lookup → label matching → context disambiguation
+- [ ] Scoring pipeline: precision, recall, F1, confidence calibration (Pearson ρ),
+  novel discovery rate, false positive rate
+- [ ] Per-domain and per-property breakdowns in JSON report
+- [ ] Calibration curve output (confidence bucket vs. observed accuracy)
+- [ ] Local run only; results stored in `eval/results/`
+
+**Exit criterion:** first full evaluation report produced over 1,000 articles;
+precision ≥ 0.85, recall ≥ 0.60, F1 ≥ 0.70; calibration ρ ≥ 0.80.
+
+---
+
+### v0.15.1 — Extraction Improvement Loop
+
+Goal: close the feedback loop from the Wikidata evaluation back into the
+extraction pipeline — identify systematic failure modes and fix them.
+
+- [ ] Per-property recall gap analysis: identify Wikidata properties where
+  recall falls below 0.50, generate targeted extraction examples
+- [ ] Extraction prompt tuning driven by false-positive and false-negative patterns
+  identified in v0.15.0 evaluation runs
+- [ ] 200+ manual annotations of unmatched riverbank triples to validate the novel
+  discovery rate (triples correct but absent from Wikidata)
+- [ ] Published evaluation methodology and benchmark results in docs
+- [ ] Evaluation profile YAML (`wikidata-eval-v1`) committed to `examples/profiles/`
+
+**Exit criterion:** second evaluation run shows measurable improvement over
+v0.15.0 baseline on at least two of: precision, recall, novel discovery rate.
+
 ---
 
 ## External dependency risk
