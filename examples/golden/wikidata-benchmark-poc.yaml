@@ -1,0 +1,279 @@
+# 50-article PoC benchmark dataset for Wikidata evaluation (Phase 1)
+#
+# Stratified across 5 domains (10 articles each).
+# CI uses --sample 10 to keep under 10 minutes.
+# Full 1,000-article dataset: eval/wikidata-benchmark-1k.yaml
+#
+# Usage:
+#   riverbank evaluate-wikidata --dataset examples/golden/wikidata-benchmark-poc.yaml \
+#       --profile wikidata-eval-v1 --output eval/results/poc-run.json --sample 10
+
+version: 1
+dataset_name: "wikidata-benchmark-poc"
+description: "50-article PoC benchmark across 5 domains"
+articles:
+
+  # -----------------------------------------------------------------------
+  # Biography — living (10 articles)
+  # -----------------------------------------------------------------------
+  - title: "Elon Musk"
+    qid: "Q317521"
+    domain: "biography_living"
+    reason: "Well-structured infobox; ~50 Wikidata statements"
+
+  - title: "Serena Williams"
+    qid: "Q34782"
+    domain: "biography_living"
+    reason: "Clear biographical facts; strong property coverage"
+
+  - title: "Barack Obama"
+    qid: "Q76"
+    domain: "biography_living"
+    reason: "Extensive Wikipedia article; diverse property types"
+
+  - title: "Angela Merkel"
+    qid: "Q567"
+    domain: "biography_living"
+    reason: "Political career with temporal qualifiers"
+
+  - title: "Jeff Bezos"
+    qid: "Q312893"
+    domain: "biography_living"
+    reason: "Business leader; org relationships"
+
+  - title: "Malala Yousafzai"
+    qid: "Q452354"
+    domain: "biography_living"
+    reason: "Award-heavy; education coverage"
+
+  - title: "Tim Berners-Lee"
+    qid: "Q80"
+    domain: "biography_living"
+    reason: "Technical inventor; work relationships"
+
+  - title: "Kamala Harris"
+    qid: "Q11673"
+    domain: "biography_living"
+    reason: "Political positions with dates"
+
+  - title: "Roger Federer"
+    qid: "Q1426"
+    domain: "biography_living"
+    reason: "Sports achievements; award coverage"
+
+  - title: "Jacinda Ardern"
+    qid: "Q320266"
+    domain: "biography_living"
+    reason: "Recent political career; position held"
+
+  # -----------------------------------------------------------------------
+  # Biography — historical (10 articles)
+  # -----------------------------------------------------------------------
+  - title: "Albert Einstein"
+    qid: "Q937"
+    domain: "biography_historical"
+    reason: "Canonical benchmark; dense Wikidata coverage"
+
+  - title: "Marie Curie"
+    qid: "Q7186"
+    domain: "biography_historical"
+    reason: "Nobel prizes; laboratory; nationality"
+
+  - title: "Leonardo da Vinci"
+    qid: "Q762"
+    domain: "biography_historical"
+    reason: "Works, techniques, patrons"
+
+  - title: "Nikola Tesla"
+    qid: "Q9036"
+    domain: "biography_historical"
+    reason: "Inventions and employer relationships"
+
+  - title: "Ada Lovelace"
+    qid: "Q7259"
+    domain: "biography_historical"
+    reason: "Early computing; family relationships"
+
+  - title: "Charles Darwin"
+    qid: "Q1035"
+    domain: "biography_historical"
+    reason: "Scientific concepts; publications"
+
+  - title: "Winston Churchill"
+    qid: "Q8016"
+    domain: "biography_historical"
+    reason: "Political positions; awards"
+
+  - title: "Frida Kahlo"
+    qid: "Q5588"
+    domain: "biography_historical"
+    reason: "Art works; personal relationships"
+
+  - title: "Mahatma Gandhi"
+    qid: "Q1001"
+    domain: "biography_historical"
+    reason: "Activism; political career"
+
+  - title: "Simone de Beauvoir"
+    qid: "Q7197"
+    domain: "biography_historical"
+    reason: "Philosophy; literary works"
+
+  # -----------------------------------------------------------------------
+  # Organization (10 articles)
+  # -----------------------------------------------------------------------
+  - title: "Apple Inc."
+    qid: "Q312"
+    domain: "organization"
+    reason: "Large company; HQ, founders, products"
+
+  - title: "Google"
+    qid: "Q95"
+    domain: "organization"
+    reason: "Tech company; subsidiary relationships"
+
+  - title: "United Nations"
+    qid: "Q1065"
+    domain: "organization"
+    reason: "International org; member states"
+
+  - title: "Red Cross"
+    qid: "Q7178"
+    domain: "organization"
+    reason: "Non-profit; founding date; HQ"
+
+  - title: "Toyota"
+    qid: "Q53268"
+    domain: "organization"
+    reason: "Automotive; HQ; subsidiaries"
+
+  - title: "NASA"
+    qid: "Q23548"
+    domain: "organization"
+    reason: "Government agency; founded by; location"
+
+  - title: "CERN"
+    qid: "Q48268"
+    domain: "organization"
+    reason: "Scientific org; location; notable work"
+
+  - title: "Amnesty International"
+    qid: "Q46737"
+    domain: "organization"
+    reason: "Human rights; founding; awards"
+
+  - title: "World Health Organization"
+    qid: "Q7817"
+    domain: "organization"
+    reason: "UN agency; HQ; leadership"
+
+  - title: "Tesla, Inc."
+    qid: "Q478214"
+    domain: "organization"
+    reason: "Founding; products; leadership changes"
+
+  # -----------------------------------------------------------------------
+  # Geographic entity (10 articles)
+  # -----------------------------------------------------------------------
+  - title: "Paris"
+    qid: "Q90"
+    domain: "geographic"
+    reason: "Capital city; population; coordinates"
+
+  - title: "Amazon River"
+    qid: "Q3783"
+    domain: "geographic"
+    reason: "River; length; country; coordinates"
+
+  - title: "Mount Everest"
+    qid: "Q513"
+    domain: "geographic"
+    reason: "Mountain; elevation; location"
+
+  - title: "Sahara"
+    qid: "Q188447"
+    domain: "geographic"
+    reason: "Desert; area; countries"
+
+  - title: "Tokyo"
+    qid: "Q1490"
+    domain: "geographic"
+    reason: "Capital; population; timezone"
+
+  - title: "Antarctica"
+    qid: "Q51"
+    domain: "geographic"
+    reason: "Continent; area; no permanent population"
+
+  - title: "Nile"
+    qid: "Q3392"
+    domain: "geographic"
+    reason: "River; length; countries"
+
+  - title: "Great Barrier Reef"
+    qid: "Q42196"
+    domain: "geographic"
+    reason: "UNESCO site; coordinates; country"
+
+  - title: "Iceland"
+    qid: "Q189"
+    domain: "geographic"
+    reason: "Country; capital; population"
+
+  - title: "Mariana Trench"
+    qid: "Q82367"
+    domain: "geographic"
+    reason: "Geographical feature; depth; coordinates"
+
+  # -----------------------------------------------------------------------
+  # Creative works (10 articles)
+  # -----------------------------------------------------------------------
+  - title: "1984 (novel)"
+    qid: "Q208460"
+    domain: "creative_works"
+    reason: "Novel; author; publication date; genre"
+
+  - title: "The Godfather (film)"
+    qid: "Q47703"
+    domain: "creative_works"
+    reason: "Film; director; cast; awards"
+
+  - title: "The Beatles"
+    qid: "Q1299"
+    domain: "creative_works"
+    reason: "Music group; members; albums"
+
+  - title: "Mona Lisa"
+    qid: "Q12418"
+    domain: "creative_works"
+    reason: "Painting; artist; date; location"
+
+  - title: "Harry Potter and the Philosopher's Stone"
+    qid: "Q43361"
+    domain: "creative_works"
+    reason: "Novel; author; publisher; publication date"
+
+  - title: "Beethoven's 9th Symphony"
+    qid: "Q11989"
+    domain: "creative_works"
+    reason: "Composition; composer; premiere date"
+
+  - title: "Guernica (painting)"
+    qid: "Q18979691"
+    domain: "creative_works"
+    reason: "Painting; artist; date; location"
+
+  - title: "The Wire"
+    qid: "Q15681"
+    domain: "creative_works"
+    reason: "TV series; creator; broadcaster; seasons"
+
+  - title: "Don Quixote"
+    qid: "Q131149"
+    domain: "creative_works"
+    reason: "Novel; author; language; publication"
+
+  - title: "Hamlet"
+    qid: "Q41567"
+    domain: "creative_works"
+    reason: "Play; author; setting; genre"

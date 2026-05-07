@@ -1,0 +1,54 @@
+# Wikidata evaluation profile for riverbank
+#
+# Use this profile when running:
+#   riverbank evaluate-wikidata --article "Marie Curie" --profile wikidata-eval-v1
+#   riverbank evaluate-wikidata --dataset eval/wikidata-benchmark-1k.yaml --profile wikidata-eval-v1
+#
+# This profile configures the extractor for maximum precision and recall on
+# encyclopaedic Wikipedia content, matching the types of facts Wikidata tracks.
+
+name: "wikidata-eval-v1"
+description: "Evaluation profile for benchmarking riverbank against Wikidata ground truth"
+
+run_mode_sequence: ["full"]
+
+# Parser: plain Markdown from Wikipedia download pipeline
+parser: "markdown"
+
+# Fragment at headings to match Wikipedia's natural section structure
+fragmenter: "heading"
+fragmenter_config:
+  min_heading_depth: 1
+  max_heading_depth: 4
+
+# Editorial policy gate — relaxed for evaluation (Wikipedia text is high quality)
+ingest_gate:
+  min_fragment_length: 50
+  max_fragment_length: 8000
+  check_language: true
+
+# LLM extraction — permissive mode for maximum recall
+extraction_strategy:
+  mode: "permissive"
+  confidence_routing:
+    # Low-confidence triples go to <tentative> graph for post-evaluation analysis
+    tentative_threshold: 0.40
+    trusted_threshold: 0.70
+  safety_cap: 100  # Max triples per fragment
+
+# Preprocessing: enable for long Wikipedia articles
+preprocessing:
+  enabled: true
+  max_tokens_for_preprocessing: 4000
+
+# Verification: disabled for speed; enable with --verify flag
+verification:
+  enabled: false
+
+# Evaluation-specific configuration
+evaluation:
+  wikidata_benchmark: true
+  # Sample rate for manual novel-discovery annotation (Phase 2)
+  novel_discovery_sampling_rate: 0.10
+  # Minimum confidence to include a triple in scoring
+  min_confidence_for_scoring: 0.30

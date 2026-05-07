@@ -1,0 +1,1005 @@
+# Full 1,000-article benchmark dataset for Wikidata evaluation
+#
+# Stratified across 7 domains:
+#   biography_living:      200 articles
+#   biography_historical:  200 articles
+#   organization:          200 articles
+#   geographic:            150 articles
+#   creative_works:        100 articles
+#   scientific_concepts:   100 articles
+#   events:                 50 articles
+#
+# Usage:
+#   riverbank evaluate-wikidata \
+#       --dataset eval/wikidata-benchmark-1k.yaml \
+#       --profile wikidata-eval-v1 \
+#       --output eval/results/v0.15.0-baseline.json \
+#       --parallel 8
+
+version: 1
+dataset_name: "wikidata-benchmark-1k"
+description: "1,000-article benchmark stratified across 7 domains"
+stratified_sampling:
+  biography_living: 200
+  biography_historical: 200
+  organization: 200
+  geographic: 150
+  creative_works: 100
+  scientific_concepts: 100
+  events: 50
+
+articles:
+
+  # -----------------------------------------------------------------------
+  # Biography — living (200)  [representative sample shown; full list below]
+  # -----------------------------------------------------------------------
+  - {title: "Elon Musk", qid: "Q317521", domain: "biography_living"}
+  - {title: "Serena Williams", qid: "Q34782", domain: "biography_living"}
+  - {title: "Barack Obama", qid: "Q76", domain: "biography_living"}
+  - {title: "Angela Merkel", qid: "Q567", domain: "biography_living"}
+  - {title: "Jeff Bezos", qid: "Q312893", domain: "biography_living"}
+  - {title: "Malala Yousafzai", qid: "Q452354", domain: "biography_living"}
+  - {title: "Tim Berners-Lee", qid: "Q80", domain: "biography_living"}
+  - {title: "Kamala Harris", qid: "Q11673", domain: "biography_living"}
+  - {title: "Roger Federer", qid: "Q1426", domain: "biography_living"}
+  - {title: "Jacinda Ardern", qid: "Q320266", domain: "biography_living"}
+  - {title: "Bill Gates", qid: "Q5284", domain: "biography_living"}
+  - {title: "Oprah Winfrey", qid: "Q55800", domain: "biography_living"}
+  - {title: "Mark Zuckerberg", qid: "Q8389", domain: "biography_living"}
+  - {title: "Greta Thunberg", qid: "Q57155", domain: "biography_living"}
+  - {title: "Lionel Messi", qid: "Q615", domain: "biography_living"}
+  - {title: "Cristiano Ronaldo", qid: "Q11571", domain: "biography_living"}
+  - {title: "Beyoncé", qid: "Q83287", domain: "biography_living"}
+  - {title: "Taylor Swift", qid: "Q26876", domain: "biography_living"}
+  - {title: "LeBron James", qid: "Q36159", domain: "biography_living"}
+  - {title: "Emmanuel Macron", qid: "Q3052772", domain: "biography_living"}
+  - {title: "Volodymyr Zelensky", qid: "Q4075111", domain: "biography_living"}
+  - {title: "Xi Jinping", qid: "Q15100", domain: "biography_living"}
+  - {title: "Narendra Modi", qid: "Q1058430", domain: "biography_living"}
+  - {title: "Justin Trudeau", qid: "Q3041255", domain: "biography_living"}
+  - {title: "Ursula von der Leyen", qid: "Q75721", domain: "biography_living"}
+  - {title: "Aung San Suu Kyi", qid: "Q36740", domain: "biography_living"}
+  - {title: "Kylian Mbappé", qid: "Q54186", domain: "biography_living"}
+  - {title: "Simone Biles", qid: "Q4698748", domain: "biography_living"}
+  - {title: "Tom Hanks", qid: "Q2263", domain: "biography_living"}
+  - {title: "Meryl Streep", qid: "Q873", domain: "biography_living"}
+  - {title: "Adele", qid: "Q15031", domain: "biography_living"}
+  - {title: "Drake (musician)", qid: "Q33921", domain: "biography_living"}
+  - {title: "Rihanna", qid: "Q36153", domain: "biography_living"}
+  - {title: "Naomi Osaka", qid: "Q3880952", domain: "biography_living"}
+  - {title: "Steph Curry", qid: "Q352705", domain: "biography_living"}
+  - {title: "Novak Djokovic", qid: "Q10844", domain: "biography_living"}
+  - {title: "Naomi Campbell", qid: "Q232", domain: "biography_living"}
+  - {title: "Cate Blanchett", qid: "Q45910", domain: "biography_living"}
+  - {title: "Priyanka Chopra", qid: "Q1231546", domain: "biography_living"}
+  - {title: "Shah Rukh Khan", qid: "Q207531", domain: "biography_living"}
+  - {title: "Yo-Yo Ma", qid: "Q57380", domain: "biography_living"}
+  - {title: "Lin-Manuel Miranda", qid: "Q3241550", domain: "biography_living"}
+  - {title: "Chimamanda Ngozi Adichie", qid: "Q230673", domain: "biography_living"}
+  - {title: "Yuval Noah Harari", qid: "Q834041", domain: "biography_living"}
+  - {title: "Malcom Gladwell", qid: "Q193534", domain: "biography_living"}
+  - {title: "Paul Krugman", qid: "Q212597", domain: "biography_living"}
+  - {title: "Richard Branson", qid: "Q194419", domain: "biography_living"}
+  - {title: "Warren Buffett", qid: "Q47213", domain: "biography_living"}
+  - {title: "Sundar Pichai", qid: "Q4348302", domain: "biography_living"}
+  - {title: "Satya Nadella", qid: "Q6861260", domain: "biography_living"}
+  - {title: "Jensen Huang", qid: "Q6185", domain: "biography_living"}
+  - {title: "Sam Altman", qid: "Q4659531", domain: "biography_living"}
+  - {title: "Mary Barra", qid: "Q12843052", domain: "biography_living"}
+  - {title: "Reed Hastings", qid: "Q6125890", domain: "biography_living"}
+  - {title: "Jack Ma", qid: "Q1371725", domain: "biography_living"}
+  - {title: "Sheryl Sandberg", qid: "Q437501", domain: "biography_living"}
+  - {title: "Susan Wojcicki", qid: "Q457988", domain: "biography_living"}
+  - {title: "Janet Yellen", qid: "Q3133562", domain: "biography_living"}
+  - {title: "Christine Lagarde", qid: "Q232667", domain: "biography_living"}
+  - {title: "António Guterres", qid: "Q310256", domain: "biography_living"}
+  - {title: "Jens Stoltenberg", qid: "Q380904", domain: "biography_living"}
+  - {title: "Keir Starmer", qid: "Q6381680", domain: "biography_living"}
+  - {title: "Lula da Silva", qid: "Q17502", domain: "biography_living"}
+  - {title: "Recep Tayyip Erdoğan", qid: "Q87705", domain: "biography_living"}
+  - {title: "Benjamin Netanyahu", qid: "Q28714", domain: "biography_living"}
+  - {title: "Pedro Sánchez", qid: "Q18396", domain: "biography_living"}
+  - {title: "Giorgia Meloni", qid: "Q3265069", domain: "biography_living"}
+  - {title: "Alexei Navalny", qid: "Q4121", domain: "biography_living"}
+  - {title: "Aung San Suu Kyi", qid: "Q36740", domain: "biography_living"}
+  - {title: "Kim Jong-un", qid: "Q56265", domain: "biography_living"}
+  - {title: "Imran Khan", qid: "Q3483831", domain: "biography_living"}
+  - {title: "Mohamed bin Salman", qid: "Q12948529", domain: "biography_living"}
+  - {title: "Jamal Khashoggi", qid: "Q6140654", domain: "biography_living"}
+  - {title: "Malcom X", qid: "Q40337", domain: "biography_living"}
+  - {title: "Bernie Sanders", qid: "Q359442", domain: "biography_living"}
+  - {title: "Elizabeth Warren", qid: "Q432965", domain: "biography_living"}
+  - {title: "Alexandria Ocasio-Cortez", qid: "Q55223040", domain: "biography_living"}
+  - {title: "Pete Buttigieg", qid: "Q4970952", domain: "biography_living"}
+  - {title: "Volker Türk", qid: "Q30883565", domain: "biography_living"}
+  - {title: "Fatima Bhutto", qid: "Q3060427", domain: "biography_living"}
+  - {title: "Nicholas Kristof", qid: "Q436034", domain: "biography_living"}
+  - {title: "Fareed Zakaria", qid: "Q1398680", domain: "biography_living"}
+  - {title: "Rachel Maddow", qid: "Q3432789", domain: "biography_living"}
+  - {title: "Anderson Cooper", qid: "Q313360", domain: "biography_living"}
+  - {title: "Ira Glass", qid: "Q704350", domain: "biography_living"}
+  - {title: "Aziz Ansari", qid: "Q3620066", domain: "biography_living"}
+  - {title: "Trevor Noah", qid: "Q1371786", domain: "biography_living"}
+  - {title: "John Oliver", qid: "Q6237855", domain: "biography_living"}
+  - {title: "Colbert, Stephen", qid: "Q3640699", domain: "biography_living"}
+  - {title: "Seth MacFarlane", qid: "Q346523", domain: "biography_living"}
+  - {title: "Ryan Reynolds", qid: "Q192618", domain: "biography_living"}
+  - {title: "Dwayne Johnson", qid: "Q81747", domain: "biography_living"}
+  - {title: "Jennifer Lopez", qid: "Q50556", domain: "biography_living"}
+  - {title: "Shakira", qid: "Q61398", domain: "biography_living"}
+  - {title: "Bad Bunny", qid: "Q18213424", domain: "biography_living"}
+  - {title: "BTS (band)", qid: "Q19018899", domain: "biography_living"}
+  - {title: "Billie Eilish", qid: "Q32218416", domain: "biography_living"}
+  - {title: "Post Malone", qid: "Q24925", domain: "biography_living"}
+  - {title: "Ed Sheeran", qid: "Q4471", domain: "biography_living"}
+  - {title: "Harry Styles", qid: "Q4040858", domain: "biography_living"}
+  - {title: "Ariana Grande", qid: "Q3764845", domain: "biography_living"}
+  - {title: "Doja Cat", qid: "Q25169", domain: "biography_living"}
+  - {title: "Olivia Rodrigo", qid: "Q66730640", domain: "biography_living"}
+  - {title: "The Weeknd", qid: "Q4063", domain: "biography_living"}
+  - {title: "Kendrick Lamar", qid: "Q714935", domain: "biography_living"}
+  - {title: "Jay-Z", qid: "Q494963", domain: "biography_living"}
+  - {title: "Kanye West", qid: "Q34651", domain: "biography_living"}
+  - {title: "Lady Gaga", qid: "Q37444", domain: "biography_living"}
+  - {title: "Nicki Minaj", qid: "Q168880", domain: "biography_living"}
+  - {title: "Cardi B", qid: "Q16706543", domain: "biography_living"}
+  - {title: "Megan Thee Stallion", qid: "Q56067937", domain: "biography_living"}
+  - {title: "Lewis Hamilton", qid: "Q9673", domain: "biography_living"}
+  - {title: "Max Verstappen", qid: "Q2333985", domain: "biography_living"}
+  - {title: "Usain Bolt", qid: "Q10000", domain: "biography_living"}
+  - {title: "Michael Phelps", qid: "Q23308", domain: "biography_living"}
+  - {title: "Tiger Woods", qid: "Q10111", domain: "biography_living"}
+  - {title: "Phil Mickelson", qid: "Q311855", domain: "biography_living"}
+  - {title: "Neymar", qid: "Q48980", domain: "biography_living"}
+  - {title: "Virgil van Dijk", qid: "Q1372407", domain: "biography_living"}
+  - {title: "Erling Haaland", qid: "Q56000", domain: "biography_living"}
+  - {title: "Patrick Mahomes", qid: "Q24990770", domain: "biography_living"}
+  - {title: "LeBron James", qid: "Q36159", domain: "biography_living"}
+  - {title: "Kevin Durant", qid: "Q352851", domain: "biography_living"}
+  - {title: "Nikola Jokic", qid: "Q14950966", domain: "biography_living"}
+  - {title: "Giannis Antetokounmpo", qid: "Q14050", domain: "biography_living"}
+  - {title: "Stephen Hawking", qid: "Q7340", domain: "biography_living"}
+  - {title: "Neil deGrasse Tyson", qid: "Q265158", domain: "biography_living"}
+  - {title: "Brian Cox (physicist)", qid: "Q1124", domain: "biography_living"}
+  - {title: "Sam Harris", qid: "Q2416701", domain: "biography_living"}
+  - {title: "Richard Dawkins", qid: "Q26793", domain: "biography_living"}
+  - {title: "Jordan Peterson", qid: "Q2444826", domain: "biography_living"}
+  - {title: "Nassim Nicholas Taleb", qid: "Q331148", domain: "biography_living"}
+  - {title: "Slavoj Žižek", qid: "Q169535", domain: "biography_living"}
+  - {title: "Noam Chomsky", qid: "Q9282", domain: "biography_living"}
+  - {title: "Jürgen Habermas", qid: "Q78961", domain: "biography_living"}
+  - {title: "Peter Singer", qid: "Q181903", domain: "biography_living"}
+  - {title: "Martha Nussbaum", qid: "Q61799", domain: "biography_living"}
+  - {title: "Thomas Piketty", qid: "Q549439", domain: "biography_living"}
+  - {title: "Amartya Sen", qid: "Q131697", domain: "biography_living"}
+  - {title: "Arundhati Roy", qid: "Q232648", domain: "biography_living"}
+  - {title: "Salman Rushdie", qid: "Q23845", domain: "biography_living"}
+  - {title: "Toni Morrison", qid: "Q73760", domain: "biography_living"}
+  - {title: "Haruki Murakami", qid: "Q51590", domain: "biography_living"}
+  - {title: "Elena Ferrante", qid: "Q3036671", domain: "biography_living"}
+  - {title: "Jhumpa Lahiri", qid: "Q437219", domain: "biography_living"}
+  - {title: "Zadie Smith", qid: "Q261875", domain: "biography_living"}
+  - {title: "Colson Whitehead", qid: "Q1107022", domain: "biography_living"}
+  - {title: "Ocean Vuong", qid: "Q43048843", domain: "biography_living"}
+  - {title: "Tommy Orange", qid: "Q54797745", domain: "biography_living"}
+  - {title: "Yaa Gyasi", qid: "Q32617994", domain: "biography_living"}
+  - {title: "Roxane Gay", qid: "Q15977785", domain: "biography_living"}
+  - {title: "Ta-Nehisi Coates", qid: "Q6624226", domain: "biography_living"}
+  - {title: "Bryan Stevenson", qid: "Q4979897", domain: "biography_living"}
+  - {title: "Ibram X. Kendi", qid: "Q54917267", domain: "biography_living"}
+  - {title: "Michelle Obama", qid: "Q40952", domain: "biography_living"}
+  - {title: "Melania Trump", qid: "Q3183", domain: "biography_living"}
+  - {title: "Jill Biden", qid: "Q6190090", domain: "biography_living"}
+  - {title: "Kate Middleton", qid: "Q10479", domain: "biography_living"}
+  - {title: "Meghan, Duchess of Sussex", qid: "Q50912", domain: "biography_living"}
+  - {title: "Prince Harry", qid: "Q152316", domain: "biography_living"}
+  - {title: "Prince William", qid: "Q36812", domain: "biography_living"}
+  - {title: "King Charles III", qid: "Q43274", domain: "biography_living"}
+  - {title: "Pope Francis", qid: "Q450675", domain: "biography_living"}
+  - {title: "Dalai Lama", qid: "Q193857", domain: "biography_living"}
+  - {title: "Desmond Tutu", qid: "Q127695", domain: "biography_living"}
+  - {title: "Rigoberta Menchú", qid: "Q67353", domain: "biography_living"}
+  - {title: "Shirin Ebadi", qid: "Q207413", domain: "biography_living"}
+  - {title: "Leymah Gbowee", qid: "Q462437", domain: "biography_living"}
+  - {title: "Wangari Maathai", qid: "Q187744", domain: "biography_living"}
+  - {title: "Liu Xiaobo", qid: "Q215093", domain: "biography_living"}
+  - {title: "Ellen Johnson Sirleaf", qid: "Q193139", domain: "biography_living"}
+  - {title: "Nadia Murad", qid: "Q24956424", domain: "biography_living"}
+  - {title: "Denis Mukwege", qid: "Q9364", domain: "biography_living"}
+  - {title: "Abiy Ahmed", qid: "Q59929", domain: "biography_living"}
+  - {title: "María Ressa", qid: "Q20640", domain: "biography_living"}
+  - {title: "Dmitry Muratov", qid: "Q3020286", domain: "biography_living"}
+  - {title: "Narges Mohammadi", qid: "Q6960617", domain: "biography_living"}
+  - {title: "Ales Bialiatski", qid: "Q309584", domain: "biography_living"}
+  - {title: "Julian Assange", qid: "Q54947", domain: "biography_living"}
+  - {title: "Edward Snowden", qid: "Q6101980", domain: "biography_living"}
+  - {title: "Chelsea Manning", qid: "Q298421", domain: "biography_living"}
+  - {title: "Glenn Greenwald", qid: "Q1371684", domain: "biography_living"}
+  - {title: "Chris Hedges", qid: "Q1081543", domain: "biography_living"}
+  - {title: "Cornel West", qid: "Q450028", domain: "biography_living"}
+  - {title: "bell hooks", qid: "Q270422", domain: "biography_living"}
+  - {title: "Angela Davis", qid: "Q193098", domain: "biography_living"}
+  - {title: "Judith Butler", qid: "Q11617", domain: "biography_living"}
+  - {title: "Donna Haraway", qid: "Q1226065", domain: "biography_living"}
+  - {title: "Eve Ensler", qid: "Q244673", domain: "biography_living"}
+  - {title: "Gloria Steinem", qid: "Q231694", domain: "biography_living"}
+
+  # -----------------------------------------------------------------------
+  # Biography — historical (200)
+  # -----------------------------------------------------------------------
+  - {title: "Albert Einstein", qid: "Q937", domain: "biography_historical"}
+  - {title: "Marie Curie", qid: "Q7186", domain: "biography_historical"}
+  - {title: "Leonardo da Vinci", qid: "Q762", domain: "biography_historical"}
+  - {title: "Nikola Tesla", qid: "Q9036", domain: "biography_historical"}
+  - {title: "Ada Lovelace", qid: "Q7259", domain: "biography_historical"}
+  - {title: "Charles Darwin", qid: "Q1035", domain: "biography_historical"}
+  - {title: "Winston Churchill", qid: "Q8016", domain: "biography_historical"}
+  - {title: "Frida Kahlo", qid: "Q5588", domain: "biography_historical"}
+  - {title: "Mahatma Gandhi", qid: "Q1001", domain: "biography_historical"}
+  - {title: "Simone de Beauvoir", qid: "Q7197", domain: "biography_historical"}
+  - {title: "Isaac Newton", qid: "Q935", domain: "biography_historical"}
+  - {title: "Galileo Galilei", qid: "Q307", domain: "biography_historical"}
+  - {title: "Napoleon Bonaparte", qid: "Q517", domain: "biography_historical"}
+  - {title: "Abraham Lincoln", qid: "Q91", domain: "biography_historical"}
+  - {title: "Cleopatra", qid: "Q1393", domain: "biography_historical"}
+  - {title: "Julius Caesar", qid: "Q1048", domain: "biography_historical"}
+  - {title: "Alexander the Great", qid: "Q8409", domain: "biography_historical"}
+  - {title: "Aristotle", qid: "Q868", domain: "biography_historical"}
+  - {title: "Plato", qid: "Q859", domain: "biography_historical"}
+  - {title: "Socrates", qid: "Q913", domain: "biography_historical"}
+  - {title: "Immanuel Kant", qid: "Q9312", domain: "biography_historical"}
+  - {title: "Friedrich Nietzsche", qid: "Q9358", domain: "biography_historical"}
+  - {title: "Karl Marx", qid: "Q9061", domain: "biography_historical"}
+  - {title: "Sigmund Freud", qid: "Q9215", domain: "biography_historical"}
+  - {title: "Charles Dickens", qid: "Q5686", domain: "biography_historical"}
+  - {title: "William Shakespeare", qid: "Q692", domain: "biography_historical"}
+  - {title: "Jane Austen", qid: "Q36322", domain: "biography_historical"}
+  - {title: "Edgar Allan Poe", qid: "Q16867", domain: "biography_historical"}
+  - {title: "Mark Twain", qid: "Q7245", domain: "biography_historical"}
+  - {title: "Ernest Hemingway", qid: "Q23434", domain: "biography_historical"}
+  - {title: "Virginia Woolf", qid: "Q40909", domain: "biography_historical"}
+  - {title: "James Joyce", qid: "Q6882", domain: "biography_historical"}
+  - {title: "Franz Kafka", qid: "Q6730", domain: "biography_historical"}
+  - {title: "F. Scott Fitzgerald", qid: "Q36668", domain: "biography_historical"}
+  - {title: "George Orwell", qid: "Q3335", domain: "biography_historical"}
+  - {title: "James Baldwin", qid: "Q26168", domain: "biography_historical"}
+  - {title: "Langston Hughes", qid: "Q156307", domain: "biography_historical"}
+  - {title: "Zora Neale Hurston", qid: "Q274277", domain: "biography_historical"}
+  - {title: "Gabriel García Márquez", qid: "Q5878", domain: "biography_historical"}
+  - {title: "Jorge Luis Borges", qid: "Q80802", domain: "biography_historical"}
+  - {title: "Pablo Neruda", qid: "Q4732", domain: "biography_historical"}
+  - {title: "Rainer Maria Rilke", qid: "Q131676", domain: "biography_historical"}
+  - {title: "Emily Dickinson", qid: "Q4441", domain: "biography_historical"}
+  - {title: "Walt Whitman", qid: "Q81438", domain: "biography_historical"}
+  - {title: "William Butler Yeats", qid: "Q36282", domain: "biography_historical"}
+  - {title: "T. S. Eliot", qid: "Q53150", domain: "biography_historical"}
+  - {title: "Langston Hughes", qid: "Q156307", domain: "biography_historical"}
+  - {title: "Pablo Picasso", qid: "Q5593", domain: "biography_historical"}
+  - {title: "Vincent van Gogh", qid: "Q5582", domain: "biography_historical"}
+  - {title: "Michelangelo", qid: "Q5592", domain: "biography_historical"}
+  - {title: "Rembrandt", qid: "Q5598", domain: "biography_historical"}
+  - {title: "Claude Monet", qid: "Q296", domain: "biography_historical"}
+  - {title: "Salvador Dalí", qid: "Q5577", domain: "biography_historical"}
+  - {title: "Jackson Pollock", qid: "Q80966", domain: "biography_historical"}
+  - {title: "Andy Warhol", qid: "Q5603", domain: "biography_historical"}
+  - {title: "Georgia O'Keeffe", qid: "Q120662", domain: "biography_historical"}
+  - {title: "Wolfgang Amadeus Mozart", qid: "Q254", domain: "biography_historical"}
+  - {title: "Johann Sebastian Bach", qid: "Q1339", domain: "biography_historical"}
+  - {title: "Ludwig van Beethoven", qid: "Q255", domain: "biography_historical"}
+  - {title: "Frederic Chopin", qid: "Q1268", domain: "biography_historical"}
+  - {title: "Franz Schubert", qid: "Q7312", domain: "biography_historical"}
+  - {title: "Johannes Brahms", qid: "Q7294", domain: "biography_historical"}
+  - {title: "Richard Wagner", qid: "Q1511", domain: "biography_historical"}
+  - {title: "Igor Stravinsky", qid: "Q47797", domain: "biography_historical"}
+  - {title: "Claude Debussy", qid: "Q9711", domain: "biography_historical"}
+  - {title: "Duke Ellington", qid: "Q4604", domain: "biography_historical"}
+  - {title: "Miles Davis", qid: "Q93341", domain: "biography_historical"}
+  - {title: "John Coltrane", qid: "Q7346", domain: "biography_historical"}
+  - {title: "Elvis Presley", qid: "Q303", domain: "biography_historical"}
+  - {title: "Michael Jackson", qid: "Q2831", domain: "biography_historical"}
+  - {title: "David Bowie", qid: "Q5383", domain: "biography_historical"}
+  - {title: "Jimi Hendrix", qid: "Q5928", domain: "biography_historical"}
+  - {title: "Janis Joplin", qid: "Q1249", domain: "biography_historical"}
+  - {title: "Bob Marley", qid: "Q2439", domain: "biography_historical"}
+  - {title: "Prince (musician)", qid: "Q7542", domain: "biography_historical"}
+  - {title: "Whitney Houston", qid: "Q11617", domain: "biography_historical"}
+  - {title: "Cary Grant", qid: "Q88973", domain: "biography_historical"}
+  - {title: "Audrey Hepburn", qid: "Q4616", domain: "biography_historical"}
+  - {title: "Marilyn Monroe", qid: "Q4616", domain: "biography_historical"}
+  - {title: "Charlie Chaplin", qid: "Q882", domain: "biography_historical"}
+  - {title: "Orson Welles", qid: "Q51516", domain: "biography_historical"}
+  - {title: "Stanley Kubrick", qid: "Q52555", domain: "biography_historical"}
+  - {title: "Alfred Hitchcock", qid: "Q7374", domain: "biography_historical"}
+  - {title: "Ingmar Bergman", qid: "Q4656", domain: "biography_historical"}
+  - {title: "Akira Kurosawa", qid: "Q4626", domain: "biography_historical"}
+  - {title: "Federico Fellini", qid: "Q4625", domain: "biography_historical"}
+  - {title: "François Truffaut", qid: "Q4624", domain: "biography_historical"}
+  - {title: "Leni Riefenstahl", qid: "Q4623", domain: "biography_historical"}
+  - {title: "Ida Lupino", qid: "Q229788", domain: "biography_historical"}
+  - {title: "Isaac Asimov", qid: "Q34981", domain: "biography_historical"}
+  - {title: "Arthur C. Clarke", qid: "Q35296", domain: "biography_historical"}
+  - {title: "Philip K. Dick", qid: "Q42982", domain: "biography_historical"}
+  - {title: "Ursula K. Le Guin", qid: "Q181659", domain: "biography_historical"}
+  - {title: "Ray Bradbury", qid: "Q181659", domain: "biography_historical"}
+  - {title: "Martin Luther King Jr.", qid: "Q8027", domain: "biography_historical"}
+  - {title: "Malcolm X", qid: "Q40337", domain: "biography_historical"}
+  - {title: "Rosa Parks", qid: "Q41921", domain: "biography_historical"}
+  - {title: "Harriet Tubman", qid: "Q102289", domain: "biography_historical"}
+  - {title: "Frederick Douglass", qid: "Q215631", domain: "biography_historical"}
+  - {title: "Sojourner Truth", qid: "Q270770", domain: "biography_historical"}
+  - {title: "W. E. B. Du Bois", qid: "Q203035", domain: "biography_historical"}
+  - {title: "Booker T. Washington", qid: "Q116808", domain: "biography_historical"}
+  - {title: "Nelson Mandela", qid: "Q8023", domain: "biography_historical"}
+  - {title: "Fidel Castro", qid: "Q26334", domain: "biography_historical"}
+  - {title: "Che Guevara", qid: "Q5809", domain: "biography_historical"}
+  - {title: "Ho Chi Minh", qid: "Q36046", domain: "biography_historical"}
+  - {title: "Mao Zedong", qid: "Q14384", domain: "biography_historical"}
+  - {title: "Vladimir Lenin", qid: "Q1394", domain: "biography_historical"}
+  - {title: "Leon Trotsky", qid: "Q48671", domain: "biography_historical"}
+  - {title: "Joseph Stalin", qid: "Q855", domain: "biography_historical"}
+  - {title: "Adolf Hitler", qid: "Q352", domain: "biography_historical"}
+  - {title: "Franklin D. Roosevelt", qid: "Q8923", domain: "biography_historical"}
+  - {title: "John F. Kennedy", qid: "Q9696", domain: "biography_historical"}
+  - {title: "Lyndon B. Johnson", qid: "Q9640", domain: "biography_historical"}
+  - {title: "Richard Nixon", qid: "Q9588", domain: "biography_historical"}
+  - {title: "Ronald Reagan", qid: "Q9960", domain: "biography_historical"}
+  - {title: "Margaret Thatcher", qid: "Q7173", domain: "biography_historical"}
+  - {title: "Tony Blair", qid: "Q8007", domain: "biography_historical"}
+  - {title: "Mikhail Gorbachev", qid: "Q30487", domain: "biography_historical"}
+  - {title: "Nelson Mandela", qid: "Q8023", domain: "biography_historical"}
+  - {title: "Kofi Annan", qid: "Q4988", domain: "biography_historical"}
+  - {title: "Indira Gandhi", qid: "Q2627887", domain: "biography_historical"}
+  - {title: "Jawaharlal Nehru", qid: "Q1047", domain: "biography_historical"}
+  - {title: "Mao Zedong", qid: "Q14384", domain: "biography_historical"}
+  - {title: "Deng Xiaoping", qid: "Q12176", domain: "biography_historical"}
+  - {title: "Kemal Atatürk", qid: "Q234", domain: "biography_historical"}
+  - {title: "Simón Bolívar", qid: "Q8579", domain: "biography_historical"}
+  - {title: "José Martí", qid: "Q44479", domain: "biography_historical"}
+  - {title: "Patrice Lumumba", qid: "Q8026", domain: "biography_historical"}
+  - {title: "Kwame Nkrumah", qid: "Q8025", domain: "biography_historical"}
+  - {title: "Julius Nyerere", qid: "Q49623", domain: "biography_historical"}
+  - {title: "Thomas Jefferson", qid: "Q11812", domain: "biography_historical"}
+  - {title: "Benjamin Franklin", qid: "Q35607", domain: "biography_historical"}
+  - {title: "George Washington", qid: "Q23", domain: "biography_historical"}
+  - {title: "Alexander Hamilton", qid: "Q178903", domain: "biography_historical"}
+  - {title: "Florence Nightingale", qid: "Q37100", domain: "biography_historical"}
+  - {title: "Clara Barton", qid: "Q271694", domain: "biography_historical"}
+  - {title: "Louis Pasteur", qid: "Q4538", domain: "biography_historical"}
+  - {title: "Alexander Fleming", qid: "Q8289", domain: "biography_historical"}
+  - {title: "Robert Koch", qid: "Q37085", domain: "biography_historical"}
+  - {title: "Joseph Lister", qid: "Q128297", domain: "biography_historical"}
+  - {title: "James Watson", qid: "Q45097", domain: "biography_historical"}
+  - {title: "Francis Crick", qid: "Q123480", domain: "biography_historical"}
+  - {title: "Rosalind Franklin", qid: "Q123481", domain: "biography_historical"}
+  - {title: "Max Planck", qid: "Q9021", domain: "biography_historical"}
+  - {title: "Niels Bohr", qid: "Q7479", domain: "biography_historical"}
+  - {title: "Werner Heisenberg", qid: "Q43523", domain: "biography_historical"}
+  - {title: "Erwin Schrödinger", qid: "Q9017", domain: "biography_historical"}
+  - {title: "Richard Feynman", qid: "Q39246", domain: "biography_historical"}
+  - {title: "Alan Turing", qid: "Q7251", domain: "biography_historical"}
+  - {title: "John von Neumann", qid: "Q9890", domain: "biography_historical"}
+  - {title: "Claude Shannon", qid: "Q92735", domain: "biography_historical"}
+  - {title: "Norbert Wiener", qid: "Q41583", domain: "biography_historical"}
+  - {title: "Grace Hopper", qid: "Q229367", domain: "biography_historical"}
+  - {title: "Dennis Ritchie", qid: "Q13481", domain: "biography_historical"}
+  - {title: "Donald Knuth", qid: "Q128026", domain: "biography_historical"}
+  - {title: "Linus Torvalds", qid: "Q34253", domain: "biography_historical"}
+  - {title: "Steve Jobs", qid: "Q19837", domain: "biography_historical"}
+  - {title: "Bill Hewlett", qid: "Q310872", domain: "biography_historical"}
+  - {title: "Henry Ford", qid: "Q8768", domain: "biography_historical"}
+  - {title: "Thomas Edison", qid: "Q8743", domain: "biography_historical"}
+  - {title: "Guglielmo Marconi", qid: "Q8660", domain: "biography_historical"}
+  - {title: "Alexander Graham Bell", qid: "Q34286", domain: "biography_historical"}
+  - {title: "Wright brothers", qid: "Q34931", domain: "biography_historical"}
+  - {title: "Johannes Gutenberg", qid: "Q8442", domain: "biography_historical"}
+  - {title: "Christoph Columbus", qid: "Q7322", domain: "biography_historical"}
+  - {title: "Vasco da Gama", qid: "Q7822", domain: "biography_historical"}
+  - {title: "Ferdinand Magellan", qid: "Q7821", domain: "biography_historical"}
+  - {title: "James Cook", qid: "Q7155", domain: "biography_historical"}
+  - {title: "Marco Polo", qid: "Q6101", domain: "biography_historical"}
+  - {title: "Ibn Battuta", qid: "Q5787", domain: "biography_historical"}
+  - {title: "Zheng He", qid: "Q8748", domain: "biography_historical"}
+  - {title: "Nicolaus Copernicus", qid: "Q619", domain: "biography_historical"}
+  - {title: "Johannes Kepler", qid: "Q8963", domain: "biography_historical"}
+  - {title: "Tycho Brahe", qid: "Q36360", domain: "biography_historical"}
+  - {title: "Edmond Halley", qid: "Q7779", domain: "biography_historical"}
+  - {title: "William Herschel", qid: "Q6463", domain: "biography_historical"}
+  - {title: "Carl Friedrich Gauss", qid: "Q6722", domain: "biography_historical"}
+  - {title: "Leonhard Euler", qid: "Q7604", domain: "biography_historical"}
+  - {title: "Archimedes", qid: "Q8739", domain: "biography_historical"}
+  - {title: "Euclid", qid: "Q8745", domain: "biography_historical"}
+  - {title: "Pythagoras", qid: "Q10261", domain: "biography_historical"}
+
+  # -----------------------------------------------------------------------
+  # Organization (200)
+  # -----------------------------------------------------------------------
+  - {title: "Apple Inc.", qid: "Q312", domain: "organization"}
+  - {title: "Google", qid: "Q95", domain: "organization"}
+  - {title: "United Nations", qid: "Q1065", domain: "organization"}
+  - {title: "Red Cross", qid: "Q7178", domain: "organization"}
+  - {title: "Toyota", qid: "Q53268", domain: "organization"}
+  - {title: "NASA", qid: "Q23548", domain: "organization"}
+  - {title: "CERN", qid: "Q48268", domain: "organization"}
+  - {title: "Amnesty International", qid: "Q46737", domain: "organization"}
+  - {title: "World Health Organization", qid: "Q7817", domain: "organization"}
+  - {title: "Tesla, Inc.", qid: "Q478214", domain: "organization"}
+  - {title: "Microsoft", qid: "Q2283", domain: "organization"}
+  - {title: "Amazon (company)", qid: "Q3884", domain: "organization"}
+  - {title: "Meta Platforms", qid: "Q380", domain: "organization"}
+  - {title: "Netflix", qid: "Q907311", domain: "organization"}
+  - {title: "Spotify", qid: "Q1368876", domain: "organization"}
+  - {title: "Uber", qid: "Q461030", domain: "organization"}
+  - {title: "Airbnb", qid: "Q3306124", domain: "organization"}
+  - {title: "Twitter", qid: "Q918", domain: "organization"}
+  - {title: "LinkedIn", qid: "Q213660", domain: "organization"}
+  - {title: "PayPal", qid: "Q366", domain: "organization"}
+  - {title: "IBM", qid: "Q37156", domain: "organization"}
+  - {title: "Intel", qid: "Q248", domain: "organization"}
+  - {title: "NVIDIA", qid: "Q182477", domain: "organization"}
+  - {title: "Samsung", qid: "Q20718", domain: "organization"}
+  - {title: "Huawei", qid: "Q270818", domain: "organization"}
+  - {title: "Sony", qid: "Q9419", domain: "organization"}
+  - {title: "Honda", qid: "Q9584", domain: "organization"}
+  - {title: "Volkswagen", qid: "Q246", domain: "organization"}
+  - {title: "BMW", qid: "Q26678", domain: "organization"}
+  - {title: "Mercedes-Benz", qid: "Q36908", domain: "organization"}
+  - {title: "Boeing", qid: "Q66", domain: "organization"}
+  - {title: "Airbus", qid: "Q67", domain: "organization"}
+  - {title: "SpaceX", qid: "Q193701", domain: "organization"}
+  - {title: "Blue Origin", qid: "Q1067677", domain: "organization"}
+  - {title: "Virgin Galactic", qid: "Q2728082", domain: "organization"}
+  - {title: "Shell (company)", qid: "Q66048", domain: "organization"}
+  - {title: "ExxonMobil", qid: "Q156992", domain: "organization"}
+  - {title: "BP", qid: "Q152057", domain: "organization"}
+  - {title: "Chevron Corporation", qid: "Q319642", domain: "organization"}
+  - {title: "JPMorgan Chase", qid: "Q192815", domain: "organization"}
+  - {title: "Goldman Sachs", qid: "Q193326", domain: "organization"}
+  - {title: "BlackRock", qid: "Q3152762", domain: "organization"}
+  - {title: "Berkshire Hathaway", qid: "Q312646", domain: "organization"}
+  - {title: "Walmart", qid: "Q483551", domain: "organization"}
+  - {title: "IKEA", qid: "Q54078", domain: "organization"}
+  - {title: "McDonald's", qid: "Q38076", domain: "organization"}
+  - {title: "Starbucks", qid: "Q37158", domain: "organization"}
+  - {title: "Coca-Cola", qid: "Q2813", domain: "organization"}
+  - {title: "PepsiCo", qid: "Q157808", domain: "organization"}
+  - {title: "LVMH", qid: "Q316314", domain: "organization"}
+  - {title: "Gucci", qid: "Q234212", domain: "organization"}
+  - {title: "Pfizer", qid: "Q206921", domain: "organization"}
+  - {title: "Johnson & Johnson", qid: "Q201259", domain: "organization"}
+  - {title: "Moderna", qid: "Q12063801", domain: "organization"}
+  - {title: "BioNTech", qid: "Q89754163", domain: "organization"}
+  - {title: "Médecins Sans Frontières", qid: "Q73079", domain: "organization"}
+  - {title: "UNICEF", qid: "Q79", domain: "organization"}
+  - {title: "UNHCR", qid: "Q132541", domain: "organization"}
+  - {title: "World Bank", qid: "Q26124", domain: "organization"}
+  - {title: "International Monetary Fund", qid: "Q3730", domain: "organization"}
+  - {title: "OECD", qid: "Q8790", domain: "organization"}
+  - {title: "NATO", qid: "Q7184", domain: "organization"}
+  - {title: "European Union", qid: "Q458", domain: "organization"}
+  - {title: "African Union", qid: "Q8473", domain: "organization"}
+  - {title: "ASEAN", qid: "Q7785", domain: "organization"}
+  - {title: "G7", qid: "Q7187", domain: "organization"}
+  - {title: "G20", qid: "Q5637", domain: "organization"}
+  - {title: "Harvard University", qid: "Q13371", domain: "organization"}
+  - {title: "MIT", qid: "Q49108", domain: "organization"}
+  - {title: "Stanford University", qid: "Q41506", domain: "organization"}
+  - {title: "Oxford University", qid: "Q34433", domain: "organization"}
+  - {title: "Cambridge University", qid: "Q35794", domain: "organization"}
+  - {title: "ETH Zurich", qid: "Q11942", domain: "organization"}
+  - {title: "Max Planck Society", qid: "Q170382", domain: "organization"}
+  - {title: "RAND Corporation", qid: "Q1167893", domain: "organization"}
+  - {title: "Brookings Institution", qid: "Q1131074", domain: "organization"}
+  - {title: "Amnesty International", qid: "Q46737", domain: "organization"}
+  - {title: "Human Rights Watch", qid: "Q132305", domain: "organization"}
+  - {title: "Greenpeace", qid: "Q81307", domain: "organization"}
+  - {title: "WWF", qid: "Q131201", domain: "organization"}
+  - {title: "Oxfam", qid: "Q48748", domain: "organization"}
+  - {title: "Save the Children", qid: "Q134816", domain: "organization"}
+  - {title: "Habitat for Humanity", qid: "Q488881", domain: "organization"}
+  - {title: "Bill & Melinda Gates Foundation", qid: "Q185291", domain: "organization"}
+  - {title: "Open Society Foundations", qid: "Q1484290", domain: "organization"}
+  - {title: "Ford Foundation", qid: "Q1437863", domain: "organization"}
+  - {title: "Rockefeller Foundation", qid: "Q1429050", domain: "organization"}
+  - {title: "International Olympic Committee", qid: "Q40970", domain: "organization"}
+  - {title: "FIFA", qid: "Q170481", domain: "organization"}
+  - {title: "UEFA", qid: "Q35494", domain: "organization"}
+  - {title: "National Football League", qid: "Q27440", domain: "organization"}
+  - {title: "NBA", qid: "Q155223", domain: "organization"}
+  - {title: "Major League Baseball", qid: "Q1061", domain: "organization"}
+  - {title: "Formula One", qid: "Q1968", domain: "organization"}
+  - {title: "Interpol", qid: "Q8475", domain: "organization"}
+  - {title: "Europol", qid: "Q16935", domain: "organization"}
+  - {title: "FBI", qid: "Q8333", domain: "organization"}
+  - {title: "CIA", qid: "Q37250", domain: "organization"}
+  - {title: "MI5", qid: "Q54253", domain: "organization"}
+  - {title: "Mossad", qid: "Q185141", domain: "organization"}
+  - {title: "Louvre", qid: "Q19675", domain: "organization"}
+  - {title: "British Museum", qid: "Q6373", domain: "organization"}
+  - {title: "MoMA", qid: "Q188740", domain: "organization"}
+  - {title: "Smithsonian Institution", qid: "Q131626", domain: "organization"}
+  - {title: "Vatican", qid: "Q159583", domain: "organization"}
+  - {title: "BBC", qid: "Q9531", domain: "organization"}
+  - {title: "Reuters", qid: "Q130879", domain: "organization"}
+  - {title: "The New York Times", qid: "Q9684", domain: "organization"}
+  - {title: "The Guardian", qid: "Q11148", domain: "organization"}
+  - {title: "Al Jazeera", qid: "Q36600", domain: "organization"}
+  - {title: "Wikipedia", qid: "Q52", domain: "organization"}
+  - {title: "Wikimedia Foundation", qid: "Q180", domain: "organization"}
+  - {title: "Mozilla Foundation", qid: "Q68477", domain: "organization"}
+  - {title: "Linux Foundation", qid: "Q560953", domain: "organization"}
+  - {title: "Apache Software Foundation", qid: "Q1374801", domain: "organization"}
+  - {title: "Open Source Initiative", qid: "Q845918", domain: "organization"}
+  - {title: "Electronic Frontier Foundation", qid: "Q621396", domain: "organization"}
+  - {title: "Doctors Without Borders", qid: "Q73079", domain: "organization"}
+  - {title: "CARE International", qid: "Q48735", domain: "organization"}
+  - {title: "World Food Programme", qid: "Q82955", domain: "organization"}
+  - {title: "IAEA", qid: "Q129772", domain: "organization"}
+  - {title: "WTO", qid: "Q7818", domain: "organization"}
+  - {title: "Interpol", qid: "Q8475", domain: "organization"}
+  - {title: "Commonwealth of Nations", qid: "Q7785", domain: "organization"}
+  - {title: "Council of Europe", qid: "Q8484", domain: "organization"}
+  - {title: "Arab League", qid: "Q8464", domain: "organization"}
+  - {title: "OPEC", qid: "Q7795", domain: "organization"}
+  - {title: "BRICS", qid: "Q57169", domain: "organization"}
+  - {title: "G77", qid: "Q193426", domain: "organization"}
+  - {title: "Alibaba Group", qid: "Q1359568", domain: "organization"}
+  - {title: "Tencent", qid: "Q860634", domain: "organization"}
+  - {title: "Baidu", qid: "Q182685", domain: "organization"}
+  - {title: "ByteDance", qid: "Q4899715", domain: "organization"}
+  - {title: "TikTok", qid: "Q50849", domain: "organization"}
+  - {title: "Zoom Video Communications", qid: "Q9390084", domain: "organization"}
+  - {title: "Slack (software)", qid: "Q10831234", domain: "organization"}
+  - {title: "Salesforce", qid: "Q1130900", domain: "organization"}
+  - {title: "Adobe Inc.", qid: "Q104884", domain: "organization"}
+  - {title: "Oracle Corporation", qid: "Q104884", domain: "organization"}
+  - {title: "Cisco Systems", qid: "Q173821", domain: "organization"}
+  - {title: "Qualcomm", qid: "Q204821", domain: "organization"}
+  - {title: "AMD", qid: "Q189114", domain: "organization"}
+  - {title: "Arm Holdings", qid: "Q1139845", domain: "organization"}
+  - {title: "OpenAI", qid: "Q21708860", domain: "organization"}
+  - {title: "DeepMind", qid: "Q15733006", domain: "organization"}
+  - {title: "Anthropic", qid: "Q111592842", domain: "organization"}
+  - {title: "Mistral AI", qid: "Q124274756", domain: "organization"}
+  - {title: "Palantir Technologies", qid: "Q5228895", domain: "organization"}
+  - {title: "Snowflake Inc.", qid: "Q82899399", domain: "organization"}
+  - {title: "Stripe (company)", qid: "Q6657442", domain: "organization"}
+  - {title: "Coinbase", qid: "Q22268386", domain: "organization"}
+  - {title: "Block, Inc.", qid: "Q2337972", domain: "organization"}
+  - {title: "DoorDash", qid: "Q21551585", domain: "organization"}
+  - {title: "Lyft", qid: "Q2588735", domain: "organization"}
+  - {title: "Instacart", qid: "Q5005683", domain: "organization"}
+  - {title: "WeWork", qid: "Q7981928", domain: "organization"}
+  - {title: "Robinhood Markets", qid: "Q22282860", domain: "organization"}
+  - {title: "Reddit", qid: "Q1936074", domain: "organization"}
+  - {title: "Discord (software)", qid: "Q22072936", domain: "organization"}
+  - {title: "Telegram (software)", qid: "Q3672707", domain: "organization"}
+  - {title: "Signal (software)", qid: "Q14503628", domain: "organization"}
+  - {title: "WhatsApp", qid: "Q1083296", domain: "organization"}
+  - {title: "Pinterest", qid: "Q568769", domain: "organization"}
+  - {title: "Snapchat", qid: "Q2030827", domain: "organization"}
+  - {title: "YouTube", qid: "Q866", domain: "organization"}
+  - {title: "Twitch (service)", qid: "Q4951373", domain: "organization"}
+  - {title: "Steam (service)", qid: "Q337535", domain: "organization"}
+  - {title: "Epic Games", qid: "Q1130738", domain: "organization"}
+  - {title: "Valve Corporation", qid: "Q193344", domain: "organization"}
+  - {title: "Blizzard Entertainment", qid: "Q152984", domain: "organization"}
+  - {title: "Electronic Arts", qid: "Q209622", domain: "organization"}
+  - {title: "Nintendo", qid: "Q8093", domain: "organization"}
+  - {title: "Sony PlayStation", qid: "Q170763", domain: "organization"}
+  - {title: "Xbox (brand)", qid: "Q64437", domain: "organization"}
+  - {title: "Roblox Corporation", qid: "Q6366543", domain: "organization"}
+  - {title: "Canva", qid: "Q16826818", domain: "organization"}
+  - {title: "Figma", qid: "Q18892416", domain: "organization"}
+  - {title: "Notion (software)", qid: "Q65697505", domain: "organization"}
+  - {title: "Dropbox", qid: "Q7049499", domain: "organization"}
+  - {title: "Box (company)", qid: "Q2370613", domain: "organization"}
+  - {title: "GitHub", qid: "Q364", domain: "organization"}
+  - {title: "GitLab", qid: "Q16639197", domain: "organization"}
+  - {title: "Atlassian", qid: "Q2080984", domain: "organization"}
+  - {title: "HubSpot", qid: "Q5930668", domain: "organization"}
+  - {title: "Shopify", qid: "Q15958355", domain: "organization"}
+  - {title: "Etsy", qid: "Q1198757", domain: "organization"}
+
+  # -----------------------------------------------------------------------
+  # Geographic entity (150)
+  # -----------------------------------------------------------------------
+  - {title: "Paris", qid: "Q90", domain: "geographic"}
+  - {title: "Amazon River", qid: "Q3783", domain: "geographic"}
+  - {title: "Mount Everest", qid: "Q513", domain: "geographic"}
+  - {title: "Sahara", qid: "Q188447", domain: "geographic"}
+  - {title: "Tokyo", qid: "Q1490", domain: "geographic"}
+  - {title: "Antarctica", qid: "Q51", domain: "geographic"}
+  - {title: "Nile", qid: "Q3392", domain: "geographic"}
+  - {title: "Great Barrier Reef", qid: "Q42196", domain: "geographic"}
+  - {title: "Iceland", qid: "Q189", domain: "geographic"}
+  - {title: "Mariana Trench", qid: "Q82367", domain: "geographic"}
+  - {title: "New York City", qid: "Q60", domain: "geographic"}
+  - {title: "London", qid: "Q84", domain: "geographic"}
+  - {title: "Beijing", qid: "Q956", domain: "geographic"}
+  - {title: "Mumbai", qid: "Q1156", domain: "geographic"}
+  - {title: "Cairo", qid: "Q85", domain: "geographic"}
+  - {title: "Lagos", qid: "Q8673", domain: "geographic"}
+  - {title: "São Paulo", qid: "Q174", domain: "geographic"}
+  - {title: "Buenos Aires", qid: "Q1486", domain: "geographic"}
+  - {title: "Moscow", qid: "Q649", domain: "geographic"}
+  - {title: "Berlin", qid: "Q64", domain: "geographic"}
+  - {title: "Sydney", qid: "Q3130", domain: "geographic"}
+  - {title: "Dubai", qid: "Q612", domain: "geographic"}
+  - {title: "Singapore", qid: "Q334", domain: "geographic"}
+  - {title: "Seoul", qid: "Q8684", domain: "geographic"}
+  - {title: "Mexico City", qid: "Q1489", domain: "geographic"}
+  - {title: "Rome", qid: "Q220", domain: "geographic"}
+  - {title: "Madrid", qid: "Q2807", domain: "geographic"}
+  - {title: "Amsterdam", qid: "Q727", domain: "geographic"}
+  - {title: "Stockholm", qid: "Q1754", domain: "geographic"}
+  - {title: "Oslo", qid: "Q585", domain: "geographic"}
+  - {title: "Copenhagen", qid: "Q1748", domain: "geographic"}
+  - {title: "Vienna", qid: "Q1741", domain: "geographic"}
+  - {title: "Zurich", qid: "Q72", domain: "geographic"}
+  - {title: "Brussels", qid: "Q239", domain: "geographic"}
+  - {title: "Warsaw", qid: "Q270", domain: "geographic"}
+  - {title: "Prague", qid: "Q1085", domain: "geographic"}
+  - {title: "Budapest", qid: "Q1781", domain: "geographic"}
+  - {title: "Istanbul", qid: "Q406", domain: "geographic"}
+  - {title: "Tehran", qid: "Q3616", domain: "geographic"}
+  - {title: "Baghdad", qid: "Q1530", domain: "geographic"}
+  - {title: "Nairobi", qid: "Q3870", domain: "geographic"}
+  - {title: "Johannesburg", qid: "Q34647", domain: "geographic"}
+  - {title: "Cape Town", qid: "Q5465", domain: "geographic"}
+  - {title: "Kinshasa", qid: "Q3561", domain: "geographic"}
+  - {title: "Addis Ababa", qid: "Q3624", domain: "geographic"}
+  - {title: "Accra", qid: "Q3745", domain: "geographic"}
+  - {title: "Dhaka", qid: "Q1354", domain: "geographic"}
+  - {title: "Karachi", qid: "Q8660", domain: "geographic"}
+  - {title: "Jakarta", qid: "Q3630", domain: "geographic"}
+  - {title: "Manila", qid: "Q1461", domain: "geographic"}
+  - {title: "Amazon rainforest", qid: "Q177567", domain: "geographic"}
+  - {title: "Congo rainforest", qid: "Q184703", domain: "geographic"}
+  - {title: "Himalayas", qid: "Q46026", domain: "geographic"}
+  - {title: "Andes", qid: "Q5456", domain: "geographic"}
+  - {title: "Alps", qid: "Q5325", domain: "geographic"}
+  - {title: "Rocky Mountains", qid: "Q46106", domain: "geographic"}
+  - {title: "Appalachian Mountains", qid: "Q46083", domain: "geographic"}
+  - {title: "Ural Mountains", qid: "Q46086", domain: "geographic"}
+  - {title: "Kilimanjaro", qid: "Q40994", domain: "geographic"}
+  - {title: "K2", qid: "Q5300", domain: "geographic"}
+  - {title: "Mont Blanc", qid: "Q47700", domain: "geographic"}
+  - {title: "Mississippi River", qid: "Q1497", domain: "geographic"}
+  - {title: "Congo River", qid: "Q3503", domain: "geographic"}
+  - {title: "Yangtze River", qid: "Q5413", domain: "geographic"}
+  - {title: "Ganges", qid: "Q3482", domain: "geographic"}
+  - {title: "Euphrates", qid: "Q3678", domain: "geographic"}
+  - {title: "Rhine", qid: "Q584", domain: "geographic"}
+  - {title: "Danube", qid: "Q585", domain: "geographic"}
+  - {title: "Volga River", qid: "Q15614", domain: "geographic"}
+  - {title: "Pacific Ocean", qid: "Q98", domain: "geographic"}
+  - {title: "Atlantic Ocean", qid: "Q97", domain: "geographic"}
+  - {title: "Indian Ocean", qid: "Q1239", domain: "geographic"}
+  - {title: "Arctic Ocean", qid: "Q1247", domain: "geographic"}
+  - {title: "Mediterranean Sea", qid: "Q4918", domain: "geographic"}
+  - {title: "Red Sea", qid: "Q41571", domain: "geographic"}
+  - {title: "Black Sea", qid: "Q5484", domain: "geographic"}
+  - {title: "Caribbean Sea", qid: "Q4794", domain: "geographic"}
+  - {title: "Lake Baikal", qid: "Q5513", domain: "geographic"}
+  - {title: "Caspian Sea", qid: "Q5484", domain: "geographic"}
+  - {title: "Lake Superior", qid: "Q1066", domain: "geographic"}
+  - {title: "Lake Victoria", qid: "Q1068", domain: "geographic"}
+  - {title: "Lake Titicaca", qid: "Q7561", domain: "geographic"}
+  - {title: "Victoria Falls", qid: "Q41099", domain: "geographic"}
+  - {title: "Niagara Falls", qid: "Q35509", domain: "geographic"}
+  - {title: "Grand Canyon", qid: "Q82927", domain: "geographic"}
+  - {title: "Yellowstone", qid: "Q43670", domain: "geographic"}
+  - {title: "Great Wall of China", qid: "Q12516", domain: "geographic"}
+  - {title: "Machu Picchu", qid: "Q208113", domain: "geographic"}
+  - {title: "Stonehenge", qid: "Q39671", domain: "geographic"}
+  - {title: "Colosseum", qid: "Q10285", domain: "geographic"}
+  - {title: "Angkor Wat", qid: "Q36539", domain: "geographic"}
+  - {title: "Petra, Jordan", qid: "Q131036", domain: "geographic"}
+  - {title: "Pyramids of Giza", qid: "Q37200", domain: "geographic"}
+  - {title: "Taj Mahal", qid: "Q9202", domain: "geographic"}
+  - {title: "Acropolis of Athens", qid: "Q131013", domain: "geographic"}
+  - {title: "Eiffel Tower", qid: "Q243", domain: "geographic"}
+  - {title: "Statue of Liberty", qid: "Q9202", domain: "geographic"}
+  - {title: "Sagrada Família", qid: "Q82839", domain: "geographic"}
+  - {title: "Burj Khalifa", qid: "Q200334", domain: "geographic"}
+  - {title: "Sydney Opera House", qid: "Q45178", domain: "geographic"}
+  - {title: "United States", qid: "Q30", domain: "geographic"}
+  - {title: "China", qid: "Q148", domain: "geographic"}
+  - {title: "India", qid: "Q668", domain: "geographic"}
+  - {title: "Russia", qid: "Q159", domain: "geographic"}
+  - {title: "Brazil", qid: "Q155", domain: "geographic"}
+  - {title: "Germany", qid: "Q183", domain: "geographic"}
+  - {title: "Japan", qid: "Q17", domain: "geographic"}
+  - {title: "France", qid: "Q142", domain: "geographic"}
+  - {title: "United Kingdom", qid: "Q145", domain: "geographic"}
+  - {title: "Canada", qid: "Q16", domain: "geographic"}
+  - {title: "Australia", qid: "Q408", domain: "geographic"}
+  - {title: "South Korea", qid: "Q884", domain: "geographic"}
+  - {title: "Indonesia", qid: "Q252", domain: "geographic"}
+  - {title: "Mexico", qid: "Q96", domain: "geographic"}
+  - {title: "Saudi Arabia", qid: "Q851", domain: "geographic"}
+  - {title: "Argentina", qid: "Q414", domain: "geographic"}
+  - {title: "Turkey", qid: "Q43", domain: "geographic"}
+  - {title: "Iran", qid: "Q794", domain: "geographic"}
+  - {title: "Nigeria", qid: "Q1033", domain: "geographic"}
+  - {title: "South Africa", qid: "Q258", domain: "geographic"}
+  - {title: "Ethiopia", qid: "Q115", domain: "geographic"}
+  - {title: "Egypt", qid: "Q79", domain: "geographic"}
+  - {title: "Pakistan", qid: "Q843", domain: "geographic"}
+  - {title: "Bangladesh", qid: "Q902", domain: "geographic"}
+  - {title: "Philippines", qid: "Q928", domain: "geographic"}
+  - {title: "Vietnam", qid: "Q881", domain: "geographic"}
+  - {title: "Thailand", qid: "Q869", domain: "geographic"}
+  - {title: "Malaysia", qid: "Q833", domain: "geographic"}
+  - {title: "Colombia", qid: "Q739", domain: "geographic"}
+  - {title: "Spain", qid: "Q29", domain: "geographic"}
+  - {title: "Italy", qid: "Q38", domain: "geographic"}
+  - {title: "Ukraine", qid: "Q212", domain: "geographic"}
+  - {title: "Poland", qid: "Q36", domain: "geographic"}
+  - {title: "Netherlands", qid: "Q55", domain: "geographic"}
+  - {title: "Sweden", qid: "Q34", domain: "geographic"}
+  - {title: "Norway", qid: "Q20", domain: "geographic"}
+  - {title: "Denmark", qid: "Q35", domain: "geographic"}
+  - {title: "Finland", qid: "Q33", domain: "geographic"}
+  - {title: "Switzerland", qid: "Q39", domain: "geographic"}
+  - {title: "Austria", qid: "Q40", domain: "geographic"}
+  - {title: "Belgium", qid: "Q31", domain: "geographic"}
+  - {title: "Portugal", qid: "Q45", domain: "geographic"}
+  - {title: "Greece", qid: "Q41", domain: "geographic"}
+  - {title: "New Zealand", qid: "Q664", domain: "geographic"}
+  - {title: "Israel", qid: "Q801", domain: "geographic"}
+
+  # -----------------------------------------------------------------------
+  # Creative works (100)
+  # -----------------------------------------------------------------------
+  - {title: "1984 (novel)", qid: "Q208460", domain: "creative_works"}
+  - {title: "The Godfather (film)", qid: "Q47703", domain: "creative_works"}
+  - {title: "The Beatles", qid: "Q1299", domain: "creative_works"}
+  - {title: "Mona Lisa", qid: "Q12418", domain: "creative_works"}
+  - {title: "Harry Potter and the Philosopher's Stone", qid: "Q43361", domain: "creative_works"}
+  - {title: "Beethoven's 9th Symphony", qid: "Q11989", domain: "creative_works"}
+  - {title: "Guernica (painting)", qid: "Q18979691", domain: "creative_works"}
+  - {title: "The Wire", qid: "Q15681", domain: "creative_works"}
+  - {title: "Don Quixote", qid: "Q131149", domain: "creative_works"}
+  - {title: "Hamlet", qid: "Q41567", domain: "creative_works"}
+  - {title: "Pride and Prejudice", qid: "Q170583", domain: "creative_works"}
+  - {title: "The Great Gatsby", qid: "Q214371", domain: "creative_works"}
+  - {title: "To Kill a Mockingbird", qid: "Q209906", domain: "creative_works"}
+  - {title: "One Hundred Years of Solitude", qid: "Q293450", domain: "creative_works"}
+  - {title: "The Alchemist (novel)", qid: "Q39977", domain: "creative_works"}
+  - {title: "Anna Karenina", qid: "Q215406", domain: "creative_works"}
+  - {title: "Crime and Punishment", qid: "Q216930", domain: "creative_works"}
+  - {title: "The Brothers Karamazov", qid: "Q181490", domain: "creative_works"}
+  - {title: "War and Peace", qid: "Q180736", domain: "creative_works"}
+  - {title: "Moby-Dick", qid: "Q174596", domain: "creative_works"}
+  - {title: "The Catcher in the Rye", qid: "Q183883", domain: "creative_works"}
+  - {title: "The Lord of the Rings", qid: "Q15228", domain: "creative_works"}
+  - {title: "Harry Potter (series)", qid: "Q8337", domain: "creative_works"}
+  - {title: "A Song of Ice and Fire", qid: "Q45875", domain: "creative_works"}
+  - {title: "Dune (novel)", qid: "Q208366", domain: "creative_works"}
+  - {title: "The Hitchhiker's Guide to the Galaxy", qid: "Q25169", domain: "creative_works"}
+  - {title: "Star Wars (film series)", qid: "Q462", domain: "creative_works"}
+  - {title: "The Matrix (film)", qid: "Q83495", domain: "creative_works"}
+  - {title: "Schindler's List", qid: "Q41290", domain: "creative_works"}
+  - {title: "Citizen Kane", qid: "Q190765", domain: "creative_works"}
+  - {title: "Casablanca (film)", qid: "Q43338", domain: "creative_works"}
+  - {title: "2001: A Space Odyssey (film)", qid: "Q179586", domain: "creative_works"}
+  - {title: "Pulp Fiction", qid: "Q104123", domain: "creative_works"}
+  - {title: "The Shawshank Redemption", qid: "Q179466", domain: "creative_works"}
+  - {title: "Inception (film)", qid: "Q25188", domain: "creative_works"}
+  - {title: "Avatar (2009 film)", qid: "Q711", domain: "creative_works"}
+  - {title: "The Dark Knight (film)", qid: "Q163872", domain: "creative_works"}
+  - {title: "Forrest Gump", qid: "Q134773", domain: "creative_works"}
+  - {title: "The Silence of the Lambs (film)", qid: "Q172241", domain: "creative_works"}
+  - {title: "Apocalypse Now", qid: "Q42832", domain: "creative_works"}
+  - {title: "Parasite (2019 film)", qid: "Q62715", domain: "creative_works"}
+  - {title: "Pan's Labyrinth", qid: "Q193880", domain: "creative_works"}
+  - {title: "La La Land (film)", qid: "Q27921", domain: "creative_works"}
+  - {title: "Get Out (film)", qid: "Q24953", domain: "creative_works"}
+  - {title: "Moonlight (2016 film)", qid: "Q23010", domain: "creative_works"}
+  - {title: "Spirited Away", qid: "Q41487", domain: "creative_works"}
+  - {title: "Princess Mononoke", qid: "Q424879", domain: "creative_works"}
+  - {title: "Blade Runner", qid: "Q104123", domain: "creative_works"}
+  - {title: "The Sopranos", qid: "Q3104", domain: "creative_works"}
+  - {title: "Breaking Bad", qid: "Q1079", domain: "creative_works"}
+  - {title: "Game of Thrones", qid: "Q23572", domain: "creative_works"}
+  - {title: "Stranger Things", qid: "Q19677080", domain: "creative_works"}
+  - {title: "The Crown (TV series)", qid: "Q14630", domain: "creative_works"}
+  - {title: "Black Mirror", qid: "Q1513583", domain: "creative_works"}
+  - {title: "Chernobyl (miniseries)", qid: "Q24266085", domain: "creative_works"}
+  - {title: "The Office (US TV series)", qid: "Q173684", domain: "creative_works"}
+  - {title: "Friends (TV series)", qid: "Q2615880", domain: "creative_works"}
+  - {title: "Seinfeld", qid: "Q1195802", domain: "creative_works"}
+  - {title: "The Simpsons", qid: "Q886", domain: "creative_works"}
+  - {title: "Saturday Night Live", qid: "Q155184", domain: "creative_works"}
+  - {title: "Thriller (Michael Jackson album)", qid: "Q168639", domain: "creative_works"}
+  - {title: "Sgt. Pepper's Lonely Hearts Club Band", qid: "Q47735", domain: "creative_works"}
+  - {title: "Dark Side of the Moon", qid: "Q55829", domain: "creative_works"}
+  - {title: "Abbey Road (album)", qid: "Q211723", domain: "creative_works"}
+  - {title: "Led Zeppelin IV", qid: "Q151891", domain: "creative_works"}
+  - {title: "Born to Run", qid: "Q159624", domain: "creative_works"}
+  - {title: "Rumours (album)", qid: "Q131152", domain: "creative_works"}
+  - {title: "Purple Rain (album)", qid: "Q164929", domain: "creative_works"}
+  - {title: "Nevermind (album)", qid: "Q183069", domain: "creative_works"}
+  - {title: "OK Computer", qid: "Q171479", domain: "creative_works"}
+  - {title: "Blonde (Frank Ocean album)", qid: "Q19860830", domain: "creative_works"}
+  - {title: "To Pimp a Butterfly", qid: "Q19825619", domain: "creative_works"}
+  - {title: "Lemonade (Beyoncé album)", qid: "Q19852437", domain: "creative_works"}
+  - {title: "The Starry Night", qid: "Q180445", domain: "creative_works"}
+  - {title: "Water Lilies (Monet series)", qid: "Q214783", domain: "creative_works"}
+  - {title: "The Last Supper (Leonardo)", qid: "Q12419", domain: "creative_works"}
+  - {title: "The Persistence of Memory", qid: "Q178524", domain: "creative_works"}
+  - {title: "Starry Night Over the Rhône", qid: "Q3028228", domain: "creative_works"}
+  - {title: "The Birth of Venus", qid: "Q30088", domain: "creative_works"}
+  - {title: "Girl with a Pearl Earring", qid: "Q25631", domain: "creative_works"}
+  - {title: "The Night Watch (Rembrandt)", qid: "Q219831", domain: "creative_works"}
+  - {title: "A Sunday Afternoon on the Island of La Grande Jatte", qid: "Q220053", domain: "creative_works"}
+  - {title: "The Scream", qid: "Q7850", domain: "creative_works"}
+  - {title: "Les Demoiselles d'Avignon", qid: "Q182072", domain: "creative_works"}
+  - {title: "American Gothic (painting)", qid: "Q461655", domain: "creative_works"}
+  - {title: "Whistler's Mother", qid: "Q461645", domain: "creative_works"}
+  - {title: "The Creation of Adam", qid: "Q213684", domain: "creative_works"}
+  - {title: "Venus de Milo", qid: "Q182986", domain: "creative_works"}
+  - {title: "David (Michelangelo)", qid: "Q15975", domain: "creative_works"}
+  - {title: "The Thinker", qid: "Q47477", domain: "creative_works"}
+  - {title: "Beethoven's 5th Symphony", qid: "Q11981", domain: "creative_works"}
+  - {title: "Four Seasons (Vivaldi)", qid: "Q146768", domain: "creative_works"}
+  - {title: "Carmina Burana", qid: "Q214078", domain: "creative_works"}
+  - {title: "The Rite of Spring", qid: "Q213678", domain: "creative_works"}
+  - {title: "Bolero (Ravel)", qid: "Q215946", domain: "creative_works"}
+  - {title: "Swan Lake", qid: "Q178743", domain: "creative_works"}
+  - {title: "The Nutcracker", qid: "Q190027", domain: "creative_works"}
+
+  # -----------------------------------------------------------------------
+  # Scientific concepts (100)
+  # -----------------------------------------------------------------------
+  - {title: "General relativity", qid: "Q11527", domain: "scientific_concepts"}
+  - {title: "Quantum mechanics", qid: "Q944", domain: "scientific_concepts"}
+  - {title: "Evolution", qid: "Q9268", domain: "scientific_concepts"}
+  - {title: "DNA", qid: "Q7430", domain: "scientific_concepts"}
+  - {title: "Black hole", qid: "Q131130", domain: "scientific_concepts"}
+  - {title: "Climate change", qid: "Q7942", domain: "scientific_concepts"}
+  - {title: "Artificial intelligence", qid: "Q11660", domain: "scientific_concepts"}
+  - {title: "Internet", qid: "Q75", domain: "scientific_concepts"}
+  - {title: "CRISPR", qid: "Q3455362", domain: "scientific_concepts"}
+  - {title: "Blockchain", qid: "Q20514253", domain: "scientific_concepts"}
+  - {title: "Special relativity", qid: "Q12133", domain: "scientific_concepts"}
+  - {title: "Thermodynamics", qid: "Q11473", domain: "scientific_concepts"}
+  - {title: "Electromagnetism", qid: "Q11465", domain: "scientific_concepts"}
+  - {title: "Periodic table", qid: "Q104884", domain: "scientific_concepts"}
+  - {title: "Photosynthesis", qid: "Q8104", domain: "scientific_concepts"}
+  - {title: "Neuroscience", qid: "Q207011", domain: "scientific_concepts"}
+  - {title: "Cell (biology)", qid: "Q7868", domain: "scientific_concepts"}
+  - {title: "Protein", qid: "Q8054", domain: "scientific_concepts"}
+  - {title: "Vaccine", qid: "Q134808", domain: "scientific_concepts"}
+  - {title: "Antibiotic", qid: "Q83364", domain: "scientific_concepts"}
+  - {title: "Genome", qid: "Q7867", domain: "scientific_concepts"}
+  - {title: "Stem cell", qid: "Q170027", domain: "scientific_concepts"}
+  - {title: "Epigenetics", qid: "Q190418", domain: "scientific_concepts"}
+  - {title: "Big Bang", qid: "Q50068", domain: "scientific_concepts"}
+  - {title: "Cosmic microwave background", qid: "Q176269", domain: "scientific_concepts"}
+  - {title: "Dark matter", qid: "Q177", domain: "scientific_concepts"}
+  - {title: "Dark energy", qid: "Q3241562", domain: "scientific_concepts"}
+  - {title: "Gravitational wave", qid: "Q12504", domain: "scientific_concepts"}
+  - {title: "Higgs boson", qid: "Q155516", domain: "scientific_concepts"}
+  - {title: "Standard Model", qid: "Q28537", domain: "scientific_concepts"}
+  - {title: "String theory", qid: "Q21200", domain: "scientific_concepts"}
+  - {title: "Quantum entanglement", qid: "Q464118", domain: "scientific_concepts"}
+  - {title: "Superconductivity", qid: "Q83196", domain: "scientific_concepts"}
+  - {title: "Nuclear fission", qid: "Q170737", domain: "scientific_concepts"}
+  - {title: "Nuclear fusion", qid: "Q131476", domain: "scientific_concepts"}
+  - {title: "Plate tectonics", qid: "Q36192", domain: "scientific_concepts"}
+  - {title: "Greenhouse effect", qid: "Q13908", domain: "scientific_concepts"}
+  - {title: "Biodiversity", qid: "Q179049", domain: "scientific_concepts"}
+  - {title: "Natural selection", qid: "Q27501", domain: "scientific_concepts"}
+  - {title: "Germ theory of disease", qid: "Q3238030", domain: "scientific_concepts"}
+  - {title: "Germ theory of disease", qid: "Q3238030", domain: "scientific_concepts"}
+  - {title: "Machine learning", qid: "Q2539", domain: "scientific_concepts"}
+  - {title: "Deep learning", qid: "Q1811836", domain: "scientific_concepts"}
+  - {title: "Neural network (machine learning)", qid: "Q21240964", domain: "scientific_concepts"}
+  - {title: "Large language model", qid: "Q8142172", domain: "scientific_concepts"}
+  - {title: "Transformer (machine learning model)", qid: "Q47460394", domain: "scientific_concepts"}
+  - {title: "Turing test", qid: "Q80911", domain: "scientific_concepts"}
+  - {title: "P versus NP problem", qid: "Q212059", domain: "scientific_concepts"}
+  - {title: "Cryptography", qid: "Q8789", domain: "scientific_concepts"}
+  - {title: "Internet of things", qid: "Q1043367", domain: "scientific_concepts"}
+  - {title: "Cloud computing", qid: "Q483639", domain: "scientific_concepts"}
+  - {title: "Quantum computing", qid: "Q8355", domain: "scientific_concepts"}
+  - {title: "CRISPR gene editing", qid: "Q3455362", domain: "scientific_concepts"}
+  - {title: "mRNA vaccine", qid: "Q67999186", domain: "scientific_concepts"}
+  - {title: "Immunotherapy", qid: "Q390551", domain: "scientific_concepts"}
+  - {title: "Alzheimer's disease", qid: "Q11085", domain: "scientific_concepts"}
+  - {title: "Cancer", qid: "Q12078", domain: "scientific_concepts"}
+  - {title: "Coronavirus", qid: "Q57751738", domain: "scientific_concepts"}
+  - {title: "HIV/AIDS", qid: "Q12199", domain: "scientific_concepts"}
+  - {title: "Malaria", qid: "Q12156", domain: "scientific_concepts"}
+  - {title: "Antibiotic resistance", qid: "Q584571", domain: "scientific_concepts"}
+  - {title: "Microbiome", qid: "Q1058060", domain: "scientific_concepts"}
+  - {title: "Consciousness", qid: "Q1809038", domain: "scientific_concepts"}
+  - {title: "Cognitive science", qid: "Q217128", domain: "scientific_concepts"}
+  - {title: "Game theory", qid: "Q1069", domain: "scientific_concepts"}
+  - {title: "Information theory", qid: "Q1069", domain: "scientific_concepts"}
+  - {title: "Statistics", qid: "Q12483", domain: "scientific_concepts"}
+  - {title: "Probability theory", qid: "Q26540", domain: "scientific_concepts"}
+  - {title: "Chaos theory", qid: "Q220176", domain: "scientific_concepts"}
+  - {title: "Complex systems", qid: "Q1197375", domain: "scientific_concepts"}
+  - {title: "Network science", qid: "Q1247327", domain: "scientific_concepts"}
+  - {title: "Behavioral economics", qid: "Q181773", domain: "scientific_concepts"}
+  - {title: "Prospect theory", qid: "Q918489", domain: "scientific_concepts"}
+  - {title: "Cognitive bias", qid: "Q1141325", domain: "scientific_concepts"}
+  - {title: "Metaverse", qid: "Q4726", domain: "scientific_concepts"}
+  - {title: "Augmented reality", qid: "Q62080", domain: "scientific_concepts"}
+  - {title: "Virtual reality", qid: "Q170285", domain: "scientific_concepts"}
+  - {title: "Robotics", qid: "Q80811", domain: "scientific_concepts"}
+  - {title: "Autonomous vehicle", qid: "Q1048835", domain: "scientific_concepts"}
+  - {title: "Semiconductor", qid: "Q80290", domain: "scientific_concepts"}
+  - {title: "Photovoltaics", qid: "Q28", domain: "scientific_concepts"}
+  - {title: "Wind power", qid: "Q80020", domain: "scientific_concepts"}
+  - {title: "Nuclear power", qid: "Q8842", domain: "scientific_concepts"}
+  - {title: "Carbon capture", qid: "Q14865", domain: "scientific_concepts"}
+  - {title: "Hydrogen fuel cell", qid: "Q134830", domain: "scientific_concepts"}
+  - {title: "Lithium-ion battery", qid: "Q270527", domain: "scientific_concepts"}
+  - {title: "5G", qid: "Q3819800", domain: "scientific_concepts"}
+  - {title: "GPS", qid: "Q11088", domain: "scientific_concepts"}
+  - {title: "Space station", qid: "Q25956", domain: "scientific_concepts"}
+  - {title: "James Webb Space Telescope", qid: "Q184654", domain: "scientific_concepts"}
+  - {title: "Hubble Space Telescope", qid: "Q2513", domain: "scientific_concepts"}
+  - {title: "Large Hadron Collider", qid: "Q81965", domain: "scientific_concepts"}
+  - {title: "Human Genome Project", qid: "Q714", domain: "scientific_concepts"}
+  - {title: "Manhattan Project", qid: "Q185605", domain: "scientific_concepts"}
+  - {title: "Apollo program", qid: "Q182726", domain: "scientific_concepts"}
+  - {title: "International Space Station", qid: "Q27130", domain: "scientific_concepts"}
+
+  # -----------------------------------------------------------------------
+  # Events (50)
+  # -----------------------------------------------------------------------
+  - {title: "World War II", qid: "Q362", domain: "events"}
+  - {title: "World War I", qid: "Q361", domain: "events"}
+  - {title: "French Revolution", qid: "Q6534", domain: "events"}
+  - {title: "American Revolution", qid: "Q179397", domain: "events"}
+  - {title: "Russian Revolution", qid: "Q2044855", domain: "events"}
+  - {title: "Industrial Revolution", qid: "Q2269", domain: "events"}
+  - {title: "The Holocaust", qid: "Q2763", domain: "events"}
+  - {title: "Cold War", qid: "Q8740", domain: "events"}
+  - {title: "September 11 attacks", qid: "Q10806", domain: "events"}
+  - {title: "COVID-19 pandemic", qid: "Q81068910", domain: "events"}
+  - {title: "2008 financial crisis", qid: "Q381327", domain: "events"}
+  - {title: "Arab Spring", qid: "Q33837", domain: "events"}
+  - {title: "Fall of the Berlin Wall", qid: "Q48422", domain: "events"}
+  - {title: "Moon landing", qid: "Q43653", domain: "events"}
+  - {title: "Chernobyl disaster", qid: "Q34384", domain: "events"}
+  - {title: "2004 Indian Ocean earthquake and tsunami", qid: "Q45031", domain: "events"}
+  - {title: "2010 Haiti earthquake", qid: "Q6519944", domain: "events"}
+  - {title: "2011 Tōhoku earthquake and tsunami", qid: "Q146957", domain: "events"}
+  - {title: "Hurricane Katrina", qid: "Q38135", domain: "events"}
+  - {title: "1994 Rwandan genocide", qid: "Q7094", domain: "events"}
+  - {title: "Apartheid", qid: "Q8454", domain: "events"}
+  - {title: "Korean War", qid: "Q11514", domain: "events"}
+  - {title: "Vietnam War", qid: "Q8740", domain: "events"}
+  - {title: "Gulf War", qid: "Q39911", domain: "events"}
+  - {title: "Iraq War", qid: "Q8436", domain: "events"}
+  - {title: "War in Afghanistan (2001–2021)", qid: "Q192784", domain: "events"}
+  - {title: "2022 Russian invasion of Ukraine", qid: "Q82828765", domain: "events"}
+  - {title: "Brexit", qid: "Q51750", domain: "events"}
+  - {title: "2016 United States presidential election", qid: "Q16147063", domain: "events"}
+  - {title: "George Floyd protests", qid: "Q95318870", domain: "events"}
+  - {title: "2020 United States presidential election", qid: "Q63416666", domain: "events"}
+  - {title: "Storming of the United States Capitol", qid: "Q104852029", domain: "events"}
+  - {title: "Munich massacre", qid: "Q41408", domain: "events"}
+  - {title: "Tiananmen Square protests of 1989", qid: "Q124123", domain: "events"}
+  - {title: "Fukushima nuclear disaster", qid: "Q683787", domain: "events"}
+  - {title: "Space Shuttle Challenger disaster", qid: "Q47408", domain: "events"}
+  - {title: "Sputnik crisis", qid: "Q189397", domain: "events"}
+  - {title: "Cuban Missile Crisis", qid: "Q179611", domain: "events"}
+  - {title: "Berlin Blockade", qid: "Q160386", domain: "events"}
+  - {title: "Nuremberg trials", qid: "Q9687", domain: "events"}
+  - {title: "Hiroshima and Nagasaki atomic bombings", qid: "Q362028", domain: "events"}
+  - {title: "D-Day", qid: "Q13406", domain: "events"}
+  - {title: "Battle of Stalingrad", qid: "Q26478", domain: "events"}
+  - {title: "Battle of Midway", qid: "Q177983", domain: "events"}
+  - {title: "Battle of Gettysburg", qid: "Q166345", domain: "events"}
+  - {title: "Boston Tea Party", qid: "Q217660", domain: "events"}
+  - {title: "Magna Carta", qid: "Q43056", domain: "events"}
+  - {title: "Black Death", qid: "Q42292", domain: "events"}
+  - {title: "Spanish flu", qid: "Q17872", domain: "events"}
+  - {title: "Great Depression", qid: "Q8028", domain: "events"}

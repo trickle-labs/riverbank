@@ -1,0 +1,542 @@
+"""Property alignment table: maps Wikidata P-ids to riverbank predicate patterns.
+
+Provides 50+ mappings covering biographies, organizations, geographic entities,
+creative works, scientific concepts, and events.
+
+Usage::
+
+    from riverbank.eval.property_alignment import PropertyAlignmentTable
+
+    table = PropertyAlignmentTable()
+    alignment = table.get_alignment("P31")
+    # → PropertyAlignment(wikidata_pid="P31", wikidata_label="instance of", ...)
+
+    predicates = table.get_riverbank_predicates("P106")
+    # → ["pgc:hasOccupation", "ex:occupation"]
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import yaml
+
+from riverbank.eval.models import PropertyAlignment
+
+# ---------------------------------------------------------------------------
+# Built-in alignment table (50+ properties)
+# ---------------------------------------------------------------------------
+
+PROPERTY_ALIGNMENT_TABLE: list[PropertyAlignment] = [
+    # -----------------------------------------------------------------------
+    # Universal / structural
+    # -----------------------------------------------------------------------
+    PropertyAlignment(
+        wikidata_pid="P31",
+        wikidata_label="instance of",
+        riverbank_predicates=["rdf:type", "pgc:isA"],
+        value_mapping={"Q5": "foaf:Person", "Q43229": "org:Organization"},
+        alignment_confidence=0.95,
+        notes="Universal: every entity has P31",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P279",
+        wikidata_label="subclass of",
+        riverbank_predicates=["rdfs:subClassOf"],
+        alignment_confidence=0.90,
+        notes="Class hierarchy",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P361",
+        wikidata_label="part of",
+        riverbank_predicates=["pgc:partOf", "dcterms:isPartOf"],
+        alignment_confidence=0.85,
+        notes="Mereological parthood",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P527",
+        wikidata_label="has part or parts",
+        riverbank_predicates=["pgc:hasPart", "dcterms:hasPart"],
+        alignment_confidence=0.85,
+        notes="Inverse of P361",
+    ),
+
+    # -----------------------------------------------------------------------
+    # Biography — identity
+    # -----------------------------------------------------------------------
+    PropertyAlignment(
+        wikidata_pid="P21",
+        wikidata_label="sex or gender",
+        riverbank_predicates=["pgc:gender", "foaf:gender"],
+        alignment_confidence=0.88,
+        notes="Q6581097=male, Q6581072=female",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P27",
+        wikidata_label="country of citizenship",
+        riverbank_predicates=["pgc:nationality", "ex:citizenship"],
+        alignment_confidence=0.85,
+        notes="May have multiple values",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P569",
+        wikidata_label="date of birth",
+        riverbank_predicates=["pgc:birthDate", "schema:birthDate"],
+        alignment_confidence=0.92,
+        notes="ISO 8601 date; precision varies (year/month/day)",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P570",
+        wikidata_label="date of death",
+        riverbank_predicates=["pgc:deathDate", "schema:deathDate"],
+        alignment_confidence=0.92,
+        notes="ISO 8601; absent for living people",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P19",
+        wikidata_label="place of birth",
+        riverbank_predicates=["pgc:birthPlace", "schema:birthPlace"],
+        alignment_confidence=0.88,
+        notes="Q-id of city/country",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P20",
+        wikidata_label="place of death",
+        riverbank_predicates=["pgc:deathPlace", "schema:deathPlace"],
+        alignment_confidence=0.88,
+        notes="Q-id of city/country",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P106",
+        wikidata_label="occupation",
+        riverbank_predicates=["pgc:hasOccupation", "schema:hasOccupation"],
+        alignment_confidence=0.90,
+        notes="Q-id; multiple values common",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P39",
+        wikidata_label="position held",
+        riverbank_predicates=["pgc:positionHeld", "org:holds"],
+        alignment_confidence=0.87,
+        notes="With P580/P582 start/end qualifiers",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P108",
+        wikidata_label="employer",
+        riverbank_predicates=["pgc:employer", "org:memberOf"],
+        alignment_confidence=0.85,
+        notes="Organization Q-id",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P69",
+        wikidata_label="educated at",
+        riverbank_predicates=["pgc:educatedAt", "ex:alumniOf"],
+        alignment_confidence=0.85,
+        notes="Educational institution Q-id",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P26",
+        wikidata_label="spouse",
+        riverbank_predicates=["pgc:spouse", "schema:spouse"],
+        alignment_confidence=0.90,
+        notes="Person Q-id",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P22",
+        wikidata_label="father",
+        riverbank_predicates=["pgc:father", "rel:parentOf"],
+        alignment_confidence=0.90,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P25",
+        wikidata_label="mother",
+        riverbank_predicates=["pgc:mother", "rel:parentOf"],
+        alignment_confidence=0.90,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P40",
+        wikidata_label="child",
+        riverbank_predicates=["pgc:child", "rel:childOf"],
+        alignment_confidence=0.88,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P735",
+        wikidata_label="given name",
+        riverbank_predicates=["foaf:givenName", "schema:givenName"],
+        alignment_confidence=0.92,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P734",
+        wikidata_label="family name",
+        riverbank_predicates=["foaf:familyName", "schema:familyName"],
+        alignment_confidence=0.92,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P166",
+        wikidata_label="award received",
+        riverbank_predicates=["pgc:awardReceived", "schema:award"],
+        alignment_confidence=0.88,
+        notes="Q-id of award",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P800",
+        wikidata_label="notable work",
+        riverbank_predicates=["pgc:notableWork", "schema:workExample"],
+        alignment_confidence=0.85,
+    ),
+
+    # -----------------------------------------------------------------------
+    # Organization
+    # -----------------------------------------------------------------------
+    PropertyAlignment(
+        wikidata_pid="P571",
+        wikidata_label="inception",
+        riverbank_predicates=["pgc:foundingDate", "schema:foundingDate", "org:resultedFrom"],
+        alignment_confidence=0.90,
+        notes="ISO 8601 date; organization founding",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P576",
+        wikidata_label="dissolved, abolished or demolished date",
+        riverbank_predicates=["pgc:dissolutionDate", "schema:dissolutionDate"],
+        alignment_confidence=0.88,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P159",
+        wikidata_label="headquarters location",
+        riverbank_predicates=["org:hasPrimarySite", "pgc:headquartersLocation"],
+        alignment_confidence=0.90,
+        notes="Q-id of city",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P112",
+        wikidata_label="founded by",
+        riverbank_predicates=["pgc:foundedBy", "schema:founder"],
+        alignment_confidence=0.88,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P749",
+        wikidata_label="parent organization",
+        riverbank_predicates=["org:unitOf", "pgc:parentOrganization"],
+        alignment_confidence=0.85,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P355",
+        wikidata_label="subsidiary",
+        riverbank_predicates=["org:hasUnit", "pgc:subsidiary"],
+        alignment_confidence=0.85,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P452",
+        wikidata_label="industry",
+        riverbank_predicates=["org:classification", "pgc:industry"],
+        alignment_confidence=0.82,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P856",
+        wikidata_label="official website",
+        riverbank_predicates=["foaf:homepage", "schema:url"],
+        alignment_confidence=0.92,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P154",
+        wikidata_label="logo image",
+        riverbank_predicates=["pgc:logo"],
+        alignment_confidence=0.70,
+        notes="Media file; lower confidence",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P1128",
+        wikidata_label="employees",
+        riverbank_predicates=["org:numberOfEmployees", "pgc:employeeCount"],
+        alignment_confidence=0.80,
+        notes="Quantity value; may be outdated",
+    ),
+
+    # -----------------------------------------------------------------------
+    # Geographic entities
+    # -----------------------------------------------------------------------
+    PropertyAlignment(
+        wikidata_pid="P17",
+        wikidata_label="country",
+        riverbank_predicates=["pgc:country", "schema:addressCountry"],
+        alignment_confidence=0.92,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P131",
+        wikidata_label="located in the administrative territorial entity",
+        riverbank_predicates=["pgc:locatedIn", "schema:containedInPlace"],
+        alignment_confidence=0.85,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P625",
+        wikidata_label="coordinate location",
+        riverbank_predicates=["geo:lat", "geo:long", "schema:geo"],
+        alignment_confidence=0.88,
+        notes="GlobeCoordinate; includes lat/long",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P2044",
+        wikidata_label="elevation above sea level",
+        riverbank_predicates=["pgc:elevation"],
+        alignment_confidence=0.82,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P1082",
+        wikidata_label="population",
+        riverbank_predicates=["pgc:population"],
+        alignment_confidence=0.85,
+        notes="Quantity; point-in-time qualifier common",
+    ),
+    PropertyAlignment(
+        wikidata_pid="P36",
+        wikidata_label="capital",
+        riverbank_predicates=["pgc:capital", "schema:capitalOf"],
+        alignment_confidence=0.90,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P30",
+        wikidata_label="continent",
+        riverbank_predicates=["pgc:continent"],
+        alignment_confidence=0.92,
+    ),
+
+    # -----------------------------------------------------------------------
+    # Creative works
+    # -----------------------------------------------------------------------
+    PropertyAlignment(
+        wikidata_pid="P50",
+        wikidata_label="author",
+        riverbank_predicates=["dcterms:creator", "schema:author", "pgc:author"],
+        alignment_confidence=0.92,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P57",
+        wikidata_label="director",
+        riverbank_predicates=["schema:director", "pgc:director"],
+        alignment_confidence=0.92,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P86",
+        wikidata_label="composer",
+        riverbank_predicates=["schema:composer", "pgc:composer"],
+        alignment_confidence=0.92,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P136",
+        wikidata_label="genre",
+        riverbank_predicates=["schema:genre", "pgc:genre"],
+        alignment_confidence=0.88,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P577",
+        wikidata_label="publication date",
+        riverbank_predicates=["dcterms:issued", "schema:datePublished"],
+        alignment_confidence=0.90,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P123",
+        wikidata_label="publisher",
+        riverbank_predicates=["dcterms:publisher", "schema:publisher"],
+        alignment_confidence=0.88,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P407",
+        wikidata_label="language of work or name",
+        riverbank_predicates=["dcterms:language", "schema:inLanguage"],
+        alignment_confidence=0.88,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P495",
+        wikidata_label="country of origin",
+        riverbank_predicates=["schema:countryOfOrigin", "pgc:countryOfOrigin"],
+        alignment_confidence=0.85,
+    ),
+
+    # -----------------------------------------------------------------------
+    # Scientific concepts
+    # -----------------------------------------------------------------------
+    PropertyAlignment(
+        wikidata_pid="P1269",
+        wikidata_label="facet of",
+        riverbank_predicates=["pgc:facetOf", "skos:broader"],
+        alignment_confidence=0.80,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P910",
+        wikidata_label="topic's main category",
+        riverbank_predicates=["skos:subject", "pgc:category"],
+        alignment_confidence=0.75,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P856",
+        wikidata_label="official website",
+        riverbank_predicates=["foaf:homepage"],
+        alignment_confidence=0.92,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P138",
+        wikidata_label="named after",
+        riverbank_predicates=["pgc:namedAfter"],
+        alignment_confidence=0.85,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P1036",
+        wikidata_label="Dewey Decimal Classification",
+        riverbank_predicates=["pgc:deweyDecimal"],
+        alignment_confidence=0.70,
+    ),
+
+    # -----------------------------------------------------------------------
+    # Events
+    # -----------------------------------------------------------------------
+    PropertyAlignment(
+        wikidata_pid="P585",
+        wikidata_label="point in time",
+        riverbank_predicates=["pgc:date", "schema:startDate"],
+        alignment_confidence=0.88,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P580",
+        wikidata_label="start time",
+        riverbank_predicates=["pgc:startDate", "schema:startDate"],
+        alignment_confidence=0.90,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P582",
+        wikidata_label="end time",
+        riverbank_predicates=["pgc:endDate", "schema:endDate"],
+        alignment_confidence=0.90,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P276",
+        wikidata_label="location",
+        riverbank_predicates=["pgc:location", "schema:location"],
+        alignment_confidence=0.88,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P710",
+        wikidata_label="participant",
+        riverbank_predicates=["pgc:participant", "schema:participant"],
+        alignment_confidence=0.85,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P1056",
+        wikidata_label="product or material produced",
+        riverbank_predicates=["pgc:produces", "schema:produces"],
+        alignment_confidence=0.80,
+    ),
+
+    # -----------------------------------------------------------------------
+    # Relationships / references
+    # -----------------------------------------------------------------------
+    PropertyAlignment(
+        wikidata_pid="P155",
+        wikidata_label="follows",
+        riverbank_predicates=["pgc:follows", "schema:predecessorOf"],
+        alignment_confidence=0.85,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P156",
+        wikidata_label="followed by",
+        riverbank_predicates=["pgc:followedBy", "schema:successorOf"],
+        alignment_confidence=0.85,
+    ),
+    PropertyAlignment(
+        wikidata_pid="P793",
+        wikidata_label="significant event",
+        riverbank_predicates=["pgc:significantEvent"],
+        alignment_confidence=0.78,
+    ),
+]
+
+
+class PropertyAlignmentTable:
+    """Lookup table for mapping Wikidata P-ids to riverbank predicate patterns.
+
+    Parameters
+    ----------
+    alignment_data:
+        List of :class:`PropertyAlignment` objects.  Defaults to the built-in
+        table with 50+ mappings.
+    """
+
+    def __init__(
+        self,
+        alignment_data: list[PropertyAlignment] | None = None,
+    ) -> None:
+        self.alignments = alignment_data or list(PROPERTY_ALIGNMENT_TABLE)
+        self._pid_index: dict[str, PropertyAlignment] = {
+            a.wikidata_pid: a for a in self.alignments
+        }
+
+    # ------------------------------------------------------------------
+    # Lookups
+    # ------------------------------------------------------------------
+
+    def get_alignment(self, wikidata_pid: str) -> PropertyAlignment | None:
+        """Return the ``PropertyAlignment`` for a P-id, or *None*."""
+        return self._pid_index.get(wikidata_pid)
+
+    def get_riverbank_predicates(self, wikidata_pid: str) -> list[str]:
+        """Return the list of equivalent riverbank predicates for a P-id."""
+        alignment = self._pid_index.get(wikidata_pid)
+        if alignment is None:
+            return []
+        return list(alignment.riverbank_predicates)
+
+    def predicate_to_pids(self, predicate: str) -> list[str]:
+        """Reverse lookup: riverbank predicate → list of Wikidata P-ids."""
+        return [
+            a.wikidata_pid
+            for a in self.alignments
+            if predicate in a.riverbank_predicates
+        ]
+
+    def all_pids(self) -> list[str]:
+        """Return all P-ids in the table."""
+        return list(self._pid_index.keys())
+
+    def __len__(self) -> int:
+        return len(self.alignments)
+
+    # ------------------------------------------------------------------
+    # Serialization
+    # ------------------------------------------------------------------
+
+    def to_yaml(self, path: Path) -> None:
+        """Export the alignment table as YAML."""
+        data = {
+            "version": 1,
+            "description": "Property alignment table: Wikidata P-ids → riverbank predicates",
+            "count": len(self.alignments),
+            "alignments": [
+                {
+                    "wikidata_pid": a.wikidata_pid,
+                    "wikidata_label": a.wikidata_label,
+                    "riverbank_predicates": a.riverbank_predicates,
+                    "alignment_confidence": a.alignment_confidence,
+                    "notes": a.notes,
+                }
+                for a in self.alignments
+            ],
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as fh:
+            yaml.dump(data, fh, allow_unicode=True, sort_keys=False, default_flow_style=False)
+
+    @classmethod
+    def from_yaml(cls, path: Path) -> "PropertyAlignmentTable":
+        """Load an alignment table from a YAML file."""
+        with path.open(encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+        alignments = [
+            PropertyAlignment(
+                wikidata_pid=row["wikidata_pid"],
+                wikidata_label=row.get("wikidata_label", ""),
+                riverbank_predicates=row.get("riverbank_predicates", []),
+                alignment_confidence=row.get("alignment_confidence", 1.0),
+                notes=row.get("notes", ""),
+            )
+            for row in data.get("alignments", [])
+        ]
+        return cls(alignments)

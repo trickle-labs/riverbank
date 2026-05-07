@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "riverbank"
-version = "0.14.0"
+version = "0.15.0"
 description = "Compiled knowledge-base worker for pg-ripple, pg-trickle, and pg-tide"
 readme = "README.md"
 license = { text = "MIT" }
@@ -58,6 +58,14 @@ docs = [
     "mkdocs-literate-nav>=0.6",
     "mkdocs-section-index>=0.3",
     "mike>=2.1",
+]
+# v0.15.0: Wikidata evaluation framework
+eval = [
+    "requests>=2.31.0",
+    "html2text>=2024.2.26",
+    "rapidfuzz>=3.9",
+    "numpy>=1.24.0",
+    "pyyaml>=6.0",
 ]
 # v0.14.0: reasoning extras — SHACL validation, OWL 2 RL, RDF graph support
 reasoning = [

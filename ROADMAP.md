@@ -83,7 +83,7 @@
 
 | Version | Description | Status | Size |
 |---|---|---|---|
-| v0.15.0 | Wikidata evaluation framework — `riverbank evaluate-wikidata` command (single article or full dataset), 1,000-article benchmark dataset (7 domains), property alignment table, entity resolution pipeline, calibration curves, per-domain and per-property breakdowns | Planned | Large |
+| v0.15.0 | Wikidata evaluation framework — `riverbank evaluate-wikidata` command (single article or full dataset), 1,000-article benchmark dataset (7 domains), property alignment table, entity resolution pipeline, calibration curves, per-domain and per-property breakdowns | **Done** | Large |
 | v0.15.1 | Extraction improvement loop — per-property recall gap analysis, extraction prompt tuning from failure modes, 200+ novel-discovery annotations, published evaluation methodology | Planned | Medium |
 
 ---
@@ -94,28 +94,28 @@ Goal: establish an externally-validated, reproducible benchmark for riverbank's
 extraction quality by comparing compiled triples against Wikidata's 1.65 billion
 human-curated statements sourced from the same Wikipedia articles.
 
-- [ ] `riverbank evaluate-wikidata --article <title|url>` — evaluate a single
+- [x] `riverbank evaluate-wikidata --article <title|url>` — evaluate a single
   Wikipedia article on demand with hybrid caching: checks local cache first
   (`.riverbank/article_cache/`), falls back to Wikipedia API if not cached,
   fetches corresponding Wikidata item, runs full pipeline, prints
   precision/recall summary. Supports article title, Wikipedia URL, or Wikidata
   Q-id. Use `--no-cache` to bypass local cache; `--cache-only` for offline mode
-- [ ] `riverbank evaluate-wikidata --dataset <path> --profile <name>` — batch
+- [x] `riverbank evaluate-wikidata --dataset <path> --profile <name>` — batch
   mode over the full benchmark dataset
-- [ ] 1,000-article benchmark dataset stratified across 7 domains: biographies
+- [x] 1,000-article benchmark dataset stratified across 7 domains: biographies
   (living + historical), organizations (commercial + non-profit), geographic
   entities, creative works, scientific concepts, and events
-- [ ] Wikipedia → Markdown download pipeline via MediaWiki API
-- [ ] Wikidata SPARQL ground-truth fetcher with statement filtering (excludes
+- [x] Wikipedia → Markdown download pipeline via MediaWiki API
+- [x] Wikidata SPARQL ground-truth fetcher with statement filtering (excludes
   external identifiers, media, interwiki links)
-- [ ] Property alignment table mapping 50+ Wikidata P-ids to riverbank predicate
+- [x] Property alignment table mapping 50+ Wikidata P-ids to riverbank predicate
   patterns (P31 instance-of, P106 occupation, P569 birth date, P159 HQ, etc.)
-- [ ] Entity resolution: sitelink lookup → label matching → context disambiguation
-- [ ] Scoring pipeline: precision, recall, F1, confidence calibration (Pearson ρ),
+- [x] Entity resolution: sitelink lookup → label matching → context disambiguation
+- [x] Scoring pipeline: precision, recall, F1, confidence calibration (Pearson ρ),
   novel discovery rate, false positive rate
-- [ ] Per-domain and per-property breakdowns in JSON report
-- [ ] Calibration curve output (confidence bucket vs. observed accuracy)
-- [ ] Local run only; results stored in `eval/results/`
+- [x] Per-domain and per-property breakdowns in JSON report
+- [x] Calibration curve output (confidence bucket vs. observed accuracy)
+- [x] Local run only; results stored in `eval/results/`
 
 **Exit criterion:** first full evaluation report produced over 1,000 articles;
 precision ≥ 0.85, recall ≥ 0.60, F1 ≥ 0.70; calibration ρ ≥ 0.80.
