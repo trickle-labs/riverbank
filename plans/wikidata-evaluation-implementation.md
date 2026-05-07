@@ -56,19 +56,46 @@ eval/                                    # New directory (outputs)
 
 ```
 # pyproject.toml extras: [eval]
-requests>=2.31.0                    # MediaWiki API
-aiohttp>=3.9.0                      # Async HTTP for Wikipedia batches
-rdflib>=7.0.0                       # RDF graph operations (already have)
-rapidfuzz>=3.0.0                    # Fuzzy string matching
-numpy>=1.24.0                       # Calibration curve computation
-scikit-learn>=1.3.0                 # For vector operations if needed
+requests>=2.31.0                    # MediaWiki API + Wikidata SPARQL
+aiohttp>=3.9.0                      # Async HTTP for parallel Wikipedia batches
+html2text>=2024.2.26                # Convert Wikipedia HTML → Markdown
+rapidfuzz>=3.0.0                    # Fuzzy string matching for entity resolution
+numpy>=1.24.0                       # Calibration curve + Pearson ρ computation
+matplotlib>=3.7.0                   # Calibration curve plots
+
+# Already in riverbank (no new deps needed):
+# rdflib>=7.0.0, pydantic>=2.0.0, scipy (for Pearson ρ if needed)
 ```
+
+> **Note on `models.py` and `cache.py`:** These two modules are part of Phase 1
+> but their APIs are foundational for the whole package:
+>
+> **`src/riverbank/eval/models.py`** — All shared dataclasses live here to avoid
+> circular imports between modules. Exports: `WikipediaArticle`, `CacheMetadata`,
+> `WikidataStatement`, `WikidataItem`, `PropertyAlignment`, `EntityMatch`,
+> `ResolutionCache`, `TripleMatch`, `ArticleScore`, `DatasetResult`, `RunMetadata`.
+>
+> **`src/riverbank/eval/cache.py`** — Cache management independent of Wikipedia
+> client, so it can be tested and reused. Class `ArticleCache` wraps the
+> `.riverbank/article_cache/` directory. Methods: `get(title)`, `put(article)`,
+> `invalidate(title)`, `list_all()`, `prune(max_age_days)`, `stats()`.
+> Serialization: article Markdown in `<normalized_title>.md`, metadata in
+> `<normalized_title>.meta.json`. This backing class powers all `riverbank cache`
+> CLI subcommands.
+
+> **Note:** `scikit-learn` is NOT required; `numpy.corrcoef` covers the Pearson ρ
+> computation. `scipy.stats.pearsonr` is available via `scipy` if riverbank already
+> has it as a transitive dependency.
 
 ---
 
 ## 2. Phase 1: Proof of Concept (Week 1)
 
-**Goal:** Extract, align, score, and visualize 50 articles (10 per domain × 5 domains).
+**Goal:** Extract, align, score, and validate 50 articles (10 per domain × 5 domains). Manual review of 10 results. Go/no-go gate before Phase 2.
+
+> **PoC scope:** 50 articles total across 5 domains. The benchmark dataset YAML
+> (`examples/golden/wikidata-benchmark-poc.yaml`) lists all 50; CI smoke tests
+> run `--sample 10` to keep CI under 10 minutes.
 
 ### 2.1 Step 1.1: Wikipedia client + caching (Day 1)
 
@@ -122,11 +149,19 @@ class WikipediaClient:
         
     def _fetch_from_wikipedia_api(self, title: str) -> str:
         """
-        Call MediaWiki API action=query with:
-        - titles=[title]
-        - prop=extracts (format=json, explaintext=true for plain text)
-        - format=json
-        Convert to Markdown (headers, links, emphasis preserved).
+        Fetch article as Markdown via MediaWiki REST API.
+        
+        MediaWiki does NOT return Markdown natively. Strategy:
+        1. Call action=parse with prop=text (renders HTML)
+           OR use the REST API: /api/rest_v1/page/html/{title}
+        2. Convert HTML → Markdown via html2text.HTML2Text()
+           - Set ignore_links=False (keep wikilinks)
+           - Set body_width=0 (no line wrapping)
+        3. Strip navigation/footer boilerplate sections
+        
+        User-Agent header REQUIRED:
+           'User-Agent: riverbank-eval/0.15.0 (trickle-labs/riverbank)'
+        Both Wikipedia and Wikidata reject requests without a descriptive UA.
         """
         
     def cache_is_valid(self, cache_path: Path) -> bool:
@@ -183,8 +218,17 @@ class WikidataClient:
     def get_item_by_wikipedia_title(self, title: str, language: str = "en") -> WikidataItem:
         """Query sitelink index; resolve to Q-id; fetch item."""
         
-    def query_sparql(self, sparql: str, timeout: int = 30) -> list[dict]:
-        """Execute SPARQL query; return results as list of dicts."""
+    def query_sparql(self, sparql: str, timeout: int = 60) -> list[dict]:
+        """
+        Execute SPARQL query against Wikidata endpoint.
+        
+        IMPORTANT: Wikidata SPARQL requires a User-Agent header:
+            'User-Agent: riverbank-eval/0.15.0 (trickle-labs/riverbank)'
+        Requests without User-Agent are rejected with HTTP 403.
+        
+        Retry policy: 3 attempts with exponential backoff (2s, 4s, 8s).
+        On timeout or endpoint unavailability, raise WikidataUnavailableError.
+        """
         
     def _filter_statements(self, raw_statements: list) -> list[WikidataStatement]:
         """Exclude external identifiers, media, interwiki links."""
@@ -306,7 +350,7 @@ alignments:
 
 **File:** `src/riverbank/eval/entity_resolution.py`
 
-**Dataclass:**
+**Dataclasses:**
 ```python
 @dataclass
 class EntityMatch:
@@ -315,6 +359,13 @@ class EntityMatch:
     match_type: str  # "sitelink" | "label" | "fuzzy_label" | "context_disambig"
     confidence: float  # 0.0–1.0
     explanation: str
+
+@dataclass
+class ResolutionCache:
+    """In-memory cache of IRI → EntityMatch to avoid redundant Wikidata lookups."""
+    _cache: dict[str, EntityMatch] = field(default_factory=dict)
+    hits: int = 0
+    misses: int = 0
 ```
 
 **Class: `EntityResolver`**
@@ -515,17 +566,31 @@ def evaluate_wikidata_dataset(dataset, profile, output, parallel, sample):
 
 **Integration with `riverbank ingest`:**
 The `evaluate_wikidata_article` command will:
-1. Create a temporary named graph for this evaluation
-2. Call the existing `riverbank ingest` flow with the fetched Markdown article
-3. Extract triples from that named graph
-4. Clean up temporary graph after scoring
+1. Create a temporary named graph: `<eval:{uuid4}>` (unique per evaluation run)
+2. Call the existing `riverbank ingest` flow with the fetched Markdown article,
+   routing output to the temporary named graph via `--graph <eval:uuid4>`
+3. Query triples from the temporary graph via SPARQL:
+   ```sparql
+   SELECT ?s ?p ?o ?confidence
+   WHERE {
+     GRAPH <eval:{run_id}> { ?s ?p ?o }
+     OPTIONAL { ?s pgc:confidence ?confidence }
+   }
+   ```
+4. Pass extracted triples to `Scorer.score_article()`
+5. **Always** drop the temporary graph after scoring:
+   `pg_ripple.drop_graph(conn, f'eval:{run_id}')`
+   (use try/finally to guarantee cleanup even on error)
 
 ### 2.7 Step 1.7: PoC dataset + manual validation (Day 4–5)
 
-**File:** `examples/golden/wikidata-benchmark-10.yaml`
+**File:** `examples/golden/wikidata-benchmark-poc.yaml`
+
+> **Naming convention:** The PoC file is `wikidata-benchmark-poc.yaml` (not `10`),
+> containing all 50 articles. CI uses `--sample 10` to run quickly.
 
 ```yaml
-# 50 articles (10 per domain) for initial PoC
+# 50 articles (10 per domain × 5 domains) for Phase 1 PoC
 version: 1
 dataset_name: "wikidata-benchmark-poc"
 articles:
@@ -594,13 +659,13 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -e .[eval]
-      - name: Run PoC evaluation (50 articles)
+      - name: Run PoC evaluation (10-article smoke test)
         run: |
           riverbank evaluate-wikidata \
-            --dataset examples/golden/wikidata-benchmark-10.yaml \
+            --dataset examples/golden/wikidata-benchmark-poc.yaml \
             --profile wikidata-eval-v1 \
-            --output eval/results/poc-$(date +%Y%m%d).json \
-            --sample 10  # Just 10 for PoC CI
+            --output eval/results/latest.json \
+            --sample 10  # 10 articles keeps CI under 10 min
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
@@ -609,8 +674,8 @@ jobs:
 ```
 
 **Phase 1 exit criteria:**
-- ✅ All 5 modules implemented + tested
-- ✅ 50-article PoC evaluation runs end-to-end
+- ✅ All 7 modules implemented + tested (wikipedia_client, wikidata_client, property_alignment, entity_resolution, scorer, models, cache)
+- ✅ 50-article PoC evaluation runs end-to-end (10-article CI smoke test passes)
 - ✅ Precision > 0.75, Recall > 0.50 on PoC set (expected baseline)
 - ✅ Manual review of 10 results confirms alignment logic is working
 - ✅ JSON output schema finalized
@@ -657,12 +722,50 @@ articles:
   - Recent edits (article maintained by active editors)
 - Manually review first 5 per domain to ensure quality
 
+**Dataset curation SPARQL** (run once; output drives `wikidata-benchmark-1k.yaml`):
+```sparql
+# Example: biography_historical — 200 entities
+SELECT DISTINCT ?item ?itemLabel ?article ?statementCount
+WHERE {
+  # Instance of: human
+  ?item wdt:P31 wd:Q5 .
+  
+  # Has English Wikipedia sitelink
+  ?article schema:about ?item ;
+    schema:isPartOf <https://en.wikipedia.org/> .
+  
+  # Has birth date (historical = born before 1970)
+  ?item wdt:P569 ?born .
+  FILTER(YEAR(?born) < 1970)
+  
+  # Count statements to ensure data richness
+  {
+    SELECT ?item (COUNT(*) AS ?statementCount)
+    WHERE { ?item ?p ?o . FILTER(STRSTARTS(STR(?p), STR(wdt:))) }
+    GROUP BY ?item
+    HAVING(COUNT(*) >= 20)
+  }
+  
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }
+}
+ORDER BY DESC(?statementCount)
+LIMIT 250  # Over-select; manually prune to 200
+```
+Adapt the `wdt:P31` / `FILTER` clause for each domain (org, geo, works, etc.).
+
 ### 3.3 Step 2.3: Optimize entity resolution for scale
 
-- Cache intermediate results (Wikidata item fetches)
-- Implement batch SPARQL queries for 100 articles at a time
-- Add progress bar for long-running evaluations
-- Implement `--parallel N` to evaluate N articles concurrently
+- Cache intermediate results (Wikidata item fetches) in `ResolutionCache`
+- Implement batch SPARQL queries (up to 100 Q-ids per VALUES clause) to minimize
+  round-trips to query.wikidata.org
+- Add `rich` progress bar for long-running evaluations
+- Implement `--parallel N` using `asyncio.gather` over coroutines:
+  - Wikipedia fetch and ingest pipeline: `asyncio` with `aiohttp`
+  - Wikidata SPARQL: `asyncio` with `aiohttp` (same session, connection pooling)
+  - Scoring: CPU-bound but fast; run synchronously per article
+  - Default `N=8`; reduce to `N=4` in CI to avoid Wikidata rate limits
+- Wikidata rate limit: max ~200 req/sec; with N=8 and ~3 SPARQL queries/article,
+  peak rate is ~24 req/sec — well within limit
 
 ### 3.4 Step 2.4: Full evaluation run + reporting
 
@@ -792,12 +895,17 @@ import json
 import sys
 from pathlib import Path
 
-THRESHOLDS = {
+# Metrics where HIGHER is better (must be >= threshold)
+MIN_THRESHOLDS = {
     "precision": 0.85,
     "recall": 0.60,
     "f1": 0.70,
     "confidence_calibration_pearson_r": 0.80,
     "novel_discovery_rate": 0.50,
+}
+
+# Metrics where LOWER is better (must be <= threshold)
+MAX_THRESHOLDS = {
     "false_positive_rate": 0.10,
 }
 
@@ -808,7 +916,7 @@ def check_thresholds(results_json: Path) -> bool:
     agg = results["aggregate"]
     passed = True
     
-    for metric, threshold in THRESHOLDS.items():
+    for metric, threshold in MIN_THRESHOLDS.items():
         actual = agg.get(metric)
         if actual is None:
             print(f"❌ Missing metric: {metric}")
@@ -818,6 +926,18 @@ def check_thresholds(results_json: Path) -> bool:
             passed = False
         else:
             print(f"✅ {metric}: {actual:.3f} >= {threshold} (PASS)")
+    
+    for metric, threshold in MAX_THRESHOLDS.items():
+        actual = agg.get(metric)
+        if actual is None:
+            print(f"❌ Missing metric: {metric}")
+            passed = False
+        elif actual > threshold:
+            # BUG GUARD: lower FPR is better — fail if above threshold
+            print(f"❌ {metric}: {actual:.3f} > {threshold} (FAIL)")
+            passed = False
+        else:
+            print(f"✅ {metric}: {actual:.3f} <= {threshold} (PASS)")
     
     return passed
 
@@ -923,11 +1043,15 @@ jobs:
       
       - name: Run full evaluation
         run: |
+          # Note: shell date expansion works in 'run' blocks (not in 'name:' field)
+          RUN_TIMESTAMP=$(date +%Y%m%d-%H%M%S)
           riverbank evaluate-wikidata \
             --dataset eval/wikidata-benchmark-1k.yaml \
             --profile wikidata-eval-v1 \
-            --output eval/results/$(date +%Y%m%d-%H%M%S).json \
-            --parallel 4  # Reduced for GitHub Actions
+            --output eval/results/${RUN_TIMESTAMP}.json \
+            --parallel 4  # Reduced for GitHub Actions (vs 8 local)
+          # Also write to latest.json for threshold check and subsequent steps
+          cp eval/results/${RUN_TIMESTAMP}.json eval/results/latest.json
         timeout-minutes: 120  # 2 hours
       
       - name: Check thresholds
@@ -942,7 +1066,9 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: wikidata-eval-results-$(date +%Y%m%d)
+          # GitHub Actions does NOT expand shell commands in 'name:' field.
+          # Use env vars set in a prior step, or a static name.
+          name: wikidata-eval-results
           path: eval/results/
           retention-days: 30
       
@@ -1048,25 +1174,49 @@ def analyze_failures(results_json: Path):
     with open(results_json) as f:
         results = json.load(f)
     
-    by_property = defaultdict(lambda: {"fp": 0, "fn": 0, "tp": 0})
+    by_property: dict[str, dict] = defaultdict(lambda: {"fp": 0, "fn": 0, "tp": 0})
+    false_positives: list[dict] = []  # For novel discovery sampling
+    false_negatives: list[dict] = []  # For prompt improvement
     
+    # article_results contains per-article triple_matches from the scorer
     for article in results["article_results"]:
-        # Aggregate per-property metrics
-        # FN: Wikidata has it, riverbank doesn't
-        # FP: Riverbank has it, Wikidata doesn't
-        pass
+        for match in article.get("triple_matches", []):
+            pid = match.get("wikidata_property_id", "unknown")
+            
+            if match["match_type"] == "exact":
+                by_property[pid]["tp"] += 1
+            elif match["match_type"] == "no_match" and match.get("source") == "riverbank":
+                # Riverbank extracted it; Wikidata doesn't have it → FP or novel
+                by_property[pid]["fp"] += 1
+                false_positives.append({"article": article["article_title"], "triple": match["riverbank_triple"]})
+            elif match["match_type"] == "no_match" and match.get("source") == "wikidata":
+                # Wikidata has it; riverbank missed it → FN
+                by_property[pid]["fn"] += 1
+                false_negatives.append({"article": article["article_title"], "statement": match["wikidata_statement"]})
     
     # Identify properties with recall < 0.5
     weak_properties = [
         (pid, metrics)
         for pid, metrics in by_property.items()
-        if metrics["fn"] / (metrics["tp"] + metrics["fn"]) > 0.5
+        if (metrics["tp"] + metrics["fn"]) > 0
+        and metrics["tp"] / (metrics["tp"] + metrics["fn"]) < 0.5
     ]
     
     print("Properties with recall < 50%:")
     for pid, metrics in sorted(weak_properties, key=lambda x: x[1]["fn"], reverse=True):
         recall = metrics["tp"] / (metrics["tp"] + metrics["fn"])
-        print(f"  {pid}: {recall:.1%} (missing {metrics['fn']} statements)")
+        print(f"  {pid}: {recall:.1%} ({metrics['fn']} missed statements)")
+    
+    # Sample FPs for novel discovery annotation
+    import random
+    sample_size = min(200, len(false_positives))
+    sample = random.sample(false_positives, sample_size)
+    sample_path = results_json.parent / "novel_discovery_sample.json"
+    with open(sample_path, "w") as f:
+        json.dump(sample, f, indent=2)
+    print(f"\nNovel discovery sample ({sample_size} triples) → {sample_path}")
+    print(f"Total false negatives: {sum(m['fn'] for m in by_property.values())}")
+    print(f"Total unmatched riverbank triples: {len(false_positives)}")
 ```
 
 ### 5.2 Step 4.2: Novel discovery validation
@@ -1124,16 +1274,21 @@ Run on staging:
 ### 7.1 Branch strategy
 
 ```
-main
-├── v0.15.0-poc (Phase 1, 1 week)
-├── v0.15.0-beta (Phase 2, 2 weeks)
-└── v0.15.0 (Phase 3, 1 week + Phase 4 ongoing)
+feat/wikidata-eval-poc     →  PR into main after Phase 1 (PoC complete)
+feat/wikidata-eval-beta    →  PR into main after Phase 2 (full dataset)
+feat/wikidata-eval-ci      →  PR into main after Phase 3 (CI + threshold checks)
 ```
+
+Each PR requires:
+- All unit tests pass (`pytest tests/eval/`)
+- Phase exit criteria met (see §7.2)
+- Manual sign-off on evaluation output sample
 
 ### 7.2 Acceptance criteria
 
-**Phase 1:**
-- [ ] 5 modules complete + unit tested
+**Phase 1 acceptance:**
+- [ ] 7 modules complete + unit tested (wikipedia_client, wikidata_client,
+  property_alignment, entity_resolution, scorer, models, cache)
 - [ ] 50-article PoC runs end-to-end
 - [ ] Manual validation of 10 results
 - [ ] PR with full test coverage
@@ -1167,19 +1322,26 @@ Create `docs/evaluation/wikidata-framework.md`:
 
 ## 8. Dependencies Summary
 
-**New packages (add to `pyproject.toml`):**
+**New packages (add to `pyproject.toml` under `[eval]` extra):**
 ```
-requests>=2.31.0
-aiohttp>=3.9.0
-rapidfuzz>=3.0.0
-numpy>=1.24.0
-matplotlib>=3.7.0  # For calibration curves
+requests>=2.31.0        # MediaWiki API + Wikidata SPARQL (sync, for simple calls)
+aiohttp>=3.9.0          # Async HTTP for parallel Wikipedia/Wikidata batches
+html2text>=2024.2.26    # Wikipedia HTML → Markdown conversion
+rapidfuzz>=3.0.0        # Fuzzy string matching for entity resolution
+numpy>=1.24.0           # Pearson ρ, calibration buckets
+matplotlib>=3.7.0       # Calibration curve PNG output
+rich>=13.0.0            # Progress bars for batch evaluation
 ```
 
-**Existing packages we'll use:**
+**Existing packages (no new deps needed):**
 ```
-rdflib>=7.0.0  # Already in riverbank
-pydantic>=2.0.0  # Already in riverbank
+rdflib>=7.0.0           # Already in riverbank
+pydantic>=2.0.0         # Already in riverbank
+```
+
+**NOT required (previously listed by mistake):**
+```
+scikit-learn            # numpy.corrcoef covers all needed statistics
 ```
 
 ---
