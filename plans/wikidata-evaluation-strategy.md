@@ -373,6 +373,53 @@ WHERE {
 }
 ```
 
+### 5.6 Article sourcing strategy (hybrid caching)
+
+The `riverbank evaluate-wikidata --article <title|url>` command supports both
+pre-downloaded benchmark articles and on-demand Wikipedia fetches, using a
+hybrid caching strategy:
+
+**Resolution order:**
+1. Check local cache at `.riverbank/article_cache/<normalized_title>.md`
+2. If found, use cached version (fast, offline, reproducible)
+3. If not found, fetch from Wikipedia API via MediaWiki API
+4. Cache fetched article for future use
+5. Run full evaluation pipeline
+
+**Article lookup modes:**
+- `--article "Marie Curie"` — by Wikipedia title (case-insensitive)
+- `--article "https://en.wikipedia.org/wiki/Marie_Curie"` — by URL
+- `--article "Q7186"` — by Wikidata Q-id (fetches article via sitelink)
+
+**Caching behavior:**
+- Articles cached at `.riverbank/article_cache/` (configurable via `--cache-dir`)
+- Each cached article stores: markdown content, fetch timestamp, Wikipedia URL
+- Default TTL: 30 days (configurable via `--cache-ttl`)
+- `--no-cache` flag bypasses cache; always fetches fresh from Wikipedia
+- `--cache-only` flag errors if article not in cache (for offline operation)
+
+**For reproducible benchmarking:**
+- Batch mode (`--dataset eval/wikidata-benchmark-1k/`) uses 1,000 pre-downloaded
+  articles committed to the repo (or downloaded once and cached).
+- Cache is versioned with dataset version tag; `riverbank cache list --dataset`
+  shows cache staleness.
+- CI evaluation runs with `--cache-dir eval/wikidata-benchmark-1k/.article_cache`
+  to ensure reproducibility.
+
+**Cache management CLI:**
+```bash
+riverbank cache clear wikidata-articles              # Remove all cached articles
+riverbank cache list wikidata-articles               # Show cached articles, age
+riverbank cache prune --max-age 30d                  # Remove articles older than 30 days
+riverbank cache stats wikidata-articles              # Cache size, hit rate, etc.
+```
+
+**Rationale:** Hybrid caching gives the best of both worlds:
+- **Batch reproducibility:** Pre-downloaded benchmark always evaluates the same articles
+- **Ad-hoc flexibility:** Users can test any Wikipedia article without local setup
+- **Offline support:** Once cached, articles are available without internet
+- **Offline CI:** Pre-download articles before running; use `--cache-only` in CI
+
 ---
 
 ## 6. Metrics and thresholds

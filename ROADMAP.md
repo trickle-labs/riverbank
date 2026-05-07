@@ -95,8 +95,11 @@ extraction quality by comparing compiled triples against Wikidata's 1.65 billion
 human-curated statements sourced from the same Wikipedia articles.
 
 - [ ] `riverbank evaluate-wikidata --article <title|url>` — evaluate a single
-  Wikipedia article on demand: fetches the article, fetches the corresponding
-  Wikidata item, runs the full pipeline, prints a precision/recall summary
+  Wikipedia article on demand with hybrid caching: checks local cache first
+  (`.riverbank/article_cache/`), falls back to Wikipedia API if not cached,
+  fetches corresponding Wikidata item, runs full pipeline, prints
+  precision/recall summary. Supports article title, Wikipedia URL, or Wikidata
+  Q-id. Use `--no-cache` to bypass local cache; `--cache-only` for offline mode
 - [ ] `riverbank evaluate-wikidata --dataset <path> --profile <name>` — batch
   mode over the full benchmark dataset
 - [ ] 1,000-article benchmark dataset stratified across 7 domains: biographies
