@@ -11,6 +11,7 @@ Covers:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -21,6 +22,11 @@ import pytest
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _strip_ansi_codes(text: str) -> str:
+    """Remove ANSI color/formatting codes from text."""
+    return re.sub(r'\x1b\[[0-9;]*m', '', text)
 
 
 def _make_raw_triple(
@@ -379,8 +385,9 @@ class TestPromoteTentativeCommand:
 
         runner = CliRunner()
         result = runner.invoke(app, ["promote-tentative", "--help"])
-        assert "dry-run" in result.output.lower()
-        assert "threshold" in result.output.lower()
+        clean_output = _strip_ansi_codes(result.output).lower()
+        assert "dry-run" in clean_output
+        assert "threshold" in clean_output
 
     def test_promote_tentative_dry_run_requires_no_db(self):
         """With a bad DSN, the command must fail gracefully."""
@@ -469,5 +476,6 @@ class TestExplainRejectionsStillPresent:
 
         runner = CliRunner()
         result = runner.invoke(app, ["explain-rejections", "--help"])
-        assert "--since" in result.output
-        assert "profile" in result.output.lower()
+        clean_output = _strip_ansi_codes(result.output)
+        assert "--since" in clean_output
+        assert "profile" in clean_output.lower()

@@ -14,6 +14,7 @@ Covers:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -24,6 +25,11 @@ import pytest
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
+
+
+def _strip_ansi_codes(text: str) -> str:
+    """Remove ANSI color/formatting codes from text."""
+    return re.sub(r'\x1b\[[0-9;]*m', '', text)
 
 
 def _make_triple(subject: str, predicate: str, object_value: str, confidence: float = 0.9) -> Any:
@@ -683,7 +689,8 @@ class TestQueryIncludeTentative:
         runner = CliRunner()
         # Help text should mention --include-tentative
         result = runner.invoke(app, ["query", "--help"])
-        assert "include-tentative" in result.output.lower()
+        clean_output = _strip_ansi_codes(result.output).lower()
+        assert "include-tentative" in clean_output
 
     def test_include_tentative_in_docstring(self):
         """The query function docstring must mention tentative."""

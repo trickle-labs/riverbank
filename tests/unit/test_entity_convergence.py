@@ -4,7 +4,7 @@ Covers:
 - PredicateNormalizer: _label_from_iri, _cosine_similarity, clustering, NormalizationResult
 - EntityLinker: registry load, synonym ring expansion, build_known_entities_block
 - EntityRecord / EntityRegistry: merge, top_k_by_similarity
-- ContradictionDetector: functional predicate detection, ConflictRecord, ContradictionResult
+- ContradictionDetector: functional predicate detection, ConflictRecord, ConflictationResult
 - SchemaInducer: collect_statistics stub, propose (no LLM), _build_prompt
 - TentativeGraphCleaner: _parse_duration, _parse_iso, gc (dry-run)
 - BenchmarkRunner: _normalise, _fuzzy_match, _triple_key, _keys_match, load_ground_truth, run
@@ -13,6 +13,7 @@ Covers:
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,11 @@ import yaml
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _strip_ansi_codes(text: str) -> str:
+    """Remove ANSI color/formatting codes from text."""
+    return re.sub(r'\x1b\[[0-9;]*m', '', text)
 
 
 def _make_mock_triple(subject, predicate, object_value, confidence=0.8, source_iri="file:///doc.md"):
@@ -875,46 +881,52 @@ class TestV130CLICommandsRegistered:
         from riverbank.cli import app
         runner = CliRunner()
         result = runner.invoke(app, ["entities", "merge", "--help"])
-        assert "--entity" in result.output
-        assert "--into" in result.output
+        clean_output = _strip_ansi_codes(result.output)
+        assert "--entity" in clean_output
+        assert "--into" in clean_output
 
     def test_normalize_predicates_help(self):
         from typer.testing import CliRunner
         from riverbank.cli import app
         runner = CliRunner()
         result = runner.invoke(app, ["normalize-predicates", "--help"])
-        assert "threshold" in result.output.lower()
-        assert "dry-run" in result.output.lower()
+        clean_output = _strip_ansi_codes(result.output).lower()
+        assert "threshold" in clean_output
+        assert "dry-run" in clean_output
 
     def test_detect_contradictions_help(self):
         from typer.testing import CliRunner
         from riverbank.cli import app
         runner = CliRunner()
         result = runner.invoke(app, ["detect-contradictions", "--help"])
-        assert "profile" in result.output.lower()
+        clean_output = _strip_ansi_codes(result.output).lower()
+        assert "profile" in clean_output
 
     def test_gc_tentative_help(self):
         from typer.testing import CliRunner
         from riverbank.cli import app
         runner = CliRunner()
         result = runner.invoke(app, ["gc-tentative", "--help"])
-        assert "older-than" in result.output.lower()
-        assert "dry-run" in result.output.lower()
+        clean_output = _strip_ansi_codes(result.output).lower()
+        assert "older-than" in clean_output
+        assert "dry-run" in clean_output
 
     def test_benchmark_help(self):
         from typer.testing import CliRunner
         from riverbank.cli import app
         runner = CliRunner()
         result = runner.invoke(app, ["benchmark", "--help"])
-        assert "golden" in result.output.lower()
-        assert "fail-below-f1" in result.output.lower()
+        clean_output = _strip_ansi_codes(result.output).lower()
+        assert "golden" in clean_output
+        assert "fail-below-f1" in clean_output
 
     def test_induce_schema_help(self):
         from typer.testing import CliRunner
         from riverbank.cli import app
         runner = CliRunner()
         result = runner.invoke(app, ["induce-schema", "--help"])
-        assert "output" in result.output.lower()
+        clean_output = _strip_ansi_codes(result.output).lower()
+        assert "output" in clean_output
 
 
 # ===========================================================================
