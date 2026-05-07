@@ -27,8 +27,8 @@ technical document section as RDF triples.
 For each claim provide:
 - subject: prefixed IRI for named entities (e.g. ex:Ariadne, ex:DrElenaVasquez)
 - predicate: prefixed camelCase IRI (e.g. ex:createdBy, ex:hasState, ex:provides)
-- object_value: prefixed IRI for named entities; typed literal for numbers/dates
-  (e.g. "2023"^^xsd:integer); plain literal only for short descriptive values
+- object_value: prefixed IRI for named entities; plain literal for everything else
+  (e.g. "2023", "Apache 2.0", "Python library")
 - confidence: float 0.0–1.0 reflecting how clearly the text supports the claim
 - evidence: exact character offsets (char_start, char_end) and a verbatim
   excerpt copied from the source text
