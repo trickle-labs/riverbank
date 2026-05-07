@@ -4000,3 +4000,154 @@ def evaluate_wikidata(
     rprint("[green bold]evaluation complete[/green bold]")
 
 
+@app.command("recall-gap-analysis")
+def recall_gap_analysis(
+    results: str = typer.Option(..., "--results", "-r", help="Path to a DatasetResult JSON file."),
+    threshold: float = typer.Option(0.50, "--threshold", "-t", help="Recall threshold below which a property is flagged."),
+    output: str = typer.Option("", "--output", "-o", help="Path for the JSON output report. Defaults to eval/results/recall-gaps.json."),
+) -> None:
+    """Identify Wikidata properties with recall below --threshold and generate extraction examples.
+
+    Reads a DatasetResult JSON file produced by ``riverbank evaluate-wikidata``
+    and outputs a recall gap report with targeted extraction examples for each
+    low-recall property.
+
+    Examples::
+
+        riverbank recall-gap-analysis --results eval/results/latest.json
+
+        riverbank recall-gap-analysis --results eval/results/latest.json \\
+            --threshold 0.40 --output eval/results/recall-gaps.json
+    """
+    import time  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from riverbank.eval.recall_gap import RecallGapAnalyzer  # noqa: PLC0415
+
+    results_path = Path(results)
+    if not results_path.exists():
+        rprint(f"[red]Error:[/red] results file not found: {results_path}")
+        raise typer.Exit(1)
+
+    output_path = Path(output) if output else results_path.parent / "recall-gaps.json"
+
+    rprint(
+        f"[bold]riverbank recall-gap-analysis[/bold]  "
+        f"results={results_path.name!r}  threshold={threshold}"
+    )
+
+    start = time.time()
+    analyzer = RecallGapAnalyzer(threshold=threshold)
+    report = analyzer.analyze_json(results_path)
+    analyzer.to_json(report, output_path)
+    elapsed = time.time() - start
+
+    # Summary table
+    summary = Table(
+        title="Recall gap analysis",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    summary.add_column("Property")
+    summary.add_column("Label")
+    summary.add_column("Recall", justify="right")
+    summary.add_column("Count", justify="right")
+    summary.add_column("Examples", justify="right")
+
+    for gap in sorted(report.gaps, key=lambda g: g.recall)[:20]:
+        recall_str = f"[red]{gap.recall:.3f}[/red]" if gap.recall < 0.25 else f"[yellow]{gap.recall:.3f}[/yellow]"
+        summary.add_row(
+            gap.property_id,
+            gap.property_label or "—",
+            recall_str,
+            str(gap.total_count),
+            str(len(gap.extraction_examples)),
+        )
+
+    rprint(summary)
+    rprint(
+        f"\n[dim]Properties below threshold: {len(report.gaps)}  "
+        f"Total examples generated: {report.total_extraction_examples}  "
+        f"({elapsed:.1f}s)[/dim]"
+    )
+    rprint(f"[dim]Report written to {output_path}[/dim]")
+    rprint("[green bold]recall gap analysis complete[/green bold]")
+
+
+@app.command("tune-extraction-prompts")
+def tune_extraction_prompts(
+    results: str = typer.Option(..., "--results", "-r", help="Path to a DatasetResult JSON file."),
+    output: str = typer.Option("", "--output", "-o", help="Path for the JSON tuning report. Defaults to eval/results/tuning-report.json."),
+    fp_min_frequency: int = typer.Option(2, "--fp-min", help="Minimum FP frequency to report a pattern."),
+    fn_min_frequency: int = typer.Option(2, "--fn-min", help="Minimum FN frequency to flag a property."),
+) -> None:
+    """Analyse evaluation failures and generate targeted extraction prompt patches.
+
+    Reads a DatasetResult JSON report and identifies:
+
+    - **False-positive patterns** — predicates systematically over-extracted
+    - **False-negative patterns** — Wikidata properties consistently missed
+    - **Prompt patches** — concrete instructions and few-shot examples to add
+
+    Examples::
+
+        riverbank tune-extraction-prompts --results eval/results/latest.json
+
+        riverbank tune-extraction-prompts --results eval/results/latest.json \\
+            --output eval/results/tuning-report.json --fn-min 3
+    """
+    import time  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from riverbank.eval.prompt_tuning import PromptTuner  # noqa: PLC0415
+
+    results_path = Path(results)
+    if not results_path.exists():
+        rprint(f"[red]Error:[/red] results file not found: {results_path}")
+        raise typer.Exit(1)
+
+    output_path = Path(output) if output else results_path.parent / "tuning-report.json"
+
+    rprint(
+        f"[bold]riverbank tune-extraction-prompts[/bold]  "
+        f"results={results_path.name!r}"
+    )
+
+    start = time.time()
+    tuner = PromptTuner(fp_min_frequency=fp_min_frequency, fn_min_frequency=fn_min_frequency)
+    report = tuner.analyze_json(results_path)
+    tuner.to_json(report, output_path)
+    elapsed = time.time() - start
+
+    # FP patterns table
+    if report.false_positive_patterns:
+        fp_table = Table(title="False-positive patterns", show_header=True, header_style="bold red")
+        fp_table.add_column("Predicate pattern")
+        fp_table.add_column("Frequency", justify="right")
+        fp_table.add_column("Suggested fix")
+        for p in report.false_positive_patterns[:10]:
+            fp_table.add_row(p.predicate_pattern, str(p.frequency), p.suggested_fix[:80] + "…" if len(p.suggested_fix) > 80 else p.suggested_fix)
+        rprint(fp_table)
+
+    # FN patterns table
+    if report.false_negative_patterns:
+        fn_table = Table(title="False-negative patterns (missed properties)", show_header=True, header_style="bold yellow")
+        fn_table.add_column("Property")
+        fn_table.add_column("Label")
+        fn_table.add_column("Frequency", justify="right")
+        fn_table.add_column("Est. recall lift", justify="right")
+        for p in report.false_negative_patterns[:10]:
+            fn_table.add_row(p.property_id, p.property_label, str(p.frequency), f"+{p.estimated_recall_lift:.1f}%")
+        rprint(fn_table)
+
+    # Summary
+    rprint(
+        f"\n[dim]FP patterns: {len(report.false_positive_patterns)}  "
+        f"FN patterns: {len(report.false_negative_patterns)}  "
+        f"Patches generated: {len(report.prompt_patches)}  "
+        f"Est. recall lift: {report.estimated_recall_lift:.1%}  "
+        f"({elapsed:.1f}s)[/dim]"
+    )
+    rprint(f"[dim]Report written to {output_path}[/dim]")
+    rprint("[green bold]prompt tuning analysis complete[/green bold]")
+

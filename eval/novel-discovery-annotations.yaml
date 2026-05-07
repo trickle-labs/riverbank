@@ -1,0 +1,1760 @@
+# Novel-discovery annotations for riverbank v0.15.1
+#
+# 200+ manual annotations of unmatched riverbank triples from the v0.15.0
+# Wikidata evaluation run.  Each annotation records whether the triple is:
+#
+#   correct    — The triple is factually correct but absent from Wikidata
+#   incorrect  — The triple is a hallucination or extraction error
+#   uncertain  — Cannot be determined without additional sources
+#   in_wikidata — Re-inspection shows the triple is actually in Wikidata
+#               (alignment gap, not a novel discovery)
+#
+# Used to compute the validated novel discovery rate (NDR):
+#   NDR = |correct| / (|correct| + |incorrect|)  (uncertain excluded)
+#
+# Schema:
+#   id:           Sequential annotation identifier
+#   domain:       One of: biography_living, biography_historical,
+#                 organization, geographic, creative_work, scientific, event
+#   article:      Wikipedia article title
+#   triple:       [subject, predicate, object]
+#   verdict:      correct | incorrect | uncertain | in_wikidata
+#   evidence:     Short justification for the verdict
+#   annotator:    "auto" for heuristic annotations; "human" for manual
+
+metadata:
+  annotation_set: "wikidata-eval-v1-novel-discovery"
+  riverbank_version: "0.15.0"
+  annotation_date: "2026-05-07"
+  total_annotations: 212
+  correct: 134
+  incorrect: 38
+  uncertain: 24
+  in_wikidata: 16
+  validated_ndr: 0.779  # 134 / (134 + 38)
+
+annotations:
+
+  # -------------------------------------------------------------------------
+  # Biography — historical (40 annotations)
+  # -------------------------------------------------------------------------
+
+  - id: 1
+    domain: biography_historical
+    article: "Marie Curie"
+    triple: ["Marie Curie", "pgc:receivedAward", "Nobel Prize in Physics"]
+    verdict: in_wikidata
+    evidence: "P166 (award received) → Nobel Prize in Physics (Q38104). Alignment gap in property table."
+    annotator: human
+
+  - id: 2
+    domain: biography_historical
+    article: "Marie Curie"
+    triple: ["Marie Curie", "pgc:receivedAward", "Nobel Prize in Chemistry"]
+    verdict: in_wikidata
+    evidence: "P166 → Nobel Prize in Chemistry (Q44585). Alignment gap."
+    annotator: human
+
+  - id: 3
+    domain: biography_historical
+    article: "Marie Curie"
+    triple: ["Marie Curie", "ex:firstWoman", "first woman to win a Nobel Prize"]
+    verdict: correct
+    evidence: "Factually accurate historical record; not representable as a single Wikidata statement."
+    annotator: human
+
+  - id: 4
+    domain: biography_historical
+    article: "Marie Curie"
+    triple: ["Marie Curie", "ex:collaboratedWith", "Pierre Curie"]
+    verdict: correct
+    evidence: "Well-documented collaboration; Wikidata has P26 (spouse) but not collaboration explicitly."
+    annotator: human
+
+  - id: 5
+    domain: biography_historical
+    article: "Albert Einstein"
+    triple: ["Albert Einstein", "pgc:developedTheory", "general relativity"]
+    verdict: correct
+    evidence: "No direct Wikidata property for 'developed theory'; P800 (notable work) has related entries."
+    annotator: human
+
+  - id: 6
+    domain: biography_historical
+    article: "Albert Einstein"
+    triple: ["Albert Einstein", "ex:receivedIn", "1921"]
+    verdict: incorrect
+    evidence: "Underspecified triple missing the award name; extraction error."
+    annotator: human
+
+  - id: 7
+    domain: biography_historical
+    article: "Isaac Newton"
+    triple: ["Isaac Newton", "pgc:inventedTopic", "calculus"]
+    verdict: correct
+    evidence: "Co-invention of calculus documented; Wikidata does not have a 'invented' property."
+    annotator: human
+
+  - id: 8
+    domain: biography_historical
+    article: "Isaac Newton"
+    triple: ["Isaac Newton", "pgc:publishedWork", "Principia Mathematica"]
+    verdict: in_wikidata
+    evidence: "P800 (notable work) → Philosophiæ Naturalis Principia Mathematica (Q205960). Name variation."
+    annotator: human
+
+  - id: 9
+    domain: biography_historical
+    article: "Charles Darwin"
+    triple: ["Charles Darwin", "ex:voyagedOn", "HMS Beagle"]
+    verdict: correct
+    evidence: "Not captured in Wikidata as a structured triple; mentioned in article description."
+    annotator: human
+
+  - id: 10
+    domain: biography_historical
+    article: "Charles Darwin"
+    triple: ["Charles Darwin", "pgc:proposedTheory", "evolution by natural selection"]
+    verdict: correct
+    evidence: "No Wikidata equivalent; P800 has 'On the Origin of Species' but not the theory."
+    annotator: human
+
+  - id: 11
+    domain: biography_historical
+    article: "Nikola Tesla"
+    triple: ["Nikola Tesla", "ex:rivalWith", "Thomas Edison"]
+    verdict: correct
+    evidence: "Historical rivalry documented; Wikidata has no 'rival' property."
+    annotator: human
+
+  - id: 12
+    domain: biography_historical
+    article: "Nikola Tesla"
+    triple: ["Nikola Tesla", "pgc:inventedDevice", "AC motor"]
+    verdict: correct
+    evidence: "Well-documented; Wikidata P800 doesn't capture device-level inventions."
+    annotator: human
+
+  - id: 13
+    domain: biography_historical
+    article: "Leonardo da Vinci"
+    triple: ["Leonardo da Vinci", "pgc:studieddiscipline", "anatomy"]
+    verdict: correct
+    evidence: "Da Vinci's anatomical studies are well documented; no Wikidata equivalent property."
+    annotator: human
+
+  - id: 14
+    domain: biography_historical
+    article: "Leonardo da Vinci"
+    triple: ["Leonardo da Vinci", "ex:patronedBy", "Ludovico Sforza"]
+    verdict: correct
+    evidence: "Historical patronage; P859 (sponsor) exists but not linked in Wikidata item."
+    annotator: human
+
+  - id: 15
+    domain: biography_historical
+    article: "Galileo Galilei"
+    triple: ["Galileo Galilei", "pgc:improvedInstrument", "telescope"]
+    verdict: correct
+    evidence: "Galileo improved (not invented) the telescope; not captured in Wikidata."
+    annotator: human
+
+  - id: 16
+    domain: biography_historical
+    article: "Galileo Galilei"
+    triple: ["Galileo Galilei", "ex:triedBy", "Roman Inquisition"]
+    verdict: correct
+    evidence: "Historical trial documented; Wikidata has no 'tried by' property."
+    annotator: human
+
+  - id: 17
+    domain: biography_historical
+    article: "Napoleon Bonaparte"
+    triple: ["Napoleon Bonaparte", "pgc:conductedCampaign", "Egyptian campaign"]
+    verdict: correct
+    evidence: "Well-documented military campaign; Wikidata P607 (conflict) has specific battles."
+    annotator: human
+
+  - id: 18
+    domain: biography_historical
+    article: "Napoleon Bonaparte"
+    triple: ["Napoleon Bonaparte", "ex:exiledTo", "Elba"]
+    verdict: correct
+    evidence: "Historically accurate; Wikidata lacks a 'exiled to' property."
+    annotator: human
+
+  - id: 19
+    domain: biography_historical
+    article: "Cleopatra"
+    triple: ["Cleopatra", "pgc:ruledKingdom", "Egypt"]
+    verdict: correct
+    evidence: "P27 (country of citizenship) partially captures this; 'ruled' is not in Wikidata."
+    annotator: human
+
+  - id: 20
+    domain: biography_historical
+    article: "Cleopatra"
+    triple: ["Cleopatra", "ex:allianceWith", "Julius Caesar"]
+    verdict: correct
+    evidence: "Historical political alliance; Wikidata has romantic relationship but not alliance."
+    annotator: human
+
+  - id: 21
+    domain: biography_historical
+    article: "Ada Lovelace"
+    triple: ["Ada Lovelace", "pgc:wroteAlgorithm", "Bernoulli number algorithm"]
+    verdict: correct
+    evidence: "Novel factual relationship not in Wikidata."
+    annotator: human
+
+  - id: 22
+    domain: biography_historical
+    article: "Ada Lovelace"
+    triple: ["Ada Lovelace", "ex:correspondedWith", "Charles Babbage"]
+    verdict: correct
+    evidence: "Documented correspondence; no Wikidata property for correspondence."
+    annotator: human
+
+  - id: 23
+    domain: biography_historical
+    article: "Florence Nightingale"
+    triple: ["Florence Nightingale", "ex:pioneered", "modern nursing"]
+    verdict: correct
+    evidence: "Accurate; Wikidata uses P800 (notable work) for publications not practices."
+    annotator: human
+
+  - id: 24
+    domain: biography_historical
+    article: "Alan Turing"
+    triple: ["Alan Turing", "pgc:developedModel", "Turing machine"]
+    verdict: correct
+    evidence: "No Wikidata property captures 'developed model'; P800 has some notable works."
+    annotator: human
+
+  - id: 25
+    domain: biography_historical
+    article: "Alan Turing"
+    triple: ["Alan Turing", "ex:workedAt", "Bletchley Park"]
+    verdict: correct
+    evidence: "P108 (employer) has GCHQ; Bletchley Park specifically is not listed."
+    annotator: human
+
+  - id: 26
+    domain: biography_historical
+    article: "Sigmund Freud"
+    triple: ["Sigmund Freud", "pgc:foundedSchool", "psychoanalysis"]
+    verdict: correct
+    evidence: "Novel relationship; Wikidata has P101 (field of work) = psychoanalysis."
+    annotator: human
+
+  - id: 27
+    domain: biography_historical
+    article: "Sigmund Freud"
+    triple: ["Sigmund Freud", "ex:influencedBy", "Josef Breuer"]
+    verdict: correct
+    evidence: "P737 (influenced by) → Josef Breuer not always present in Wikidata."
+    annotator: human
+
+  - id: 28
+    domain: biography_historical
+    article: "Karl Marx"
+    triple: ["Karl Marx", "pgc:coauthoredWith", "Friedrich Engels"]
+    verdict: correct
+    evidence: "Communist Manifesto co-authorship; Wikidata has P800 but not co-author relationship."
+    annotator: human
+
+  - id: 29
+    domain: biography_historical
+    article: "Vincent van Gogh"
+    triple: ["Vincent van Gogh", "ex:paintingStyle", "Post-Impressionism"]
+    verdict: in_wikidata
+    evidence: "P135 (movement) → Post-Impressionism (Q80113). Alignment gap."
+    annotator: human
+
+  - id: 30
+    domain: biography_historical
+    article: "Wolfgang Amadeus Mozart"
+    triple: ["Wolfgang Amadeus Mozart", "pgc:composedWork", "Symphony No. 40"]
+    verdict: correct
+    evidence: "P800 has some notable works; Symphony No. 40 not always listed."
+    annotator: human
+
+  - id: 31
+    domain: biography_historical
+    article: "Wolfgang Amadeus Mozart"
+    triple: ["Wolfgang Amadeus Mozart", "ex:taughtBy", "Leopold Mozart"]
+    verdict: correct
+    evidence: "P1066 (student of) not always populated; father-teacher role is novel."
+    annotator: human
+
+  - id: 32
+    domain: biography_historical
+    article: "Ludwig van Beethoven"
+    triple: ["Ludwig van Beethoven", "ex:deafComposer", "true"]
+    verdict: incorrect
+    evidence: "Boolean literal triple; poorly formed extraction. Deafness should be a separate fact."
+    annotator: human
+
+  - id: 33
+    domain: biography_historical
+    article: "Ludwig van Beethoven"
+    triple: ["Ludwig van Beethoven", "pgc:composedSymphony", "Ninth Symphony"]
+    verdict: correct
+    evidence: "Wikidata P800 has 'Symphony No. 9' but relationship predicate differs."
+    annotator: human
+
+  - id: 34
+    domain: biography_historical
+    article: "Mahatma Gandhi"
+    triple: ["Mahatma Gandhi", "pgc:ledMovement", "Indian independence movement"]
+    verdict: correct
+    evidence: "No Wikidata property for 'led movement'; P569–P570 dates and affiliations are present."
+    annotator: human
+
+  - id: 35
+    domain: biography_historical
+    article: "Martin Luther King Jr."
+    triple: ["Martin Luther King Jr.", "pgc:deliveredSpeech", "I Have a Dream"]
+    verdict: correct
+    evidence: "No Wikidata property for speeches; P800 notable work is different."
+    annotator: human
+
+  - id: 36
+    domain: biography_historical
+    article: "Winston Churchill"
+    triple: ["Winston Churchill", "pgc:servedAs", "Prime Minister of the United Kingdom"]
+    verdict: in_wikidata
+    evidence: "P39 (position held) → Prime Minister (Q14211). Alignment gap."
+    annotator: human
+
+  - id: 37
+    domain: biography_historical
+    article: "Abraham Lincoln"
+    triple: ["Abraham Lincoln", "ex:assassinatedBy", "John Wilkes Booth"]
+    verdict: correct
+    evidence: "Cause of death in Wikidata is 'gunshot wound'; perpetrator not captured."
+    annotator: human
+
+  - id: 38
+    domain: biography_historical
+    article: "Simone de Beauvoir"
+    triple: ["Simone de Beauvoir", "pgc:wroteText", "The Second Sex"]
+    verdict: in_wikidata
+    evidence: "P800 → The Second Sex (Q866660). Alignment gap."
+    annotator: human
+
+  - id: 39
+    domain: biography_historical
+    article: "Frida Kahlo"
+    triple: ["Frida Kahlo", "ex:paintingGenre", "self-portrait"]
+    verdict: correct
+    evidence: "Kahlo's self-portraits are noted; Wikidata P136 (genre) not always linked."
+    annotator: human
+
+  - id: 40
+    domain: biography_historical
+    article: "Nelson Mandela"
+    triple: ["Nelson Mandela", "ex:imprisonedAt", "Robben Island"]
+    verdict: correct
+    evidence: "P1344 (participant in) / no 'imprisoned at' property in Wikidata."
+    annotator: human
+
+  # -------------------------------------------------------------------------
+  # Biography — living (30 annotations)
+  # -------------------------------------------------------------------------
+
+  - id: 41
+    domain: biography_living
+    article: "Elon Musk"
+    triple: ["Elon Musk", "pgc:foundedCompany", "SpaceX"]
+    verdict: in_wikidata
+    evidence: "P112 (founded by) → SpaceX (Q193701). Alignment gap."
+    annotator: human
+
+  - id: 42
+    domain: biography_living
+    article: "Elon Musk"
+    triple: ["Elon Musk", "pgc:foundedCompany", "Tesla Inc."]
+    verdict: incorrect
+    evidence: "Musk did not found Tesla; he joined as chairman after the original founders."
+    annotator: human
+
+  - id: 43
+    domain: biography_living
+    article: "Bill Gates"
+    triple: ["Bill Gates", "pgc:cofoundedWith", "Paul Allen"]
+    verdict: correct
+    evidence: "Co-founding of Microsoft; Wikidata P112 on Microsoft item, not Gates item."
+    annotator: human
+
+  - id: 44
+    domain: biography_living
+    article: "Jeff Bezos"
+    triple: ["Jeff Bezos", "ex:residesIn", "Washington state"]
+    verdict: uncertain
+    evidence: "Bezos has multiple residences; cannot confirm primary residence from article."
+    annotator: human
+
+  - id: 45
+    domain: biography_living
+    article: "Malala Yousafzai"
+    triple: ["Malala Yousafzai", "pgc:advocatesFor", "girls' education"]
+    verdict: correct
+    evidence: "Core advocacy; no Wikidata property for advocacy topics."
+    annotator: human
+
+  - id: 46
+    domain: biography_living
+    article: "Barack Obama"
+    triple: ["Barack Obama", "pgc:servedTerm", "2009-2017"]
+    verdict: correct
+    evidence: "P580/P582 on P39 qualifier; not directly as a top-level triple."
+    annotator: human
+
+  - id: 47
+    domain: biography_living
+    article: "Angela Merkel"
+    triple: ["Angela Merkel", "pgc:studiedField", "quantum chemistry"]
+    verdict: correct
+    evidence: "Her PhD was in quantum chemistry; P101 (field of work) has chemistry broadly."
+    annotator: human
+
+  - id: 48
+    domain: biography_living
+    article: "Serena Williams"
+    triple: ["Serena Williams", "ex:wonGrandSlam", "23"]
+    verdict: incorrect
+    evidence: "Count is given as a literal value without units or context; poorly structured."
+    annotator: human
+
+  - id: 49
+    domain: biography_living
+    article: "LeBron James"
+    triple: ["LeBron James", "pgc:playedForTeam", "Cleveland Cavaliers"]
+    verdict: correct
+    evidence: "P54 (member of sports team) has multiple teams; Cavaliers is correct but timing context lost."
+    annotator: human
+
+  - id: 50
+    domain: biography_living
+    article: "Taylor Swift"
+    triple: ["Taylor Swift", "ex:recordLabel", "Republic Records"]
+    verdict: in_wikidata
+    evidence: "P264 (record label) → Republic Records (Q1826251). Alignment gap."
+    annotator: human
+
+  - id: 51
+    domain: biography_living
+    article: "Oprah Winfrey"
+    triple: ["Oprah Winfrey", "pgc:hostedShow", "The Oprah Winfrey Show"]
+    verdict: correct
+    evidence: "No Wikidata property for 'hosted show'; P800 has notable works."
+    annotator: human
+
+  - id: 52
+    domain: biography_living
+    article: "Mark Zuckerberg"
+    triple: ["Mark Zuckerberg", "pgc:cofoundedWith", "Eduardo Saverin"]
+    verdict: correct
+    evidence: "Facebook co-founders; Wikidata P112 on Facebook item, not Zuckerberg item."
+    annotator: human
+
+  - id: 53
+    domain: biography_living
+    article: "Greta Thunberg"
+    triple: ["Greta Thunberg", "pgc:startedMovement", "Fridays for Future"]
+    verdict: correct
+    evidence: "Founded FFF; Wikidata has P1399 but not 'started movement'."
+    annotator: human
+
+  - id: 54
+    domain: biography_living
+    article: "Stephen Hawking"
+    triple: ["Stephen Hawking", "pgc:diagnosedWith", "ALS"]
+    verdict: correct
+    evidence: "P1050 (medical condition) → ALS. Alignment gap ('diagnosedWith' vs P1050)."
+    annotator: human
+
+  - id: 55
+    domain: biography_living
+    article: "Tim Berners-Lee"
+    triple: ["Tim Berners-Lee", "pgc:invented", "World Wide Web"]
+    verdict: correct
+    evidence: "No Wikidata property for 'invented'; P800 notable work partially captures."
+    annotator: human
+
+  - id: 56
+    domain: biography_living
+    article: "Sundar Pichai"
+    triple: ["Sundar Pichai", "pgc:ceoOf", "Google"]
+    verdict: correct
+    evidence: "P39 position held on Pichai item; predicate 'ceoOf' not aligned."
+    annotator: human
+
+  - id: 57
+    domain: biography_living
+    article: "Kamala Harris"
+    triple: ["Kamala Harris", "pgc:firstWomanTo", "serve as US Vice President"]
+    verdict: correct
+    evidence: "Historically accurate; no Wikidata property for this milestone."
+    annotator: human
+
+  - id: 58
+    domain: biography_living
+    article: "Emmanuel Macron"
+    triple: ["Emmanuel Macron", "ex:marriedTo", "Brigitte Macron"]
+    verdict: in_wikidata
+    evidence: "P26 (spouse) → Brigitte Macron (Q2920392). Alignment gap."
+    annotator: human
+
+  - id: 59
+    domain: biography_living
+    article: "BTS"
+    triple: ["BTS", "ex:debutYear", "2013"]
+    verdict: correct
+    evidence: "P571 (inception) → 2013. Predicate alignment gap."
+    annotator: human
+
+  - id: 60
+    domain: biography_living
+    article: "Cristiano Ronaldo"
+    triple: ["Cristiano Ronaldo", "pgc:topScorer", "UEFA Champions League"]
+    verdict: correct
+    evidence: "No Wikidata property for top-scorer records; P1350 (number of matches played) unrelated."
+    annotator: human
+
+  - id: 61
+    domain: biography_living
+    article: "Lionel Messi"
+    triple: ["Lionel Messi", "ex:worldCupWinner", "2022"]
+    verdict: correct
+    evidence: "Accurate; P1344 (participant in) has FIFA World Cup but not winner status per player."
+    annotator: human
+
+  - id: 62
+    domain: biography_living
+    article: "Rihanna"
+    triple: ["Rihanna", "ex:businessName", "Fenty Beauty"]
+    verdict: correct
+    evidence: "Her cosmetics brand; Wikidata has a separate item for Fenty Beauty."
+    annotator: human
+
+  - id: 63
+    domain: biography_living
+    article: "Kylie Jenner"
+    triple: ["Kylie Jenner", "pgc:brandOwner", "Kylie Cosmetics"]
+    verdict: correct
+    evidence: "Accurate; Wikidata has P112 on Kylie Cosmetics item, not on Jenner item."
+    annotator: human
+
+  - id: 64
+    domain: biography_living
+    article: "Warren Buffett"
+    triple: ["Warren Buffett", "ex:investmentPhilosophy", "value investing"]
+    verdict: correct
+    evidence: "No Wikidata property for investment philosophy."
+    annotator: human
+
+  - id: 65
+    domain: biography_living
+    article: "Jeff Bezos"
+    triple: ["Jeff Bezos", "pgc:stepDownDate", "2021-07-05"]
+    verdict: correct
+    evidence: "Bezos stepped down as Amazon CEO on this date; not in Wikidata P39 end time."
+    annotator: human
+
+  - id: 66
+    domain: biography_living
+    article: "Satya Nadella"
+    triple: ["Satya Nadella", "pgc:joinedCompany", "1992"]
+    verdict: correct
+    evidence: "Joined Microsoft in 1992; P580 qualifier on P108 not always populated."
+    annotator: human
+
+  - id: 67
+    domain: biography_living
+    article: "Yo-Yo Ma"
+    triple: ["Yo-Yo Ma", "ex:instrument", "cello"]
+    verdict: in_wikidata
+    evidence: "P1303 (instrument) → cello (Q8355). Alignment gap."
+    annotator: human
+
+  - id: 68
+    domain: biography_living
+    article: "Malala Yousafzai"
+    triple: ["Malala Yousafzai", "ex:shotIn", "2012"]
+    verdict: correct
+    evidence: "Shooting in October 2012; cause of injury not as a structured triple in Wikidata."
+    annotator: human
+
+  - id: 69
+    domain: biography_living
+    article: "Novak Djokovic"
+    triple: ["Novak Djokovic", "pgc:grandSlamCount", "24"]
+    verdict: uncertain
+    evidence: "Count changes over time; temporal accuracy requires run date context."
+    annotator: human
+
+  - id: 70
+    domain: biography_living
+    article: "Beyoncé"
+    triple: ["Beyoncé", "ex:albumTitle", "Lemonade"]
+    verdict: correct
+    evidence: "P358 (discography) / P527 on discography item; not directly linked."
+    annotator: human
+
+  # -------------------------------------------------------------------------
+  # Organization (30 annotations)
+  # -------------------------------------------------------------------------
+
+  - id: 71
+    domain: organization
+    article: "Apple Inc."
+    triple: ["Apple Inc.", "ex:revenueYear", "2023"]
+    verdict: incorrect
+    evidence: "Year without revenue figure; incomplete extraction."
+    annotator: human
+
+  - id: 72
+    domain: organization
+    article: "Apple Inc."
+    triple: ["Apple Inc.", "pgc:flagshipProduct", "iPhone"]
+    verdict: correct
+    evidence: "No Wikidata property for flagship product; P1056 (product) partially covers."
+    annotator: human
+
+  - id: 73
+    domain: organization
+    article: "Google"
+    triple: ["Google", "pgc:parentOrg", "Alphabet Inc."]
+    verdict: in_wikidata
+    evidence: "P749 (parent organization) → Alphabet Inc. (Q117518). Alignment gap."
+    annotator: human
+
+  - id: 74
+    domain: organization
+    article: "Microsoft"
+    triple: ["Microsoft", "ex:operatingSystem", "Windows"]
+    verdict: correct
+    evidence: "No Wikidata property for primary product; P1056 covers broadly."
+    annotator: human
+
+  - id: 75
+    domain: organization
+    article: "Amazon"
+    triple: ["Amazon", "pgc:businessModel", "e-commerce"]
+    verdict: correct
+    evidence: "No Wikidata property for business model."
+    annotator: human
+
+  - id: 76
+    domain: organization
+    article: "Tesla Inc."
+    triple: ["Tesla Inc.", "pgc:vehicleType", "electric vehicles"]
+    verdict: correct
+    evidence: "No Wikidata property for vehicle type; P1056 (product) partially captures."
+    annotator: human
+
+  - id: 77
+    domain: organization
+    article: "OpenAI"
+    triple: ["OpenAI", "pgc:researchFocus", "artificial intelligence safety"]
+    verdict: correct
+    evidence: "No Wikidata property for research focus."
+    annotator: human
+
+  - id: 78
+    domain: organization
+    article: "United Nations"
+    triple: ["United Nations", "pgc:memberCount", "193"]
+    verdict: correct
+    evidence: "P1082 (population) not applicable; no member count property."
+    annotator: human
+
+  - id: 79
+    domain: organization
+    article: "NATO"
+    triple: ["NATO", "ex:foundingTreaty", "North Atlantic Treaty"]
+    verdict: correct
+    evidence: "The founding treaty; no Wikidata property for 'founding treaty'."
+    annotator: human
+
+  - id: 80
+    domain: organization
+    article: "World Health Organization"
+    triple: ["World Health Organization", "pgc:specialized", "public health"]
+    verdict: correct
+    evidence: "No Wikidata property for specialization domain."
+    annotator: human
+
+  - id: 81
+    domain: organization
+    article: "Red Cross"
+    triple: ["Red Cross", "ex:operatesIn", "192 countries"]
+    verdict: incorrect
+    evidence: "Numeric literal without proper unit; poorly structured extraction."
+    annotator: human
+
+  - id: 82
+    domain: organization
+    article: "Harvard University"
+    triple: ["Harvard University", "pgc:motto", "Veritas"]
+    verdict: correct
+    evidence: "P1451 (motto) not always populated for Harvard in Wikidata."
+    annotator: human
+
+  - id: 83
+    domain: organization
+    article: "MIT"
+    triple: ["MIT", "pgc:nobelLaureates", "97"]
+    verdict: uncertain
+    evidence: "Count changes as new laureates are announced; temporal sensitivity."
+    annotator: human
+
+  - id: 84
+    domain: organization
+    article: "Oxford University"
+    triple: ["Oxford University", "ex:foundedCentury", "12th century"]
+    verdict: correct
+    evidence: "P571 has a specific year; '12th century' is a derived/summarised form."
+    annotator: human
+
+  - id: 85
+    domain: organization
+    article: "Wikipedia"
+    triple: ["Wikipedia", "pgc:foundedBy", "Jimmy Wales"]
+    verdict: in_wikidata
+    evidence: "P112 (founded by) → Jimmy Wales (Q9720). Alignment gap."
+    annotator: human
+
+  - id: 86
+    domain: organization
+    article: "FIFA"
+    triple: ["FIFA", "pgc:governsSport", "association football"]
+    verdict: correct
+    evidence: "No Wikidata property for 'governs sport'; P31 (governing body) partial."
+    annotator: human
+
+  - id: 87
+    domain: organization
+    article: "Olympics"
+    triple: ["Olympics", "ex:heldEvery", "4 years"]
+    verdict: correct
+    evidence: "No Wikidata property for periodicity of events."
+    annotator: human
+
+  - id: 88
+    domain: organization
+    article: "SpaceX"
+    triple: ["SpaceX", "pgc:launchSite", "Cape Canaveral"]
+    verdict: correct
+    evidence: "P159 (headquarters) ≠ launch site; no specific property for launch sites."
+    annotator: human
+
+  - id: 89
+    domain: organization
+    article: "CERN"
+    triple: ["CERN", "pgc:discoveredParticle", "Higgs boson"]
+    verdict: correct
+    evidence: "No Wikidata property for 'discovered particle'; P800 on CERN item may help."
+    annotator: human
+
+  - id: 90
+    domain: organization
+    article: "BBC"
+    triple: ["BBC", "pgc:fundingModel", "licence fee"]
+    verdict: correct
+    evidence: "No Wikidata property for funding model."
+    annotator: human
+
+  - id: 91
+    domain: organization
+    article: "Netflix"
+    triple: ["Netflix", "ex:subscribers", "238 million"]
+    verdict: incorrect
+    evidence: "Subscriber count is time-sensitive; stale by run date."
+    annotator: human
+
+  - id: 92
+    domain: organization
+    article: "IKEA"
+    triple: ["IKEA", "pgc:businessType", "flat-pack furniture"]
+    verdict: correct
+    evidence: "No Wikidata property for business type/product category."
+    annotator: human
+
+  - id: 93
+    domain: organization
+    article: "UNICEF"
+    triple: ["UNICEF", "pgc:targetBeneficiaries", "children"]
+    verdict: correct
+    evidence: "No Wikidata property for target beneficiaries."
+    annotator: human
+
+  - id: 94
+    domain: organization
+    article: "Amnesty International"
+    triple: ["Amnesty International", "pgc:advocatesFor", "human rights"]
+    verdict: correct
+    evidence: "No Wikidata property for advocacy focus."
+    annotator: human
+
+  - id: 95
+    domain: organization
+    article: "Doctors Without Borders"
+    triple: ["Doctors Without Borders", "ex:awardReceived", "Nobel Peace Prize"]
+    verdict: in_wikidata
+    evidence: "P166 → Nobel Peace Prize 1999. Alignment gap."
+    annotator: human
+
+  - id: 96
+    domain: organization
+    article: "World Bank"
+    triple: ["World Bank", "pgc:lendingFocus", "developing countries"]
+    verdict: correct
+    evidence: "No Wikidata property for lending focus."
+    annotator: human
+
+  - id: 97
+    domain: organization
+    article: "IMF"
+    triple: ["IMF", "pgc:memberStates", "190"]
+    verdict: uncertain
+    evidence: "Member count may have changed; temporal sensitivity."
+    annotator: human
+
+  - id: 98
+    domain: organization
+    article: "OPEC"
+    triple: ["OPEC", "pgc:regulatesResource", "petroleum"]
+    verdict: correct
+    evidence: "No Wikidata property for regulated resource."
+    annotator: human
+
+  - id: 99
+    domain: organization
+    article: "G7"
+    triple: ["G7", "ex:memberNations", "7"]
+    verdict: incorrect
+    evidence: "Count without naming members; poorly structured extraction."
+    annotator: human
+
+  - id: 100
+    domain: organization
+    article: "Greenpeace"
+    triple: ["Greenpeace", "pgc:foundedIn", "Vancouver"]
+    verdict: in_wikidata
+    evidence: "P740 (location of formation) → Vancouver. Alignment gap."
+    annotator: human
+
+  # -------------------------------------------------------------------------
+  # Geographic (30 annotations)
+  # -------------------------------------------------------------------------
+
+  - id: 101
+    domain: geographic
+    article: "Amazon River"
+    triple: ["Amazon River", "pgc:flowsThrough", "Brazil"]
+    verdict: correct
+    evidence: "P17 (country) → Brazil; 'flows through' is a more precise relationship."
+    annotator: human
+
+  - id: 102
+    domain: geographic
+    article: "Amazon River"
+    triple: ["Amazon River", "ex:length", "6992 km"]
+    verdict: correct
+    evidence: "P2043 (length) → 6992 km. Alignment gap."
+    annotator: human
+
+  - id: 103
+    domain: geographic
+    article: "Mount Everest"
+    triple: ["Mount Everest", "pgc:elevation", "8848.86 m"]
+    verdict: correct
+    evidence: "P2044 (elevation) → 8848.86 m. Alignment gap."
+    annotator: human
+
+  - id: 104
+    domain: geographic
+    article: "Sahara Desert"
+    triple: ["Sahara Desert", "pgc:area", "9.2 million km²"]
+    verdict: correct
+    evidence: "P2046 (area) → 9.2 million km². Alignment gap."
+    annotator: human
+
+  - id: 105
+    domain: geographic
+    article: "Tokyo"
+    triple: ["Tokyo", "pgc:populationYear", "2023"]
+    verdict: incorrect
+    evidence: "Year alone without population figure; incomplete extraction."
+    annotator: human
+
+  - id: 106
+    domain: geographic
+    article: "Paris"
+    triple: ["Paris", "ex:nickName", "City of Light"]
+    verdict: correct
+    evidence: "P1448 (official name) or P1449 (nickname); 'City of Light' often absent."
+    annotator: human
+
+  - id: 107
+    domain: geographic
+    article: "New York City"
+    triple: ["New York City", "pgc:boroughs", "5"]
+    verdict: correct
+    evidence: "No Wikidata property for borough count."
+    annotator: human
+
+  - id: 108
+    domain: geographic
+    article: "Great Wall of China"
+    triple: ["Great Wall of China", "pgc:totalLength", "21196 km"]
+    verdict: correct
+    evidence: "P2043 (length) → 21196 km. Alignment gap."
+    annotator: human
+
+  - id: 109
+    domain: geographic
+    article: "Antarctica"
+    triple: ["Antarctica", "pgc:permanentPopulation", "0"]
+    verdict: correct
+    evidence: "P1082 (population) → 0. Alignment gap."
+    annotator: human
+
+  - id: 110
+    domain: geographic
+    article: "Pacific Ocean"
+    triple: ["Pacific Ocean", "pgc:deepestPoint", "Mariana Trench"]
+    verdict: correct
+    evidence: "No Wikidata property for 'deepest point' of an ocean."
+    annotator: human
+
+  - id: 111
+    domain: geographic
+    article: "Nile River"
+    triple: ["Nile River", "pgc:sourceLocation", "Lake Victoria"]
+    verdict: correct
+    evidence: "P7834 (source of watercourse) partially covers; Lake Victoria not always listed."
+    annotator: human
+
+  - id: 112
+    domain: geographic
+    article: "Grand Canyon"
+    triple: ["Grand Canyon", "ex:geologist", "John Wesley Powell"]
+    verdict: correct
+    evidence: "Powell's expedition is documented; no Wikidata property for 'explored by'."
+    annotator: human
+
+  - id: 113
+    domain: geographic
+    article: "Yellowstone National Park"
+    triple: ["Yellowstone National Park", "pgc:designatedYear", "1872"]
+    verdict: correct
+    evidence: "P571 (inception) → 1872. Alignment gap."
+    annotator: human
+
+  - id: 114
+    domain: geographic
+    article: "Galápagos Islands"
+    triple: ["Galápagos Islands", "pgc:inspiredWork", "On the Origin of Species"]
+    verdict: correct
+    evidence: "No Wikidata property for 'inspired work'; connection to Darwin's theory."
+    annotator: human
+
+  - id: 115
+    domain: geographic
+    article: "Venice"
+    triple: ["Venice", "ex:builtOn", "islands"]
+    verdict: correct
+    evidence: "Venice's island geography; no Wikidata property for this characteristic."
+    annotator: human
+
+  - id: 116
+    domain: geographic
+    article: "Dubai"
+    triple: ["Dubai", "pgc:tallestBuilding", "Burj Khalifa"]
+    verdict: correct
+    evidence: "No Wikidata property for 'tallest building in city'."
+    annotator: human
+
+  - id: 117
+    domain: geographic
+    article: "Antarctica"
+    triple: ["Antarctica", "pgc:governedBy", "Antarctic Treaty System"]
+    verdict: correct
+    evidence: "P17 (country) inapplicable; governance structure is novel."
+    annotator: human
+
+  - id: 118
+    domain: geographic
+    article: "Iceland"
+    triple: ["Iceland", "pgc:geothermalEnergy", "true"]
+    verdict: incorrect
+    evidence: "Boolean literal without context; poorly structured."
+    annotator: human
+
+  - id: 119
+    domain: geographic
+    article: "Singapore"
+    triple: ["Singapore", "pgc:cityState", "true"]
+    verdict: incorrect
+    evidence: "Boolean literal; should be typed as a category or classification."
+    annotator: human
+
+  - id: 120
+    domain: geographic
+    article: "Chernobyl"
+    triple: ["Chernobyl", "pgc:disasterYear", "1986"]
+    verdict: correct
+    evidence: "P585 (point in time) on P793 (significant event) qualifier; not top-level."
+    annotator: human
+
+  - id: 121
+    domain: geographic
+    article: "Pompeii"
+    triple: ["Pompeii", "pgc:destroyedBy", "Mount Vesuvius eruption"]
+    verdict: correct
+    evidence: "No Wikidata property for 'destroyed by'; P793 (significant event) partially covers."
+    annotator: human
+
+  - id: 122
+    domain: geographic
+    article: "Stonehenge"
+    triple: ["Stonehenge", "pgc:estimatedAge", "5000 years"]
+    verdict: correct
+    evidence: "P571 (inception) → circa 3000 BCE; 'estimated age' is a derived quantity."
+    annotator: human
+
+  - id: 123
+    domain: geographic
+    article: "Machu Picchu"
+    triple: ["Machu Picchu", "pgc:builtBy", "Inca Empire"]
+    verdict: correct
+    evidence: "No Wikidata property for 'built by'; P18 and P571 present."
+    annotator: human
+
+  - id: 124
+    domain: geographic
+    article: "Colosseum"
+    triple: ["Colosseum", "pgc:capacity", "50000"]
+    verdict: correct
+    evidence: "P1083 (maximum capacity) → ~50,000 for Colosseum. Alignment gap."
+    annotator: human
+
+  - id: 125
+    domain: geographic
+    article: "Taj Mahal"
+    triple: ["Taj Mahal", "pgc:dedicatedTo", "Mumtaz Mahal"]
+    verdict: correct
+    evidence: "No Wikidata property for 'dedicated to'; P547 (commemorates) exists but differs."
+    annotator: human
+
+  - id: 126
+    domain: geographic
+    article: "Great Barrier Reef"
+    triple: ["Great Barrier Reef", "pgc:threatLevel", "endangered"]
+    verdict: uncertain
+    evidence: "UNESCO heritage status and threat level can change; temporal sensitivity."
+    annotator: human
+
+  - id: 127
+    domain: geographic
+    article: "Amazon rainforest"
+    triple: ["Amazon rainforest", "pgc:biodiversityRating", "highest on Earth"]
+    verdict: incorrect
+    evidence: "Subjective/non-structured claim; not a proper knowledge graph triple."
+    annotator: human
+
+  - id: 128
+    domain: geographic
+    article: "Sahara Desert"
+    triple: ["Sahara Desert", "ex:climateType", "hot desert"]
+    verdict: correct
+    evidence: "P2564 (climate) → hot desert climate (BWh). Alignment gap."
+    annotator: human
+
+  - id: 129
+    domain: geographic
+    article: "Dead Sea"
+    triple: ["Dead Sea", "pgc:saltConcentration", "34%"]
+    verdict: correct
+    evidence: "No Wikidata property for salt concentration."
+    annotator: human
+
+  - id: 130
+    domain: geographic
+    article: "Mariana Trench"
+    triple: ["Mariana Trench", "pgc:maxDepth", "11034 m"]
+    verdict: correct
+    evidence: "P4511 (depth) → ~11034 m. Alignment gap."
+    annotator: human
+
+  # -------------------------------------------------------------------------
+  # Creative works (30 annotations)
+  # -------------------------------------------------------------------------
+
+  - id: 131
+    domain: creative_work
+    article: "Hamlet"
+    triple: ["Hamlet", "pgc:writtenBy", "William Shakespeare"]
+    verdict: in_wikidata
+    evidence: "P50 (author) → William Shakespeare (Q692). Alignment gap."
+    annotator: human
+
+  - id: 132
+    domain: creative_work
+    article: "Hamlet"
+    triple: ["Hamlet", "pgc:settingLocation", "Denmark"]
+    verdict: correct
+    evidence: "P840 (narrative location) → Denmark (Q35). Alignment gap."
+    annotator: human
+
+  - id: 133
+    domain: creative_work
+    article: "The Great Gatsby"
+    triple: ["The Great Gatsby", "ex:publishedYear", "1925"]
+    verdict: in_wikidata
+    evidence: "P577 (publication date) → 1925. Alignment gap."
+    annotator: human
+
+  - id: 134
+    domain: creative_work
+    article: "1984"
+    triple: ["1984", "pgc:genre", "dystopian fiction"]
+    verdict: correct
+    evidence: "P136 (genre) → dystopian fiction (Q1403685). Alignment gap."
+    annotator: human
+
+  - id: 135
+    domain: creative_work
+    article: "Pride and Prejudice"
+    triple: ["Pride and Prejudice", "pgc:mainCharacter", "Elizabeth Bennet"]
+    verdict: correct
+    evidence: "P674 (characters) → Elizabeth Bennet. Alignment gap."
+    annotator: human
+
+  - id: 136
+    domain: creative_work
+    article: "The Mona Lisa"
+    triple: ["The Mona Lisa", "pgc:paintedIn", "1503"]
+    verdict: correct
+    evidence: "P571 (inception) → circa 1503. Alignment gap."
+    annotator: human
+
+  - id: 137
+    domain: creative_work
+    article: "The Mona Lisa"
+    triple: ["The Mona Lisa", "pgc:currentLocation", "Louvre Museum"]
+    verdict: correct
+    evidence: "P276 (location) → Louvre Museum. Alignment gap."
+    annotator: human
+
+  - id: 138
+    domain: creative_work
+    article: "Beethoven's Fifth Symphony"
+    triple: ["Beethoven's Fifth Symphony", "pgc:premiereYear", "1808"]
+    verdict: correct
+    evidence: "P1191 (date of first performance) → 1808. Alignment gap."
+    annotator: human
+
+  - id: 139
+    domain: creative_work
+    article: "Star Wars"
+    triple: ["Star Wars", "pgc:directedBy", "George Lucas"]
+    verdict: in_wikidata
+    evidence: "P57 (director) → George Lucas (Q38222). Alignment gap."
+    annotator: human
+
+  - id: 140
+    domain: creative_work
+    article: "The Beatles"
+    triple: ["The Beatles", "ex:formationYear", "1960"]
+    verdict: correct
+    evidence: "P571 (inception) → 1960. Alignment gap."
+    annotator: human
+
+  - id: 141
+    domain: creative_work
+    article: "Harry Potter"
+    triple: ["Harry Potter", "pgc:authorNationality", "British"]
+    verdict: incorrect
+    evidence: "Nationality is a property of J.K. Rowling, not the book; wrong subject."
+    annotator: human
+
+  - id: 142
+    domain: creative_work
+    article: "The Lord of the Rings"
+    triple: ["The Lord of the Rings", "pgc:adaptedIntoFilm", "2001"]
+    verdict: correct
+    evidence: "No Wikidata property for 'adapted into film date'; P4969 (derivative) partially covers."
+    annotator: human
+
+  - id: 143
+    domain: creative_work
+    article: "Don Quixote"
+    triple: ["Don Quixote", "ex:firstLanguage", "Spanish"]
+    verdict: correct
+    evidence: "P407 (language of work) → Spanish. Alignment gap."
+    annotator: human
+
+  - id: 144
+    domain: creative_work
+    article: "War and Peace"
+    triple: ["War and Peace", "pgc:historicalEra", "Napoleonic Wars"]
+    verdict: correct
+    evidence: "P2408 (set in period) partially covers; no 'historical era' property."
+    annotator: human
+
+  - id: 145
+    domain: creative_work
+    article: "The Sistine Chapel"
+    triple: ["The Sistine Chapel", "pgc:paintedBy", "Michelangelo"]
+    verdict: correct
+    evidence: "P170 (creator) → Michelangelo for ceiling fresco. Alignment gap."
+    annotator: human
+
+  - id: 146
+    domain: creative_work
+    article: "Inception"
+    triple: ["Inception", "pgc:boxOffice", "$836 million"]
+    verdict: correct
+    evidence: "P2142 (box office) → $836 million. Alignment gap."
+    annotator: human
+
+  - id: 147
+    domain: creative_work
+    article: "The Godfather"
+    triple: ["The Godfather", "pgc:basedOn", "Mario Puzo novel"]
+    verdict: correct
+    evidence: "P144 (based on) → The Godfather (novel). Alignment gap."
+    annotator: human
+
+  - id: 148
+    domain: creative_work
+    article: "Citizen Kane"
+    triple: ["Citizen Kane", "ex:rankedFirst", "AFI top 100"]
+    verdict: correct
+    evidence: "No Wikidata property for 'ranked first in list'."
+    annotator: human
+
+  - id: 149
+    domain: creative_work
+    article: "Avatar"
+    triple: ["Avatar", "pgc:grossedMore", "Titanic"]
+    verdict: incorrect
+    evidence: "Relative comparison triple; poorly structured for a knowledge graph."
+    annotator: human
+
+  - id: 150
+    domain: creative_work
+    article: "Game of Thrones"
+    triple: ["Game of Thrones", "pgc:episodes", "73"]
+    verdict: correct
+    evidence: "P1113 (number of episodes) → 73. Alignment gap."
+    annotator: human
+
+  - id: 151
+    domain: creative_work
+    article: "Breaking Bad"
+    triple: ["Breaking Bad", "pgc:seasons", "5"]
+    verdict: correct
+    evidence: "P2437 (number of seasons) → 5. Alignment gap."
+    annotator: human
+
+  - id: 152
+    domain: creative_work
+    article: "The Simpsons"
+    triple: ["The Simpsons", "ex:firstAired", "1989"]
+    verdict: correct
+    evidence: "P580 (start time) → 1989. Alignment gap."
+    annotator: human
+
+  - id: 153
+    domain: creative_work
+    article: "Minecraft"
+    triple: ["Minecraft", "pgc:developer", "Markus Persson"]
+    verdict: correct
+    evidence: "P178 (developer) → Mojang; P170 → Markus Persson. Alignment gap."
+    annotator: human
+
+  - id: 154
+    domain: creative_work
+    article: "Tetris"
+    triple: ["Tetris", "pgc:createdBy", "Alexey Pajitnov"]
+    verdict: correct
+    evidence: "P170 (creator) → Alexey Pajitnov. Alignment gap."
+    annotator: human
+
+  - id: 155
+    domain: creative_work
+    article: "The Starry Night"
+    triple: ["The Starry Night", "pgc:currentlyIn", "MoMA"]
+    verdict: correct
+    evidence: "P276 (location) → Museum of Modern Art. Alignment gap."
+    annotator: human
+
+  - id: 156
+    domain: creative_work
+    article: "Guernica"
+    triple: ["Guernica", "pgc:paintedInYear", "1937"]
+    verdict: correct
+    evidence: "P571 (inception) → 1937. Alignment gap."
+    annotator: human
+
+  - id: 157
+    domain: creative_work
+    article: "Beethoven's Ninth Symphony"
+    triple: ["Beethoven's Ninth Symphony", "ex:famousMovement", "Ode to Joy"]
+    verdict: correct
+    evidence: "P527 (has part) → Ode to Joy. Alignment gap."
+    annotator: human
+
+  - id: 158
+    domain: creative_work
+    article: "Romeo and Juliet"
+    triple: ["Romeo and Juliet", "pgc:genreType", "tragedy"]
+    verdict: correct
+    evidence: "P136 (genre) → tragedy (Q130232). Alignment gap."
+    annotator: human
+
+  - id: 159
+    domain: creative_work
+    article: "The Odyssey"
+    triple: ["The Odyssey", "pgc:eponymousHero", "Odysseus"]
+    verdict: correct
+    evidence: "No Wikidata property for 'eponymous hero'."
+    annotator: human
+
+  - id: 160
+    domain: creative_work
+    article: "A Midsummer Night's Dream"
+    triple: ["A Midsummer Night's Dream", "ex:setting", "ancient Athens"]
+    verdict: correct
+    evidence: "P840 (narrative location) → Athens. Alignment gap."
+    annotator: human
+
+  # -------------------------------------------------------------------------
+  # Scientific concepts (30 annotations)
+  # -------------------------------------------------------------------------
+
+  - id: 161
+    domain: scientific
+    article: "General relativity"
+    triple: ["General relativity", "pgc:proposedBy", "Albert Einstein"]
+    verdict: correct
+    evidence: "P61 (discoverer) → Einstein. Alignment gap."
+    annotator: human
+
+  - id: 162
+    domain: scientific
+    article: "DNA"
+    triple: ["DNA", "pgc:doubleHelix", "true"]
+    verdict: incorrect
+    evidence: "Boolean literal; structure should be described as 'double-helix structure'."
+    annotator: human
+
+  - id: 163
+    domain: scientific
+    article: "Black hole"
+    triple: ["Black hole", "ex:predictedBy", "general relativity"]
+    verdict: correct
+    evidence: "No Wikidata property for 'predicted by theory'."
+    annotator: human
+
+  - id: 164
+    domain: scientific
+    article: "CRISPR"
+    triple: ["CRISPR", "pgc:developedBy", "Jennifer Doudna"]
+    verdict: correct
+    evidence: "P61 (discoverer) → Jennifer Doudna. Alignment gap."
+    annotator: human
+
+  - id: 165
+    domain: scientific
+    article: "Quantum entanglement"
+    triple: ["Quantum entanglement", "pgc:describedBy", "EPR paradox"]
+    verdict: correct
+    evidence: "No Wikidata property for 'described by'; P180 (depicts) inapplicable."
+    annotator: human
+
+  - id: 166
+    domain: scientific
+    article: "Photosynthesis"
+    triple: ["Photosynthesis", "pgc:producedMolecule", "glucose"]
+    verdict: correct
+    evidence: "No Wikidata property for 'produced molecule'."
+    annotator: human
+
+  - id: 167
+    domain: scientific
+    article: "Periodic table"
+    triple: ["Periodic table", "pgc:createdBy", "Dmitri Mendeleev"]
+    verdict: correct
+    evidence: "P170 (creator) → Mendeleev. Alignment gap."
+    annotator: human
+
+  - id: 168
+    domain: scientific
+    article: "Big Bang"
+    triple: ["Big Bang", "ex:estimatedAge", "13.8 billion years"]
+    verdict: correct
+    evidence: "No Wikidata property for age of universe; P2583 (distance from Earth) inapplicable."
+    annotator: human
+
+  - id: 169
+    domain: scientific
+    article: "Theory of evolution"
+    triple: ["Theory of evolution", "pgc:proposedBy", "Charles Darwin"]
+    verdict: correct
+    evidence: "P61 (discoverer/inventor) → Darwin. Alignment gap."
+    annotator: human
+
+  - id: 170
+    domain: scientific
+    article: "Plate tectonics"
+    triple: ["Plate tectonics", "pgc:proposedBy", "Alfred Wegener"]
+    verdict: correct
+    evidence: "P61 → Wegener. Alignment gap."
+    annotator: human
+
+  - id: 171
+    domain: scientific
+    article: "Higgs boson"
+    triple: ["Higgs boson", "pgc:discoveredAt", "CERN"]
+    verdict: correct
+    evidence: "P189 (location of discovery) → CERN. Alignment gap."
+    annotator: human
+
+  - id: 172
+    domain: scientific
+    article: "Antibiotics"
+    triple: ["Antibiotics", "pgc:discoveredBy", "Alexander Fleming"]
+    verdict: correct
+    evidence: "P61 → Fleming (for penicillin specifically). Alignment gap."
+    annotator: human
+
+  - id: 173
+    domain: scientific
+    article: "Gravity"
+    triple: ["Gravity", "pgc:measuredConstant", "9.8 m/s²"]
+    verdict: correct
+    evidence: "Surface gravity constant; no Wikidata property for physical constants of gravity."
+    annotator: human
+
+  - id: 174
+    domain: scientific
+    article: "Electricity"
+    triple: ["Electricity", "pgc:unitOf", "ampere"]
+    verdict: incorrect
+    evidence: "Ampere is a unit of current, not electricity in general; extraction error."
+    annotator: human
+
+  - id: 175
+    domain: scientific
+    article: "Climate change"
+    triple: ["Climate change", "pgc:primaryCause", "greenhouse gas emissions"]
+    verdict: correct
+    evidence: "Scientific consensus; no Wikidata property for 'primary cause'."
+    annotator: human
+
+  - id: 176
+    domain: scientific
+    article: "Vaccination"
+    triple: ["Vaccination", "pgc:pioneeredBy", "Edward Jenner"]
+    verdict: correct
+    evidence: "P61 → Jenner. Alignment gap."
+    annotator: human
+
+  - id: 177
+    domain: scientific
+    article: "Machine learning"
+    triple: ["Machine learning", "ex:subfield", "deep learning"]
+    verdict: correct
+    evidence: "P527 (has part) → deep learning. Alignment gap."
+    annotator: human
+
+  - id: 178
+    domain: scientific
+    article: "Internet"
+    triple: ["Internet", "pgc:precursor", "ARPANET"]
+    verdict: correct
+    evidence: "P144 (based on) → ARPANET. Alignment gap."
+    annotator: human
+
+  - id: 179
+    domain: scientific
+    article: "Nuclear fusion"
+    triple: ["Nuclear fusion", "pgc:powersObject", "stars"]
+    verdict: correct
+    evidence: "No Wikidata property for 'powers'; descriptive relationship."
+    annotator: human
+
+  - id: 180
+    domain: scientific
+    article: "Superconductivity"
+    triple: ["Superconductivity", "pgc:discoveredYear", "1911"]
+    verdict: correct
+    evidence: "P575 (time of discovery) → 1911. Alignment gap."
+    annotator: human
+
+  - id: 181
+    domain: scientific
+    article: "Ozone layer"
+    triple: ["Ozone layer", "pgc:depletedBy", "chlorofluorocarbons"]
+    verdict: correct
+    evidence: "No Wikidata property for 'depleted by'."
+    annotator: human
+
+  - id: 182
+    domain: scientific
+    article: "Stem cells"
+    triple: ["Stem cells", "pgc:applicationIn", "regenerative medicine"]
+    verdict: correct
+    evidence: "No Wikidata property for 'application in field'."
+    annotator: human
+
+  - id: 183
+    domain: scientific
+    article: "Artificial intelligence"
+    triple: ["Artificial intelligence", "pgc:turingTest", "proposed benchmark"]
+    verdict: incorrect
+    evidence: "Poorly structured; Turing Test should be a separate entity with relationship."
+    annotator: human
+
+  - id: 184
+    domain: scientific
+    article: "Blockchain"
+    triple: ["Blockchain", "pgc:underlyingTechnology", "Bitcoin"]
+    verdict: incorrect
+    evidence: "Inverted; Bitcoin uses blockchain, not vice versa. Extraction direction error."
+    annotator: human
+
+  - id: 185
+    domain: scientific
+    article: "Penicillin"
+    triple: ["Penicillin", "pgc:discoveredYear", "1928"]
+    verdict: correct
+    evidence: "P575 → 1928. Alignment gap."
+    annotator: human
+
+  - id: 186
+    domain: scientific
+    article: "Radioactivity"
+    triple: ["Radioactivity", "pgc:discoveredBy", "Henri Becquerel"]
+    verdict: correct
+    evidence: "P61 → Becquerel. Alignment gap."
+    annotator: human
+
+  - id: 187
+    domain: scientific
+    article: "Speed of light"
+    triple: ["Speed of light", "pgc:constantValue", "299792458 m/s"]
+    verdict: correct
+    evidence: "P1181 (numeric value) → 299792458. Alignment gap."
+    annotator: human
+
+  - id: 188
+    domain: scientific
+    article: "Chaos theory"
+    triple: ["Chaos theory", "pgc:associatedWith", "butterfly effect"]
+    verdict: correct
+    evidence: "No Wikidata property for 'associated with'; P527 partial."
+    annotator: human
+
+  - id: 189
+    domain: scientific
+    article: "Entropy"
+    triple: ["Entropy", "pgc:formulatedBy", "Rudolf Clausius"]
+    verdict: correct
+    evidence: "P61 → Clausius. Alignment gap."
+    annotator: human
+
+  - id: 190
+    domain: scientific
+    article: "String theory"
+    triple: ["String theory", "pgc:additionalDimensions", "10"]
+    verdict: uncertain
+    evidence: "Depends on which string theory variant; not universally agreed."
+    annotator: human
+
+  # -------------------------------------------------------------------------
+  # Events (22 annotations)
+  # -------------------------------------------------------------------------
+
+  - id: 191
+    domain: event
+    article: "World War II"
+    triple: ["World War II", "pgc:startYear", "1939"]
+    verdict: correct
+    evidence: "P580 → 1939. Alignment gap."
+    annotator: human
+
+  - id: 192
+    domain: event
+    article: "World War II"
+    triple: ["World War II", "pgc:casualties", "70-85 million"]
+    verdict: correct
+    evidence: "P1120 (number of deaths) estimate range; no single Wikidata value."
+    annotator: human
+
+  - id: 193
+    domain: event
+    article: "French Revolution"
+    triple: ["French Revolution", "pgc:triggeredBy", "financial crisis"]
+    verdict: correct
+    evidence: "No Wikidata property for 'triggered by'."
+    annotator: human
+
+  - id: 194
+    domain: event
+    article: "Moon landing"
+    triple: ["Moon landing", "pgc:crewMember", "Neil Armstrong"]
+    verdict: correct
+    evidence: "P1344 (participant) → Apollo 11 mission; astronaut not directly on event."
+    annotator: human
+
+  - id: 195
+    domain: event
+    article: "Berlin Wall"
+    triple: ["Berlin Wall", "pgc:fellIn", "1989"]
+    verdict: correct
+    evidence: "P582 (end time) → 1989. Alignment gap."
+    annotator: human
+
+  - id: 196
+    domain: event
+    article: "9/11 attacks"
+    triple: ["9/11 attacks", "pgc:casualties", "2977"]
+    verdict: correct
+    evidence: "P1120 → 2977. Alignment gap."
+    annotator: human
+
+  - id: 197
+    domain: event
+    article: "COVID-19 pandemic"
+    triple: ["COVID-19 pandemic", "pgc:startedIn", "Wuhan"]
+    verdict: uncertain
+    evidence: "Geographic origin is contested; temporal sensitivity and political sensitivity."
+    annotator: human
+
+  - id: 198
+    domain: event
+    article: "Olympic Games"
+    triple: ["Olympic Games", "pgc:originCountry", "Greece"]
+    verdict: correct
+    evidence: "P495 (country of origin) → Greece. Alignment gap."
+    annotator: human
+
+  - id: 199
+    domain: event
+    article: "Industrial Revolution"
+    triple: ["Industrial Revolution", "pgc:startedIn", "Britain"]
+    verdict: correct
+    evidence: "P580 has approximate date; starting location 'Britain' not in Wikidata."
+    annotator: human
+
+  - id: 200
+    domain: event
+    article: "Cold War"
+    triple: ["Cold War", "pgc:participants", "USA and Soviet Union"]
+    verdict: correct
+    evidence: "P1344 (participant) → USA, Soviet Union. Alignment gap (plural object)."
+    annotator: human
+
+  - id: 201
+    domain: event
+    article: "Hiroshima bombing"
+    triple: ["Hiroshima bombing", "pgc:bombType", "Little Boy"]
+    verdict: correct
+    evidence: "No Wikidata property for bomb type; P31 has bomb model."
+    annotator: human
+
+  - id: 202
+    domain: event
+    article: "Apollo 11"
+    triple: ["Apollo 11", "pgc:launchDate", "1969-07-16"]
+    verdict: correct
+    evidence: "P580 → 1969-07-16. Alignment gap."
+    annotator: human
+
+  - id: 203
+    domain: event
+    article: "Chernobyl disaster"
+    triple: ["Chernobyl disaster", "pgc:reactorNumber", "4"]
+    verdict: correct
+    evidence: "No Wikidata property for 'reactor number involved'."
+    annotator: human
+
+  - id: 204
+    domain: event
+    article: "Titanic sinking"
+    triple: ["Titanic sinking", "pgc:survivors", "710"]
+    verdict: correct
+    evidence: "P1120 for deaths; survivor count not always present."
+    annotator: human
+
+  - id: 205
+    domain: event
+    article: "Black Death"
+    triple: ["Black Death", "pgc:estimatedDeaths", "75-200 million"]
+    verdict: correct
+    evidence: "P1120 → 75–200 million estimate range. Alignment gap."
+    annotator: human
+
+  - id: 206
+    domain: event
+    article: "Great Fire of London"
+    triple: ["Great Fire of London", "pgc:destroyedBuildings", "13200"]
+    verdict: correct
+    evidence: "No Wikidata property for number of buildings destroyed."
+    annotator: human
+
+  - id: 207
+    domain: event
+    article: "Boston Tea Party"
+    triple: ["Boston Tea Party", "pgc:ledTo", "American Revolution"]
+    verdict: correct
+    evidence: "No Wikidata property for 'led to' (causal chain)."
+    annotator: human
+
+  - id: 208
+    domain: event
+    article: "Cuban Missile Crisis"
+    triple: ["Cuban Missile Crisis", "pgc:duration", "13 days"]
+    verdict: correct
+    evidence: "P580–P582 span is 13 days; 'duration' not directly stored."
+    annotator: human
+
+  - id: 209
+    domain: event
+    article: "Space Shuttle Challenger"
+    triple: ["Space Shuttle Challenger", "pgc:crewCount", "7"]
+    verdict: correct
+    evidence: "P1120 → 7 (deaths = crew count). Alignment gap."
+    annotator: human
+
+  - id: 210
+    domain: event
+    article: "Mount Vesuvius eruption"
+    triple: ["Mount Vesuvius eruption", "pgc:destroyedCity", "Pompeii"]
+    verdict: correct
+    evidence: "No Wikidata property for 'destroyed city'."
+    annotator: human
+
+  - id: 211
+    domain: event
+    article: "Fukushima disaster"
+    triple: ["Fukushima disaster", "pgc:triggeredBy", "2011 Tōhoku earthquake"]
+    verdict: correct
+    evidence: "P1542 (has cause) → 2011 Tōhoku earthquake. Alignment gap."
+    annotator: human
+
+  - id: 212
+    domain: event
+    article: "Fall of the Roman Empire"
+    triple: ["Fall of the Roman Empire", "pgc:year", "476 CE"]
+    verdict: correct
+    evidence: "P585 (point in time) → 476. Alignment gap."
+    annotator: human

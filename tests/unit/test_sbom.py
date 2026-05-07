@@ -388,7 +388,7 @@ class TestPyprojectExtras:
 
     def test_version_is_0_15_0(self):
         data = self._load_toml()
-        assert data["project"]["version"] == "0.15.0"
+        assert data["project"]["version"] == "0.15.1"
 
 
 # ---------------------------------------------------------------------------

@@ -70,6 +70,8 @@ from riverbank.eval.models import (
     WikipediaArticle,
 )
 from riverbank.eval.property_alignment import PropertyAlignmentTable
+from riverbank.eval.prompt_tuning import PromptTuner
+from riverbank.eval.recall_gap import RecallGapAnalyzer
 from riverbank.eval.scorer import DatasetEvaluator, Scorer
 from riverbank.eval.wikidata_client import WikidataClient, WikidataUnavailableError
 from riverbank.eval.wikipedia_client import WikipediaClient
@@ -84,6 +86,8 @@ __all__ = [
     "EntityResolver",
     "PropertyAlignment",
     "PropertyAlignmentTable",
+    "PromptTuner",
+    "RecallGapAnalyzer",
     "ResolutionCache",
     "RunMetadata",
     "Scorer",

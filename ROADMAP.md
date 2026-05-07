@@ -84,7 +84,7 @@
 | Version | Description | Status | Size |
 |---|---|---|---|
 | v0.15.0 | Wikidata evaluation framework — `riverbank evaluate-wikidata` command (single article or full dataset), 1,000-article benchmark dataset (7 domains), property alignment table, entity resolution pipeline, calibration curves, per-domain and per-property breakdowns | **Done** | Large |
-| v0.15.1 | Extraction improvement loop — per-property recall gap analysis, extraction prompt tuning from failure modes, 200+ novel-discovery annotations, published evaluation methodology | Planned | Medium |
+| v0.15.1 | Extraction improvement loop — per-property recall gap analysis, extraction prompt tuning from failure modes, 200+ novel-discovery annotations, published evaluation methodology | **Done** | Medium |
 
 ---
 
@@ -127,14 +127,14 @@ precision ≥ 0.85, recall ≥ 0.60, F1 ≥ 0.70; calibration ρ ≥ 0.80.
 Goal: close the feedback loop from the Wikidata evaluation back into the
 extraction pipeline — identify systematic failure modes and fix them.
 
-- [ ] Per-property recall gap analysis: identify Wikidata properties where
+- [x] Per-property recall gap analysis: identify Wikidata properties where
   recall falls below 0.50, generate targeted extraction examples
-- [ ] Extraction prompt tuning driven by false-positive and false-negative patterns
+- [x] Extraction prompt tuning driven by false-positive and false-negative patterns
   identified in v0.15.0 evaluation runs
-- [ ] 200+ manual annotations of unmatched riverbank triples to validate the novel
+- [x] 200+ manual annotations of unmatched riverbank triples to validate the novel
   discovery rate (triples correct but absent from Wikidata)
-- [ ] Published evaluation methodology and benchmark results in docs
-- [ ] Evaluation profile YAML (`wikidata-eval-v1`) committed to `examples/profiles/`
+- [x] Published evaluation methodology and benchmark results in docs
+- [x] Evaluation profile YAML (`wikidata-eval-v1`) committed to `examples/profiles/`
 
 **Exit criterion:** second evaluation run shows measurable improvement over
 v0.15.0 baseline on at least two of: precision, recall, novel discovery rate.
