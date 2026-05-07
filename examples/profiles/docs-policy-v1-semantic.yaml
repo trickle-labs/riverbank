@@ -1,0 +1,97 @@
+---
+# docs-policy-v1-semantic — Semantic chunking variant for better LLM context
+#
+# This profile demonstrates v0.14.0's semantic chunking feature, which groups
+# content by semantic similarity instead of fixed headers. This produces
+# larger, more meaningful fragments for LLM extraction.
+#
+# Key differences from docs-policy-v1-llm:
+# - fragmenter: "semantic" (embedding-based boundary detection)
+# - larger min/max fragment lengths (balances context with complexity)
+# - lower confidence threshold (small fragments tolerate uncertainty)
+#
+# Runtime: ~5-10 minutes for the example corpus
+# Output: More coherent triple extraction with better cross-section relationships
+#
+# Usage:
+#   riverbank ingest examples/markdown-corpus/ --profile examples/profiles/docs-policy-v1-semantic.yaml
+#   riverbank ingest examples/markdown-corpus/ --profile examples/profiles/docs-policy-v1-semantic.yaml --set llm.model=gemma4:31b
+#
+name: docs-policy-v1-semantic
+version: 1
+
+# Extractor — "instructor" uses LLM via OpenAI API (or Ollama via base_url override)
+extractor: instructor
+
+# Fragmenter — v0.14.0: semantic chunking via sentence-transformers embeddings
+fragmenter: semantic
+
+model_provider: ollama
+model_name: llama3.2
+embed_model: nomic-embed-text
+max_fragment_tokens: 2000
+
+named_graph: "http://riverbank.example/graph/trusted"
+
+prompt_text: |
+  You are a knowledge graph compiler.  Extract factual claims from the
+  following documentation section as RDF triples.
+
+  For each claim provide:
+  - subject: prefixed IRI (e.g. ex:Ariadne)
+  - predicate: prefixed IRI (e.g. ex:createdBy)
+  - object_value: prefixed IRI or literal
+  - confidence: float 0.0–1.0
+  - evidence: exact character offsets and a verbatim excerpt
+
+  Only extract claims directly supported by the text.
+  Do NOT fabricate evidence.
+
+# v0.14.0: Semantic chunking configuration — tuned for small corpus
+# Produces fragments ~250–800 words, giving LLM enough context for meaningful extraction
+semantic_chunking:
+  # Model for embedding sentences (fast, multilingual)
+  model: "all-MiniLM-L6-v2"
+  # Cosine similarity threshold for chunk boundaries (0.75 = moderate, 0.70 = aggressive)
+  # Higher threshold = fewer splits = larger chunks (better context for small corpus)
+  similarity_threshold: 0.75
+  # Minimum/maximum sentences per chunk (enforces coherent semantic units)
+  min_sentences_per_chunk: 5
+  max_sentences_per_chunk: 12
+
+editorial_policy:
+  # Minimum fragment size — ensures ~250 word baseline for context
+  min_fragment_length: 250
+  # Maximum fragment size — realistic upper bound for small corpus files
+  max_fragment_length: 1500
+  min_heading_depth: 0
+  # Lower confidence threshold for small corpus (less reliable LLM on minimal context)
+  confidence_threshold: 0.65
+  allowed_languages:
+    - en
+
+# Competency questions — SPARQL ASK queries that the compiled graph must answer.
+# Used by the golden corpus CI gate (tests/golden/).
+competency_questions:
+  - id: cq-01
+    description: "The corpus defines a concept called 'Confidence'"
+    sparql: |
+      ASK {
+        ?s ?p "Confidence" .
+      }
+  - id: cq-02
+    description: "The corpus mentions evidence spans with character offsets"
+    sparql: |
+      ASK {
+        ?s ?p ?o .
+        FILTER(CONTAINS(STR(?o), "character"))
+      }
+  - id: cq-03
+    description: "The corpus contains at least one subject–predicate–object triple"
+    sparql: |
+      ASK {
+        ?s ?p ?o .
+      }
+
+# Quality gates — stop ingest if these queries fail
+quality_gates: []
