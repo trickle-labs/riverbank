@@ -245,6 +245,11 @@ class InstructorExtractor:
         llm = getattr(settings, "llm", None)
         provider: str = getattr(llm, "provider", "ollama")
         api_base: str = getattr(llm, "api_base", "http://localhost:11434/v1")
+        
+        # For Ollama, ensure the api_base has /v1 suffix for OpenAI compatibility
+        if provider == "ollama" and api_base and not api_base.endswith("/v1"):
+            api_base = api_base.rstrip("/") + "/v1"
+        
         api_key: str = getattr(llm, "api_key", "ollama")
         model_name: str = getattr(
             llm,
@@ -366,8 +371,9 @@ class InstructorExtractor:
             # ollama, openai, vllm, azure-openai — all OpenAI-compatible
             if constrained_decoding:
                 # v0.14.0: Ollama structured output mode — pass JSON schema via
-                # extra_body["format"].  This forces grammar-constrained decoding
+                # extra_body["format"]. This forces grammar-constrained decoding
                 # at the model level, eliminating JSON parse failures entirely.
+                # Use JSON mode so instructor respects the format parameter.
                 mode = instructor.Mode.JSON
             else:
                 mode = (
