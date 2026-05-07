@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, ClassVar, Optional
 
 from opentelemetry import trace as otel_trace
@@ -10,14 +11,31 @@ from riverbank.prov import EvidenceSpan, ExtractedTriple
 
 logger = logging.getLogger(__name__)
 
+
+def _normalize_excerpt(s: str) -> str:
+    """Normalise an excerpt for citation grounding.
+
+    Strips markdown formatting (bold, italic, inline code) and collapses
+    whitespace so that minor LLM reformatting doesn't cause false rejections.
+    Also removes spaces inserted by the LLM tokeniser around decimal points
+    (e.g. "2. 0" → "2.0") and inside bracketed numeric lists.
+    """
+    s = re.sub(r"\*+", "", s)            # strip bold/italic markers
+    s = re.sub(r"`([^`]*)`", r"\1", s)   # strip inline code backticks
+    s = re.sub(r"(\d)\.\s+(\d)", r"\1.\2", s)  # fix decimal spacing: "2. 0" → "2.0"
+    s = re.sub(r"\s+", " ", s).strip()   # collapse all whitespace
+    return s
+
+
 _DEFAULT_PROMPT = """\
 You are a knowledge graph compiler.  Extract factual claims from the following
 technical document section as RDF triples.
 
 For each claim provide:
-- subject: IRI or prefixed name (e.g. ex:EntityName)
-- predicate: IRI or prefixed name (e.g. ex:hasProperty)
-- object_value: IRI, prefixed name, or literal value
+- subject: prefixed IRI for named entities (e.g. ex:Ariadne, ex:DrElenaVasquez)
+- predicate: prefixed camelCase IRI (e.g. ex:createdBy, ex:hasState, ex:provides)
+- object_value: prefixed IRI for named entities; typed literal for numbers/dates
+  (e.g. "2023"^^xsd:integer); plain literal only for short descriptive values
 - confidence: float 0.0–1.0 reflecting how clearly the text supports the claim
 - evidence: exact character offsets (char_start, char_end) and a verbatim
   excerpt copied from the source text
@@ -442,11 +460,15 @@ class InstructorExtractor:
 
         # --- validate and filter triples ---
         validated: list[ExtractedTriple] = []
+        _text_normalised = _normalize_excerpt(text)
         for t in response:
             subj, pred, obj, conf, ev_in = _unpack(t)
             cs, ce, excerpt, page_number = _unpack_ev(ev_in)
-            # Citation grounding: reject fabricated excerpts
-            if excerpt and excerpt not in text:
+            # Citation grounding: reject fabricated excerpts.
+            # Normalise both sides so minor LLM reformatting (spacing around
+            # decimals, stripped markdown, em-dash variants) doesn't cause
+            # false rejections of genuinely grounded triples.
+            if excerpt and _normalize_excerpt(excerpt) not in _text_normalised:
                 logger.warning(
                     "Rejecting triple — excerpt not found in source text: %r",
                     excerpt[:80],

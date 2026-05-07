@@ -732,3 +732,72 @@ class TestExtractionStatKeys:
         ]
         for key in required_keys:
             assert key in stats, f"Missing stat key: {key!r}"
+
+
+# ---------------------------------------------------------------------------
+# _normalize_excerpt (citation grounding normaliser)
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeExcerpt:
+    """Tests for the excerpt normaliser used in citation grounding."""
+
+    def test_strips_bold_markers(self):
+        from riverbank.extractors.instructor_extractor import _normalize_excerpt
+
+        assert _normalize_excerpt("**bold text**") == "bold text"
+
+    def test_strips_italic_markers(self):
+        from riverbank.extractors.instructor_extractor import _normalize_excerpt
+
+        assert _normalize_excerpt("*italic*") == "italic"
+
+    def test_strips_inline_code_backticks(self):
+        from riverbank.extractors.instructor_extractor import _normalize_excerpt
+
+        assert _normalize_excerpt("`some.module`") == "some.module"
+
+    def test_collapses_internal_whitespace(self):
+        from riverbank.extractors.instructor_extractor import _normalize_excerpt
+
+        result = _normalize_excerpt("value  is  large  here")
+        assert result == "value is large here"
+
+    def test_fixes_decimal_spacing(self):
+        from riverbank.extractors.instructor_extractor import _normalize_excerpt
+
+        # LLM inserts space after decimal point due to tokenisation
+        assert _normalize_excerpt("score is 2. 0 out of 5") == "score is 2.0 out of 5"
+        assert _normalize_excerpt("[0. 0, 1. 0]") == "[0.0, 1.0]"
+
+    def test_strips_leading_trailing_whitespace(self):
+        from riverbank.extractors.instructor_extractor import _normalize_excerpt
+
+        assert _normalize_excerpt("  trimmed  ") == "trimmed"
+
+    def test_no_change_for_plain_text(self):
+        from riverbank.extractors.instructor_extractor import _normalize_excerpt
+
+        plain = "Ariadne is an open-source Python library"
+        assert _normalize_excerpt(plain) == plain
+
+    def test_grounding_passes_after_normalisation(self):
+        """Simulates the real-world LLM reformatting issue: excerpt has
+        markdown stripped and spacing normalised, but still appears in text."""
+        from riverbank.extractors.instructor_extractor import _normalize_excerpt
+
+        source_text = "Ariadne is an **open-source Python library** created in 2023."
+        # LLM might output the excerpt with markdown stripped:
+        llm_excerpt = "Ariadne is an open-source Python library created in 2023."
+        assert _normalize_excerpt(llm_excerpt) in _normalize_excerpt(source_text)
+
+    def test_grounding_passes_for_decimal_spacing(self):
+        """LLM tokenisation artefact: '2.0' becomes '2. 0'."""
+        from riverbank.extractors.instructor_extractor import _normalize_excerpt
+
+        source_text = "The default prior is 2.0 for all claims."
+        # LLM excerpt with space inserted after decimal point:
+        llm_excerpt = "The default prior is 2. 0 for all claims."
+        # After normalisation of the source, the excerpt should match
+        assert _normalize_excerpt(llm_excerpt) in _normalize_excerpt(source_text)
+
