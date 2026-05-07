@@ -83,7 +83,7 @@
 
 | Version | Description | Status | Size |
 |---|---|---|---|
-| v0.15.0 | Wikidata evaluation framework — `riverbank evaluate-wikidata` command, 1,000-article benchmark dataset (7 domains), property alignment table, entity resolution pipeline, calibration curves, per-domain and per-property breakdowns | Planned | Large |
+| v0.15.0 | Wikidata evaluation framework — `riverbank evaluate-wikidata` command (single article or full dataset), 1,000-article benchmark dataset (7 domains), property alignment table, entity resolution pipeline, calibration curves, per-domain and per-property breakdowns | Planned | Large |
 | v0.15.1 | Extraction improvement loop — per-property recall gap analysis, extraction prompt tuning from failure modes, 200+ novel-discovery annotations, published evaluation methodology | Planned | Medium |
 
 ---
@@ -94,7 +94,11 @@ Goal: establish an externally-validated, reproducible benchmark for riverbank's
 extraction quality by comparing compiled triples against Wikidata's 1.65 billion
 human-curated statements sourced from the same Wikipedia articles.
 
-- [ ] `riverbank evaluate-wikidata --dataset <path> --profile <name>` command
+- [ ] `riverbank evaluate-wikidata --article <title|url>` — evaluate a single
+  Wikipedia article on demand: fetches the article, fetches the corresponding
+  Wikidata item, runs the full pipeline, prints a precision/recall summary
+- [ ] `riverbank evaluate-wikidata --dataset <path> --profile <name>` — batch
+  mode over the full benchmark dataset
 - [ ] 1,000-article benchmark dataset stratified across 7 domains: biographies
   (living + historical), organizations (commercial + non-profit), geographic
   entities, creative works, scientific concepts, and events
