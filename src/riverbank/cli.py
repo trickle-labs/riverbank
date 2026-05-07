@@ -160,6 +160,68 @@ def init() -> None:
         engine.dispose()
 
 
+@app.command("download-models")
+def download_models(
+    models: list[str] = typer.Argument(
+        None,
+        help="Model names to download (e.g. all-MiniLM-L6-v2). Defaults to all built-in models.",
+    ),
+    cache_dir: str = typer.Option(
+        None,
+        "--cache-dir",
+        help="Override the Hugging Face cache directory (default: ~/.cache/huggingface/hub/).",
+    ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress output."),
+) -> None:
+    """Pre-download sentence-transformer embedding models to the local cache.
+
+    Running this once prevents the HF Hub rate-limit warning and makes
+    subsequent 'riverbank ingest' calls fully offline (no network needed).
+
+    By default downloads every model riverbank uses internally:
+
+    \b
+      • all-MiniLM-L6-v2  — semantic chunking (SemanticFragmenter)
+
+    The models are stored under ~/.cache/huggingface/hub/ (or $HF_HOME if set).
+    Set --cache-dir to override the location.
+    """
+    _BUILTIN_MODELS = ["all-MiniLM-L6-v2"]
+    targets = list(models) if models else _BUILTIN_MODELS
+
+    import os  # noqa: PLC0415
+    if cache_dir:
+        os.environ["HF_HOME"] = cache_dir
+
+    try:
+        from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+    except ImportError:
+        rprint(
+            "[red]sentence-transformers is not installed.[/red] "
+            "Install with: [bold]pip install 'riverbank[ingest]'[/bold]"
+        )
+        raise typer.Exit(code=1)
+
+    ok = 0
+    failed = 0
+    for model_name in targets:
+        if not quiet:
+            rprint(f"[cyan]↓[/cyan]  Downloading [bold]{model_name}[/bold] …")
+        try:
+            SentenceTransformer(model_name)
+            if not quiet:
+                rprint(f"[green]✓[/green]  {model_name} cached successfully")
+            ok += 1
+        except Exception as exc:  # noqa: BLE001
+            rprint(f"[red]✗[/red]  {model_name} — {exc}")
+            failed += 1
+
+    if not quiet:
+        rprint(f"\n[bold]Done:[/bold] {ok} downloaded, {failed} failed")
+    if failed:
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def ingest(
     corpus: str = typer.Argument(..., help="Path to a corpus directory or file"),

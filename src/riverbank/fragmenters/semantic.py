@@ -210,7 +210,18 @@ class SemanticFragmenter:
             from sentence_transformers import SentenceTransformer  # noqa: PLC0415
 
             if self._model is None:
-                self._model = SentenceTransformer(self._model_name)
+                import warnings  # noqa: PLC0415
+                # The HF Hub emits a noisy warning when requests are unauthenticated.
+                # We silence it here because (a) the model is public, (b) it is
+                # cached locally after the first download, and (c) the user can
+                # run 'riverbank download-models' to pre-populate the cache.
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message=".*unauthenticated.*",
+                        category=UserWarning,
+                    )
+                    self._model = SentenceTransformer(self._model_name)
             return self._model.encode(sentences, normalize_embeddings=True)
         except Exception as exc:  # noqa: BLE001
             logger.debug("SemanticFragmenter: embedding failed — %s", exc)
@@ -284,3 +295,32 @@ class SemanticFragmenter:
                 char_start = char_cursor
             char_end = min(char_start + len(chunk_text), len(raw_text))
             yield _make_fragment(chunk_idx, source_iri, chunk_text, char_start, char_end)
+
+
+# ---------------------------------------------------------------------------
+# __main__: pre-download models (used by Dockerfile)
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import sys
+
+    models_to_download = [_DEFAULT_MODEL]
+    if "--download-models" in sys.argv:
+        # Optional: extra model names passed after the flag
+        idx = sys.argv.index("--download-models")
+        extra = sys.argv[idx + 1:]
+        if extra:
+            models_to_download = extra
+
+    try:
+        from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+    except ImportError:
+        print("sentence-transformers not installed", file=sys.stderr)
+        sys.exit(1)
+
+    for _m in models_to_download:
+        print(f"Downloading {_m} …", flush=True)
+        SentenceTransformer(_m)
+        print(f"  cached: {_m}")
+
+    print("All models downloaded.")

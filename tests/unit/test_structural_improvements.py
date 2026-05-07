@@ -599,6 +599,20 @@ class TestCLIV014Commands:
         command_names = [c.name for c in app.registered_commands]
         assert "run-owl-rl" in command_names
 
+    def test_download_models_registered(self):
+        from riverbank.cli import app
+
+        command_names = [c.name for c in app.registered_commands]
+        assert "download-models" in command_names
+
+    def test_download_models_help_mentions_all_minilm(self):
+        from typer.testing import CliRunner
+        from riverbank.cli import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["download-models", "--help"])
+        assert "all-MiniLM-L6-v2" in result.output
+
 
 # ===========================================================================
 # v0.15.0 — CorpusScanner adaptive pre-scan
