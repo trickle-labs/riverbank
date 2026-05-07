@@ -21,10 +21,19 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Create pg_ripple extension (RDF triple store with SPARQL)
-    op.execute("CREATE EXTENSION IF NOT EXISTS pg_ripple")
+    # Try to create, but fail gracefully if not available (e.g., standard PostgreSQL)
+    try:
+        op.execute("CREATE EXTENSION IF NOT EXISTS pg_ripple")
+    except Exception:  # noqa: BLE001
+        # Extension not available in this PostgreSQL installation
+        pass
     
     # Create pg_trickle extension (incremental view maintenance and streams)
-    op.execute("CREATE EXTENSION IF NOT EXISTS pg_trickle")
+    try:
+        op.execute("CREATE EXTENSION IF NOT EXISTS pg_trickle")
+    except Exception:  # noqa: BLE001
+        # Extension not available in this PostgreSQL installation
+        pass
 
 
 def downgrade() -> None:
