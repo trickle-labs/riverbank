@@ -1,14 +1,16 @@
-# Wikidata evaluation profile for riverbank
+# Wikidata evaluation profile using LLM statement fragmenter
+#
+# This profile tests the new LLMStatementFragmenter which sends the entire document
+# to the LLM once and asks it to split it into individual statements.
 #
 # Use this profile when running:
-#   riverbank evaluate-wikidata --article "Marie Curie" --profile wikidata-eval-v1
-#   riverbank evaluate-wikidata --dataset eval/wikidata-benchmark-1k.yaml --profile wikidata-eval-v1
+#   riverbank evaluate-wikidata --article "Marie Curie" --profile wikidata-eval-v1-llm-statement
 #
-# This profile configures the extractor for maximum precision and recall on
-# encyclopaedic Wikipedia content, matching the types of facts Wikidata tracks.
+# Compare results with the heading-based fragmenter to see how statement-level
+# splitting differs from heading-based fragmentation.
 
-name: "wikidata-eval-v1"
-description: "Evaluation profile for benchmarking riverbank against Wikidata ground truth"
+name: "wikidata-eval-v1-llm-statement"
+description: "Evaluation profile using LLM-based statement fragmenter"
 
 run_mode_sequence: ["full"]
 
@@ -20,11 +22,12 @@ model_name: "llama3.2"
 # Parser: plain Markdown from Wikipedia download pipeline
 parser: "markdown"
 
-# Fragment at headings to match Wikipedia's natural section structure
-fragmenter: "heading"
-fragmenter_config:
-  min_heading_depth: 1
-  max_heading_depth: 4
+# Fragment using LLM statement splitting — send whole document to LLM once
+# and have it split into individual statements
+fragmenter: "llm_statement"
+llm_statement_fragmentation:
+  max_doc_chars: 20000
+  max_statements: 200
 
 # Editorial policy gate — relaxed for evaluation (Wikipedia text is high quality)
 ingest_gate:
@@ -41,23 +44,20 @@ extraction_strategy:
     trusted_threshold: 0.70
   safety_cap: 100  # Max triples per fragment
 
-# Preprocessing: disabled by default (can be enabled with longer contexts)
+# Preprocessing: disabled by default
 preprocessing:
   enabled: false
   max_tokens_for_preprocessing: 4000
 
 # Constrained decoding: enable Ollama's JSON schema grammar constraint
-# This forces valid JSON output at the token level, eliminating parse errors
 constrained_decoding: true
 
-# Verification: disabled for speed; enable with --verify flag
+# Verification: disabled for speed
 verification:
   enabled: false
 
 # Evaluation-specific configuration
 evaluation:
   wikidata_benchmark: true
-  # Sample rate for manual novel-discovery annotation (Phase 2)
   novel_discovery_sampling_rate: 0.10
-  # Minimum confidence to include a triple in scoring
   min_confidence_for_scoring: 0.30

@@ -261,12 +261,16 @@ def ingest(
 
     from riverbank.pipeline import CompilerProfile, IngestPipeline  # noqa: PLC0415
 
-    # Resolve the profile
+    # Resolve the profile (same search order as _eval_load_profile)
     profile_path = Path(profile_name)
     if profile_path.exists() and profile_path.suffix in {".yaml", ".yml"}:
         profile = CompilerProfile.from_yaml(profile_path)
     else:
-        profile = CompilerProfile(name=profile_name)
+        candidate = Path("examples") / "profiles" / f"{profile_name}.yaml"
+        if candidate.exists():
+            profile = CompilerProfile.from_yaml(candidate)
+        else:
+            profile = CompilerProfile(name=profile_name)
 
     pipeline = IngestPipeline(set_overrides=set_overrides)
 
@@ -3641,6 +3645,122 @@ def run_owl_rl(
 
 
 # ---------------------------------------------------------------------------
+# v0.15.0: Wikidata evaluation framework — helpers
+# ---------------------------------------------------------------------------
+
+
+def _eval_load_profile(profile_name: str) -> "CompilerProfile":
+    """Resolve a CompilerProfile for the evaluate-wikidata command.
+
+    Search order:
+    1. Direct YAML file path (if it exists with a .yaml/.yml suffix).
+    2. ``examples/profiles/<name>.yaml`` relative to the current directory.
+    3. Default ``CompilerProfile(name=profile_name)``.
+    """
+    from pathlib import Path as _Path  # noqa: PLC0415
+
+    from riverbank.pipeline import CompilerProfile  # noqa: PLC0415
+
+    p = _Path(profile_name)
+    if p.exists() and p.suffix in {".yaml", ".yml"}:
+        return CompilerProfile.from_yaml(p)
+    candidate = _Path("examples") / "profiles" / f"{profile_name}.yaml"
+    if candidate.exists():
+        return CompilerProfile.from_yaml(candidate)
+    return CompilerProfile(name=profile_name)
+
+
+def _eval_extract_triples(
+    article_content: str,
+    profile: "CompilerProfile",
+    eval_graph_iri: str,
+    set_overrides: list[str] | None = None,
+) -> list[tuple[str, str, str, float]]:
+    """Ingest article_content and return extracted triples from the eval graph.
+
+    Writes the content to a temp Markdown file, runs IngestPipeline routing all
+    output (trusted + tentative) to *eval_graph_iri*, queries the triples back
+    via SPARQL, purges the ephemeral graph, and deletes the temp file.
+
+    Returns ``(subject, predicate, object, confidence)`` tuples.
+    Returns an empty list on any error (LLM not configured, pg_ripple missing, etc.).
+    """
+    import copy  # noqa: PLC0415
+    import os  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from riverbank.catalog.graph import clear_graph as _clear_graph  # noqa: PLC0415
+    from riverbank.catalog.graph import sparql_query  # noqa: PLC0415
+    from riverbank.pipeline import IngestPipeline  # noqa: PLC0415
+
+    # Shallow-copy the profile and override both graph IRIs so all triples
+    # (trusted and tentative) land in the same ephemeral evaluation graph.
+    eval_profile = copy.copy(profile)
+    eval_profile.named_graph = eval_graph_iri
+    eval_profile.tentative_graph = eval_graph_iri
+
+    triples: list[tuple[str, str, str, float]] = []
+
+    # Write article content to a temporary Markdown file.
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        suffix=".md",
+        encoding="utf-8",
+        delete=False,
+        prefix="rb_eval_",
+    ) as tmp:
+        tmp.write(article_content)
+        tmp_path = tmp.name
+
+    try:
+        pipeline = IngestPipeline(set_overrides=set_overrides)
+        stats = pipeline.run(corpus_path=tmp_path, profile=eval_profile)
+        rprint(f"  [dim]Pipeline stats: processed={stats.get('fragments_processed',0)} skipped_hash={stats.get('fragments_skipped_hash',0)} skipped_gate={stats.get('fragments_skipped',0) - stats.get('fragments_skipped_hash',0)} llm_calls={stats.get('llm_calls',0)} triples_written={stats.get('triples_written',0)} errors={stats.get('errors',0)}[/dim]")
+
+        # Query all triples from the ephemeral evaluation graph.
+        sparql = (
+            "SELECT ?s ?p ?o ?confidence WHERE { "
+            f"GRAPH <{eval_graph_iri}> {{ "
+            "  ?s ?p ?o . "
+            "  OPTIONAL { ?s <http://riverbank.example/pgc/confidence> ?confidence . } "
+            "} }"
+        )
+        settings = get_settings()
+        engine = create_engine(settings.db.dsn)
+        try:
+            with engine.connect() as conn:
+                rows = sparql_query(conn, sparql)
+                for row in rows:
+                    s = str(row.get("s", "")).strip()
+                    p = str(row.get("p", "")).strip()
+                    o = str(row.get("o", "")).strip()
+                    conf_raw = row.get("confidence", 0.8)
+                    try:
+                        conf = float(conf_raw)
+                    except (TypeError, ValueError):
+                        conf = 0.8
+                    if s and p and o:
+                        triples.append((s, p, o, conf))
+                # Purge the ephemeral graph so it does not persist between runs.
+                _clear_graph(conn, named_graph=eval_graph_iri)
+                conn.commit()
+        finally:
+            engine.dispose()
+
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"  [yellow]Warning: ingest failed — {exc}[/yellow]")
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    return triples
+
+
+# ---------------------------------------------------------------------------
 # v0.15.0: Wikidata evaluation framework
 # ---------------------------------------------------------------------------
 
@@ -3699,6 +3819,11 @@ def evaluate_wikidata(
         "--verbose",
         "-v",
         help="Print per-article results as they are computed.",
+    ),
+    set_overrides: list[str] = typer.Option(
+        [],
+        "--set",
+        help="Override a config key at runtime, e.g. --set llm.provider=ollama (repeatable)",
     ),
 ) -> None:
     """Evaluate riverbank extraction quality against Wikidata ground truth.
@@ -3764,6 +3889,9 @@ def evaluate_wikidata(
 
     start_time = time.time()
 
+    # Resolve the compiler profile used for extraction.
+    eval_profile = _eval_load_profile(profile_name)
+
     # ------------------------------------------------------------------
     # Single-article mode
     # ------------------------------------------------------------------
@@ -3816,12 +3944,22 @@ def evaluate_wikidata(
 
         rprint(f"  [dim]Wikidata statements:[/dim] {len(wd_item.statements)}")
 
-        # Score with empty triples (real ingestion would populate these)
-        # In a full deployment, the ingest pipeline writes to a temp graph
-        # and triples are queried back. Here we demonstrate the scoring interface.
+        # ── Run ingest pipeline and score extracted triples ──────────────
+        import uuid as _uuid  # noqa: PLC0415
+
+        eval_graph_iri = f"http://riverbank.example/graph/eval-{_uuid.uuid4().hex}"
+        rprint(f"  [dim]Ingesting via profile '{eval_profile.name}'…[/dim]")
+        riverbank_triples = _eval_extract_triples(
+            article_content=wp_article.content,
+            profile=eval_profile,
+            eval_graph_iri=eval_graph_iri,
+            set_overrides=set_overrides,
+        )
+        rprint(f"  [dim]Triples extracted:[/dim] {len(riverbank_triples)}")
+
         score = scorer.score_article(
             article_title=wp_article.title,
-            riverbank_triples=[],  # populated by real ingest pipeline
+            riverbank_triples=riverbank_triples,
             wikidata_item=wd_item,
             domain="unknown",
         )
@@ -3886,6 +4024,8 @@ def evaluate_wikidata(
 
     article_scores: list[ArticleScore] = []
 
+    import uuid as _uuid  # noqa: PLC0415
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -3931,10 +4071,17 @@ def evaluate_wikidata(
                 from riverbank.eval.models import WikidataItem  # noqa: PLC0415
                 wd_item = WikidataItem(qid=qid, label=title, description="", aliases=[], statements=[])
 
-            # Score (empty triples — real ingest pipeline feeds this)
+            # Ingest article and score extracted triples.
+            _eval_graph = f"http://riverbank.example/graph/eval-{_uuid.uuid4().hex}"
+            _article_triples = _eval_extract_triples(
+                article_content=wp_article.content,
+                profile=eval_profile,
+                eval_graph_iri=_eval_graph,
+                set_overrides=set_overrides,
+            )
             score = scorer.score_article(
                 article_title=title,
-                riverbank_triples=[],
+                riverbank_triples=_article_triples,
                 wikidata_item=wd_item,
                 domain=domain,
             )

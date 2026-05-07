@@ -1,0 +1,65 @@
+# Wikidata evaluation profile using LLM statement fragmenter with ESSENTIAL distillation
+#
+# This profile uses the LLMStatementFragmenter with "essential" distillation level,
+# which extracts only the bare essential facts: core identity, major achievements,
+# and key contributions. This reduces noise and focuses on primary claims.
+#
+# Use this profile when running:
+#   riverbank evaluate-wikidata --article "Marie Curie" --profile wikidata-eval-v1-llm-essential
+#
+# Distillation levels available:
+#   - "default": All atomic statements (most comprehensive)
+#   - "essential": Core facts only (bare essentials)
+#   - "minimal": Achievements/discoveries only (most distilled)
+
+name: "wikidata-eval-v1-llm-essential"
+description: "Evaluation profile using LLM statement fragmenter (essential distillation)"
+
+run_mode_sequence: ["full"]
+
+# Extractor: use instructor for structured extraction
+extractor: "instructor"
+model_provider: "ollama"
+model_name: "llama3.2"
+
+# Parser: plain Markdown from Wikipedia download pipeline
+parser: "markdown"
+
+# Fragment using LLM statement splitting with essential distillation
+fragmenter: "llm_statement"
+llm_statement_fragmentation:
+  max_doc_chars: 20000
+  max_statements: 200
+  distillation_level: "essential"  # ← Core facts only
+
+# Editorial policy gate — relaxed for evaluation (Wikipedia text is high quality)
+ingest_gate:
+  min_fragment_length: 50
+  max_fragment_length: 8000
+  check_language: true
+
+# LLM extraction — permissive mode for maximum recall
+extraction_strategy:
+  mode: "permissive"
+  confidence_routing:
+    tentative_threshold: 0.40
+    trusted_threshold: 0.70
+  safety_cap: 100
+
+# Preprocessing: disabled by default
+preprocessing:
+  enabled: false
+  max_tokens_for_preprocessing: 4000
+
+# Constrained decoding
+constrained_decoding: true
+
+# Verification: disabled for speed
+verification:
+  enabled: false
+
+# Evaluation configuration
+evaluation:
+  wikidata_benchmark: true
+  novel_discovery_sampling_rate: 0.10
+  min_confidence_for_scoring: 0.30

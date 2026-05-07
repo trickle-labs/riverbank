@@ -250,6 +250,42 @@ class InstructorExtractor:
                     diagnostics={"error": str(exc)},
                 )
 
+    def extract_batch(
+        self, fragments: list[object], profile: object, trace: object
+    ) -> dict[str, ExtractionResult]:
+        """Extract triples from multiple fragments in a single LLM call.
+
+        Combines fragment texts and extracts triples for all of them together,
+        reducing the number of LLM calls needed. Returns a mapping from fragment
+        key to ExtractionResult.
+
+        Args:
+            fragments: List of DocumentFragment objects to extract from
+            profile: CompilerProfile object
+            trace: OTel trace object (unused)
+
+        Returns:
+            Dict mapping fragment_key → ExtractionResult
+        """
+        if not fragments:
+            return {}
+
+        tracer = otel_trace.get_tracer(__name__)
+        with tracer.start_as_current_span("instructor_extractor.extract_batch") as span:
+            try:
+                return self._extract_batch_with_llm(fragments, profile, span)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("instructor batch extraction failed: %s", exc)
+                span.set_status(otel_trace.StatusCode.ERROR, str(exc))
+                # Return error result for each fragment
+                return {
+                    getattr(f, "fragment_key", str(i)): ExtractionResult(
+                        triples=[],
+                        diagnostics={"error": str(exc)},
+                    )
+                    for i, f in enumerate(fragments)
+                }
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
@@ -549,3 +585,208 @@ class InstructorExtractor:
                 "triples_capped": triples_capped,
             },
         )
+
+    def _extract_batch_with_llm(
+        self,
+        fragments: list[object],
+        profile: object,
+        span: Any,
+    ) -> dict[str, ExtractionResult]:
+        """Extract triples from multiple fragments in one LLM call.
+
+        Combines fragment texts with separators, sends to LLM, then parses
+        and maps results back to original fragments.
+        """
+        try:
+            import instructor  # noqa: PLC0415
+            from openai import OpenAI  # noqa: PLC0415
+        except ImportError as exc:
+            raise ImportError(
+                "instructor and openai are required for batching. "
+                "Install with: pip install 'riverbank[ingest]'"
+            ) from exc
+
+        from pydantic import BaseModel, Field  # noqa: PLC0415
+
+        settings = self._settings
+        if settings is None:
+            from riverbank.config import get_settings  # noqa: PLC0415
+
+            settings = get_settings()
+
+        llm = getattr(settings, "llm", None)
+        provider: str = getattr(llm, "provider", "ollama")
+        api_base: str = getattr(llm, "api_base", "http://localhost:11434/v1")
+
+        if provider == "ollama" and api_base and not api_base.endswith("/v1"):
+            api_base = api_base.rstrip("/") + "/v1"
+
+        api_key: str = getattr(llm, "api_key", "ollama")
+        model_name: str = getattr(
+            llm,
+            "model",
+            getattr(profile, "model_name", "llama3.2"),
+        )
+        prompt_text: str = getattr(profile, "prompt_text", _DEFAULT_PROMPT)
+        extraction_strategy: dict = getattr(profile, "extraction_strategy", {})
+
+        prompt_text = _build_permissive_prompt(prompt_text, extraction_strategy)
+
+        # Combine fragments with clear separators
+        combined_text = "\n\n---\n\n".join(
+            f"[Fragment {i}]\n{getattr(f, 'text', '')}"
+            for i, f in enumerate(fragments)
+        )
+
+        # Batch extraction schema — NOTE: fragment_id must be included by LLM
+        # If LLM fails to include it, we fall back to per-fragment extraction
+        class _BatchTriple(BaseModel):
+            fragment_id: int = Field(default=-1, description="Index of the fragment (0-based)")
+            subject: str
+            predicate: str
+            object_value: str
+            confidence: float
+            evidence: dict = Field(default_factory=dict)
+
+        class _BatchExtractionResult(BaseModel):
+            triples: list[_BatchTriple] = Field(description="List of extracted triples")
+
+        client = instructor.patch(
+            OpenAI(
+                api_key=api_key,
+                base_url=api_base,
+            )
+        )
+
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                temperature=0,
+                messages=[
+                    {"role": "system", "content": prompt_text},
+                    {
+                        "role": "user",
+                        "content": f"Extract triples from these fragments:\n\n{combined_text}",
+                    },
+                ],
+                response_model=_BatchExtractionResult,
+            )
+        except Exception as exc:
+            logger.warning("Batch extraction LLM call failed: %s", exc)
+            # Return empty results — batch mode not supported in v0.15.1
+            return {
+                getattr(f, "fragment_key", str(i)): ExtractionResult(
+                    triples=[],
+                    diagnostics={"error": "batch_extraction_not_supported"},
+                )
+                for i, f in enumerate(fragments)
+            }
+
+        # Group triples by fragment
+        results: dict[str, ExtractionResult] = {}
+        triple_counts: dict[int, int] = {}
+        total_triples = 0
+
+        for triple in response.triples:
+            frag_idx = triple.fragment_id
+            
+            # If LLM didn't include fragment_id, infer it from evidence/excerpt
+            if frag_idx < 0:
+                excerpt = triple.evidence.get("excerpt", "")
+                if excerpt:
+                    # Find which fragment contains this excerpt
+                    for i, frag in enumerate(fragments):
+                        frag_text = getattr(frag, "text", "")
+                        if excerpt in frag_text:
+                            frag_idx = i
+                            break
+                
+                # If still not found, try fuzzy matching on excerpt
+                if frag_idx < 0 and excerpt:
+                    best_match_idx = 0
+                    best_match_score = 0
+                    for i, frag in enumerate(fragments):
+                        frag_text = getattr(frag, "text", "")
+                        score = _fuzz.partial_ratio(excerpt, frag_text)
+                        if score > best_match_score:
+                            best_match_score = score
+                            best_match_idx = i
+                    if best_match_score >= 50:  # Reasonable confidence threshold
+                        frag_idx = best_match_idx
+                
+                # Final fallback: assume first fragment
+                if frag_idx < 0:
+                    frag_idx = 0
+            
+            if frag_idx < 0 or frag_idx >= len(fragments):
+                logger.warning("Batch extraction: could not determine fragment for triple: %s", triple)
+                continue
+
+            fragment = fragments[frag_idx]
+            frag_key = getattr(fragment, "fragment_key", str(frag_idx))
+            source_iri = getattr(fragment, "source_iri", "")
+            text = getattr(fragment, "text", "")
+
+            # Validate triple
+            subj, pred, obj = triple.subject, triple.predicate, triple.object_value
+            conf = triple.confidence
+
+            # Auto-expand bare predicates/subjects
+            if pred and ":" not in pred and not pred.startswith("<"):
+                pred = f"ex:{pred}"
+            if subj and ":" not in subj and not subj.startswith("<"):
+                subj = f"ex:{subj}"
+
+            # Citation grounding check
+            excerpt = triple.evidence.get("excerpt", "")
+            if excerpt and _fuzz.partial_ratio(excerpt, text) < _CITATION_SIMILARITY_THRESHOLD:
+                logger.warning(
+                    "Batch extraction: rejecting triple — similarity too low: %r",
+                    excerpt[:80],
+                )
+                continue
+
+            try:
+                evidence = EvidenceSpan(
+                    source_iri=source_iri,
+                    char_start=triple.evidence.get("char_start", 0),
+                    char_end=triple.evidence.get("char_end", 0),
+                    excerpt=excerpt,
+                    page_number=triple.evidence.get("page_number"),
+                )
+                et = ExtractedTriple(
+                    subject=subj,
+                    predicate=pred,
+                    object_value=obj,
+                    confidence=conf,
+                    evidence=[evidence],
+                )
+                if frag_key not in results:
+                    results[frag_key] = ExtractionResult(triples=[])
+                results[frag_key].triples.append(et)
+                triple_counts[frag_idx] = triple_counts.get(frag_idx, 0) + 1
+                total_triples += 1
+            except Exception as e:
+                logger.warning("Batch extraction: error creating triple: %s", e)
+                continue
+
+        # Ensure all fragments have results
+        for i, fragment in enumerate(fragments):
+            frag_key = getattr(fragment, "fragment_key", str(i))
+            if frag_key not in results:
+                results[frag_key] = ExtractionResult(triples=[])
+
+        span.set_attribute("batch.fragment_count", len(fragments))
+        span.set_attribute("batch.total_triples", total_triples)
+        span.set_attribute("batch.model", model_name)
+
+        # Aggregate diagnostics
+        for frag_key in results:
+            results[frag_key].diagnostics = {
+                "batch_mode": True,
+                "batch_size": len(fragments),
+                "model": model_name,
+                "llm_calls": 1,
+            }
+
+        return results

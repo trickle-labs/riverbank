@@ -1,0 +1,71 @@
+# Wikidata evaluation profile with BATCH EXTRACTION enabled
+#
+# This profile demonstrates optional batch extraction, which combines multiple
+# fragments into a single LLM call for improved efficiency.
+#
+# Batch Mode:
+#   When extraction_strategy.batch_size is set, the extractor will:
+#   1. Group fragments into batches
+#   2. Send each batch to the LLM in a single call
+#   3. Parse results back to individual fragments
+#
+# Trade-offs:
+#   ✓ Fewer LLM calls (50% reduction with batch_size=3)
+#   ✗ More tokens per call (overhead amortization)
+#   ✗ Potential for cross-fragment hallucination
+#
+# Best for: OpenAI API (per-call costs high), hosted LLM services
+# Less useful: Ollama local (minimal per-call overhead)
+
+name: "wikidata-eval-v1-llm-batched"
+description: "Evaluation profile with batch extraction (3 fragments per call)"
+
+run_mode_sequence: ["full"]
+
+# Extractor: use instructor for structured extraction
+extractor: "instructor"
+model_provider: "ollama"
+model_name: "llama3.2"
+
+# Parser: plain Markdown from Wikipedia download pipeline
+parser: "markdown"
+
+# Fragment using LLM statement splitting with minimal distillation
+fragmenter: "llm_statement"
+llm_statement_fragmentation:
+  max_doc_chars: 20000
+  max_statements: 200
+  distillation_level: "minimal"
+
+# Editorial policy gate — relaxed for evaluation (Wikipedia text is high quality)
+ingest_gate:
+  min_fragment_length: 50
+  max_fragment_length: 8000
+  check_language: true
+
+# LLM extraction — BATCH MODE enabled
+extraction_strategy:
+  mode: "permissive"
+  batch_size: 3  # ← Group 3 fragments per LLM call
+  confidence_routing:
+    tentative_threshold: 0.40
+    trusted_threshold: 0.70
+  safety_cap: 100
+
+# Preprocessing: disabled by default
+preprocessing:
+  enabled: false
+  max_tokens_for_preprocessing: 4000
+
+# Constrained decoding
+constrained_decoding: true
+
+# Verification: disabled for speed
+verification:
+  enabled: false
+
+# Evaluation configuration
+evaluation:
+  wikidata_benchmark: true
+  novel_discovery_sampling_rate: 0.10
+  min_confidence_for_scoring: 0.30

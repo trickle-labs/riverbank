@@ -1,14 +1,15 @@
-# Wikidata evaluation profile for riverbank
+# Wikidata evaluation profile for riverbank (without preprocessing)
 #
-# Use this profile when running:
-#   riverbank evaluate-wikidata --article "Marie Curie" --profile wikidata-eval-v1
-#   riverbank evaluate-wikidata --dataset eval/wikidata-benchmark-1k.yaml --profile wikidata-eval-v1
+# Use this profile for faster evaluation without document preprocessing:
+#   riverbank evaluate-wikidata --article "Marie Curie" --profile wikidata-eval-v1-no-prep
 #
 # This profile configures the extractor for maximum precision and recall on
 # encyclopaedic Wikipedia content, matching the types of facts Wikidata tracks.
+# Preprocessing (document summarization) is disabled for speed and to avoid
+# additional LLM calls.
 
-name: "wikidata-eval-v1"
-description: "Evaluation profile for benchmarking riverbank against Wikidata ground truth"
+name: "wikidata-eval-v1-no-prep"
+description: "Evaluation profile for benchmarking riverbank against Wikidata ground truth (no preprocessing)"
 
 run_mode_sequence: ["full"]
 
@@ -41,10 +42,9 @@ extraction_strategy:
     trusted_threshold: 0.70
   safety_cap: 100  # Max triples per fragment
 
-# Preprocessing: disabled by default (can be enabled with longer contexts)
+# Preprocessing: disabled for this evaluation profile
 preprocessing:
   enabled: false
-  max_tokens_for_preprocessing: 4000
 
 # Constrained decoding: enable Ollama's JSON schema grammar constraint
 # This forces valid JSON output at the token level, eliminating parse errors

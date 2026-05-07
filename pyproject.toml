@@ -112,6 +112,8 @@ docling = "riverbank.parsers.docling:DoclingParser"
 [project.entry-points."riverbank.fragmenters"]
 heading = "riverbank.fragmenters.heading:HeadingFragmenter"
 semantic = "riverbank.fragmenters.semantic:SemanticFragmenter"
+llm_statement = "riverbank.fragmenters.llm_statement:LLMStatementFragmenter"
+direct = "riverbank.fragmenters.direct:DirectFragmenter"
 
 [project.entry-points."riverbank.extractors"]
 noop = "riverbank.extractors.noop:NoOpExtractor"

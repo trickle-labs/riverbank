@@ -82,11 +82,17 @@ class CompilerProfile:
     knowledge_prefix: dict = field(default_factory=dict)
     # v0.14.0: Constrained decoding — force JSON schema conformance for Ollama backends
     constrained_decoding: bool = False
-    # v0.14.0: Fragmenter selection — "heading" (default) or "semantic"
+    # v0.14.0: Fragmenter selection — "heading" (default), "semantic", or "llm_statement"
     fragmenter: str = "heading"
     # v0.14.0: Semantic chunking — embedding-based boundary detection
     # v0.15.0: Set auto_tune: true to derive parameters from a corpus pre-scan
     semantic_chunking: dict = field(default_factory=dict)
+    # v0.16.0: LLM statement fragmentation — send full document to LLM, split into statements
+    llm_statement_fragmentation: dict = field(default_factory=dict)
+    # v0.16.0: Direct extraction — whole-document single-fragment config
+    direct_extraction: dict = field(default_factory=dict)
+    # v0.16.0: Entity resolution — post-extraction owl:sameAs alias merging
+    entity_resolution: dict = field(default_factory=dict)
     # v0.14.0: SPARQL CONSTRUCT inference rules (list of SPARQL CONSTRUCT query strings)
     construct_rules: list = field(default_factory=list)
     # v0.14.0: SHACL shape validation
@@ -215,6 +221,9 @@ class IngestPipeline:
             "triples_capped": 0,
             # v0.12.1
             "triples_promoted": 0,
+            # v0.16.0
+            "entity_resolution_calls": 0,
+            "entity_resolution_triples": 0,
         }
         with tracer.start_as_current_span("ingest_pipeline.run") as span:
             for run_mode in sequence:
@@ -279,6 +288,9 @@ class IngestPipeline:
             "triples_capped": 0,
             # v0.12.1
             "triples_promoted": 0,
+            # v0.16.0
+            "entity_resolution_calls": 0,
+            "entity_resolution_triples": 0,
             # Corpus size for yield metrics
             "corpus_bytes": 0,
         }
@@ -379,6 +391,8 @@ class IngestPipeline:
                         logger.error("Failed to process %s: %s", source.iri, exc)
                         src_span.set_status(otel_trace.StatusCode.ERROR, str(exc))
                         stats["errors"] += 1
+
+            conn.commit()
 
         return stats
 
@@ -524,6 +538,19 @@ class IngestPipeline:
         if progress_callback:
             progress_callback("source_start", {"source": source.iri, "total_fragments": len(fragments)})
 
+        # v0.16.0: entity resolution — accumulate subjects across all fragments
+        entity_resolution_cfg: dict = getattr(profile, "entity_resolution", {})
+        source_subjects: set[str] = set()
+
+        # v0.17.0: Batch extraction disabled (v0.15.1 limitation)
+        # Batch mode not working reliably with Gemma/Ollama due to structured output
+        # and multiple tool calls limitations. Use per-fragment mode for now.
+        extraction_strategy: dict = getattr(profile, "extraction_strategy", {})
+        batch_size: int = extraction_strategy.get("batch_size", 0)
+        use_batching: bool = False  # Disabled in v0.15.1
+
+        # Pre-filter fragments to determine which ones need extraction
+        fragments_to_process: list[tuple[Any, str, Any]] = []  # (frag, frag_iri, frag_profile)
         for frag in fragments:
             frag_hash_hex = frag.content_hash.hex()
             frag_iri = f"{source.iri}#{frag.fragment_key}"
@@ -604,177 +631,169 @@ class IngestPipeline:
                 # In dry-run mode we parse + fragment but skip extraction
                 continue
 
-            # Upsert source record (needed before we can upsert fragments)
+            # Build the fragment profile (with per-fragment customizations)
+            frag_profile = extraction_profile
+            if preprocess_result is not None and preprocessor is not None:
+                from dataclasses import replace as _dc_replace_frag  # noqa: PLC0415
+                filtered_prompt = preprocessor.build_extraction_prompt(
+                    preprocess_result, profile, fragment_text=frag.text
+                )
+                frag_profile = _dc_replace_frag(extraction_profile, prompt_text=filtered_prompt)
+            # Strategy 6: inject few-shot examples into the extraction prompt
+            if few_shot_injector is not None:
+                from dataclasses import replace as _dc_replace2  # noqa: PLC0415
+                enriched_with_shots = few_shot_injector.inject(
+                    frag_profile.prompt_text,
+                    profile,
+                    fragment_text=frag.text,
+                )
+                if enriched_with_shots != frag_profile.prompt_text:
+                    frag_profile = _dc_replace2(frag_profile, prompt_text=enriched_with_shots)
+
+            fragments_to_process.append((frag, frag_iri, frag_profile))
+
+        # Ensure source record exists
+        if fragments_to_process and not dry_run:
             self._ensure_source(conn, source, profile)
 
-            # NER pre-resolution step (v0.5.0) — runs before the LLM call.
-            # When a vocabulary pass has run, matched concept IRIs are injected
-            # into the structured context block passed to the extractor.
-            ner_context: dict = {}
-            try:
-                from riverbank.ner import SpacyNERExtractor, lookup_vocabulary  # noqa: PLC0415
+        # Process fragments (batched or per-fragment)
+        if use_batching:
+            # v0.17.0: Batch extraction mode
+            for batch_start in range(0, len(fragments_to_process), batch_size):
+                batch_end = min(batch_start + batch_size, len(fragments_to_process))
+                batch = fragments_to_process[batch_start:batch_end]
+                batch_frags = [f for f, _, _ in batch]
 
-                _ner = SpacyNERExtractor(model_name=profile.ner_model)
-                ner_result = _ner.extract(frag.text)
-                if ner_result.entities:
-                    vocab_matches: dict[str, str] = {}
-                    for entity in ner_result.entities:
-                        iri_match = lookup_vocabulary(conn, entity.text)
-                        if iri_match:
-                            vocab_matches[entity.text] = iri_match
-                    if vocab_matches:
-                        ner_context = {"vocabulary_matches": vocab_matches}
-            except Exception as _ner_exc:  # noqa: BLE001
-                logger.debug("NER pre-resolution step failed: %s", _ner_exc)
-
-            # Extract triples
-            with tracer.start_as_current_span("ingest_pipeline.extract") as ex_span:
-                ex_span.set_attribute("fragment.key", frag.fragment_key)
-                # §3.1 Per-fragment entity catalog filtering: rebuild the enriched
-                # prompt with only entities relevant to this fragment's text.
-                frag_profile = extraction_profile
-                if preprocess_result is not None and preprocessor is not None:
-                    from dataclasses import replace as _dc_replace_frag  # noqa: PLC0415
-                    filtered_prompt = preprocessor.build_extraction_prompt(
-                        preprocess_result, profile, fragment_text=frag.text
-                    )
-                    frag_profile = _dc_replace_frag(extraction_profile, prompt_text=filtered_prompt)
-                # Strategy 6: inject few-shot examples into the extraction prompt
-                if few_shot_injector is not None and not dry_run:
-                    from dataclasses import replace as _dc_replace2  # noqa: PLC0415
-                    enriched_with_shots = few_shot_injector.inject(
-                        frag_profile.prompt_text,
-                        profile,
-                        fragment_text=frag.text,
-                    )
-                    if enriched_with_shots != frag_profile.prompt_text:
-                        frag_profile = _dc_replace2(frag_profile, prompt_text=enriched_with_shots)
-                # v0.13.1: knowledge-prefix adapter — inject KNOWN GRAPH CONTEXT
-                if not dry_run:
-                    from riverbank.extractors.knowledge_prefix import (  # noqa: PLC0415
-                        KnowledgePrefixAdapter,
-                    )
-                    kp_adapter = KnowledgePrefixAdapter.from_profile(profile)
-                    if kp_adapter.is_enabled():
-                        kp_result = kp_adapter.build_context(
-                            conn,
-                            profile.named_graph,
-                            frag.text,
-                        )
-                        if kp_result.context_block:
-                            from dataclasses import replace as _dc_replace_kp  # noqa: PLC0415
-                            kp_prompt = kp_result.context_block + "\n\n" + frag_profile.prompt_text
-                            frag_profile = _dc_replace_kp(frag_profile, prompt_text=kp_prompt)
-                try:
-                    result = extractor.extract(fragment=frag, profile=frag_profile, trace=None)
-                except Exception as ex_exc:  # noqa: BLE001
-                    logger.warning(
-                        "Extraction failed for fragment %s: %s",
-                        frag.fragment_key,
-                        str(ex_exc)[:200],
-                    )
-                    stats["errors"] += 1
-                    continue
-
-            stats["llm_calls"] += result.diagnostics.get("llm_calls", 0)
-            stats["prompt_tokens"] += result.diagnostics.get("prompt_tokens", 0)
-            stats["completion_tokens"] += result.diagnostics.get("completion_tokens", 0)
-
-            if mode == "vocabulary":
-                # Vocabulary pass: convert ExtractedEntity objects to SKOS triples
-                # and write them to the <vocab> graph.
-                entities = getattr(result, "entities", [])
-                vocab_triples: list[Any] = []
-                for entity in entities:
-                    vocab_triples.extend(entity.to_skos_triples(profile.vocab_graph))
-                # Also treat any triples already returned (noop extractor returns [])
-                vocab_triples.extend(result.triples)
-                if vocab_triples:
-                    written = load_triples_with_confidence(
-                        conn, vocab_triples, profile.vocab_graph
-                    )
-                    stats["triples_written"] += written
-                    # Record artifact deps for each concept subject
-                    _record_triples_deps(
-                        conn, vocab_triples, frag_iri, profile, record_artifact_dep
-                    )
-            else:
-                # Full pass: v0.12.0 per-triple confidence routing.
-                # Pre-write ontology filtering, then route each triple by confidence:
-                #   ≥ 0.75 → trusted graph
-                #   0.35 – 0.75 → tentative graph
-                #   < 0.35 → discarded
-                from riverbank.extractors.ontology_filter import OntologyFilter  # noqa: PLC0415
-
-                allowed_predicates: list = getattr(profile, "allowed_predicates", [])
-                allowed_classes: list = getattr(profile, "allowed_classes", [])
-                ontology_filt = OntologyFilter(allowed_predicates, allowed_classes)
-
-                all_triples = list(result.triples)
-                # Accumulate capped stat from extractor diagnostics
-                stats["triples_capped"] += result.diagnostics.get("triples_capped", 0)
-
-                # Pre-write structural filtering
-                passed_triples, rejected_count = ontology_filt.filter(all_triples)
-                stats["triples_rejected_ontology"] += rejected_count
-
-                # Literal normalisation + dedup
-                passed_triples = ontology_filt.normalize_triples(passed_triples)
-
-                # Per-triple confidence routing
-                trusted_triples: list[Any] = []
-                tentative_triples: list[Any] = []
-                for triple in passed_triples:
-                    conf = float(getattr(triple, "confidence", 0.0))
-                    if conf >= 0.75:
-                        trusted_triples.append(triple)
-                    elif conf >= 0.35:
-                        # Route to tentative graph
-                        from dataclasses import replace as _dc_r  # noqa: PLC0415
-                        from riverbank.prov import ExtractedTriple as _ET  # noqa: PLC0415
-                        tentative_triples.append(
-                            _ET(
-                                subject=triple.subject,
-                                predicate=triple.predicate,
-                                object_value=triple.object_value,
-                                confidence=triple.confidence,
-                                evidence=triple.evidence,
-                                named_graph=profile.tentative_graph,
-                            )
-                        )
-                    else:
-                        stats["triples_discarded"] += 1
-
-                # Write trusted triples
-                if trusted_triples:
-                    written = load_triples_with_confidence(
-                        conn, trusted_triples, profile.named_graph
-                    )
-                    stats["triples_written"] += written
-                    stats["triples_trusted"] += written
-                    _record_triples_deps(
-                        conn, trusted_triples, frag_iri, profile, record_artifact_dep
-                    )
-
-                # Write tentative triples
-                if tentative_triples:
-                    written_tent = load_triples_with_confidence(
-                        conn, tentative_triples, profile.tentative_graph
-                    )
-                    stats["triples_written"] += written_tent
-                    stats["triples_tentative"] += written_tent
-                    _record_triples_deps(
-                        conn, tentative_triples, frag_iri, profile, record_artifact_dep
-                    )
-
-                # Embedding generation step (v0.5.0)
-                _generate_and_store_embeddings(
-                    conn, trusted_triples, profile, frag.text
+                logger.debug(
+                    "Batch extraction: %d fragments (batch %d-%d)",
+                    len(batch_frags),
+                    batch_start,
+                    batch_end - 1,
                 )
 
-            # Record fragment + run in the catalog
-            self._upsert_fragment(conn, source, frag)
-            self._record_run(conn, source, frag, profile, result)
+                with tracer.start_as_current_span("ingest_pipeline.extract_batch") as ex_span:
+                    ex_span.set_attribute("batch.size", len(batch_frags))
+                    try:
+                        batch_results = extractor.extract_batch(
+                            fragments=batch_frags,
+                            profile=extraction_profile,
+                            trace=None,
+                        )
+                    except Exception as ex_exc:  # noqa: BLE001
+                        logger.warning("Batch extraction failed: %s", str(ex_exc)[:200])
+                        stats["errors"] += 1
+                        for frag, frag_iri, _ in batch:
+                            stats["errors"] += 1
+                        continue
+
+                # Process results for each fragment in the batch
+                for frag, frag_iri, _ in batch:
+                    frag_key = frag.fragment_key
+                    result = batch_results.get(frag_key)
+                    if result is None:
+                        logger.warning("Batch extraction did not return result for fragment %s", frag_key)
+                        stats["errors"] += 1
+                        continue
+
+                    stats["llm_calls"] += result.diagnostics.get("llm_calls", 0)
+                    stats["prompt_tokens"] += result.diagnostics.get("prompt_tokens", 0)
+                    stats["completion_tokens"] += result.diagnostics.get("completion_tokens", 0)
+
+                    # Process triples (same logic as per-fragment extraction)
+                    frag_subjects = _process_extraction_result(
+                        conn, result, frag, frag_iri, source, profile, mode, stats, tracer, preprocessing_cfg
+                    )
+                    source_subjects.update(frag_subjects)
+        else:
+            # Standard per-fragment extraction
+            for frag, frag_iri, frag_profile in fragments_to_process:
+                # NER pre-resolution step (v0.5.0)
+                ner_context: dict = {}
+                try:
+                    from riverbank.ner import SpacyNERExtractor, lookup_vocabulary  # noqa: PLC0415
+
+                    _ner = SpacyNERExtractor(model_name=profile.ner_model)
+                    ner_result = _ner.extract(frag.text)
+                    if ner_result.entities:
+                        vocab_matches: dict[str, str] = {}
+                        for entity in ner_result.entities:
+                            iri_match = lookup_vocabulary(conn, entity.text)
+                            if iri_match:
+                                vocab_matches[entity.text] = iri_match
+                        if vocab_matches:
+                            ner_context = {"vocabulary_matches": vocab_matches}
+                except Exception as _ner_exc:  # noqa: BLE001
+                    logger.debug("NER pre-resolution step failed: %s", _ner_exc)
+
+                # v0.13.1: knowledge-prefix adapter — inject KNOWN GRAPH CONTEXT
+                from riverbank.extractors.knowledge_prefix import (  # noqa: PLC0415
+                    KnowledgePrefixAdapter,
+                )
+                kp_adapter = KnowledgePrefixAdapter.from_profile(profile)
+                if kp_adapter.is_enabled():
+                    kp_result = kp_adapter.build_context(
+                        conn,
+                        profile.named_graph,
+                        frag.text,
+                    )
+                    if kp_result.context_block:
+                        from dataclasses import replace as _dc_replace_kp  # noqa: PLC0415
+                        kp_prompt = kp_result.context_block + "\n\n" + frag_profile.prompt_text
+                        frag_profile = _dc_replace_kp(frag_profile, prompt_text=kp_prompt)
+
+                # Extract triples
+                with tracer.start_as_current_span("ingest_pipeline.extract") as ex_span:
+                    ex_span.set_attribute("fragment.key", frag.fragment_key)
+                    try:
+                        result = extractor.extract(fragment=frag, profile=frag_profile, trace=None)
+                    except Exception as ex_exc:  # noqa: BLE001
+                        logger.warning(
+                            "Extraction failed for fragment %s: %s",
+                            frag.fragment_key,
+                            str(ex_exc)[:200],
+                        )
+                        stats["errors"] += 1
+                        continue
+
+                stats["llm_calls"] += result.diagnostics.get("llm_calls", 0)
+                stats["prompt_tokens"] += result.diagnostics.get("prompt_tokens", 0)
+                stats["completion_tokens"] += result.diagnostics.get("completion_tokens", 0)
+
+                # Process the extraction result
+                frag_subjects = _process_extraction_result(
+                    conn, result, frag, frag_iri, source, profile, mode, stats, tracer, preprocessing_cfg
+                )
+                source_subjects.update(frag_subjects)
+
+
+        # Record fragments and collect subjects for entity resolution
+        for frag in fragments_to_process:
+            frag_obj, frag_iri, _ = frag
+            self._upsert_fragment(conn, source, frag_obj)
+            # Note: batch results are already processed above via _process_extraction_result
+            # which handles source_subjects collection for entity resolution
+
+
+        # v0.16.0: Entity resolution pass — merge entity aliases with owl:sameAs
+        if entity_resolution_cfg.get("enabled") and not dry_run and source_subjects and mode == "full":
+            from riverbank.extractors.entity_resolution import EntityResolutionPass  # noqa: PLC0415
+            _er_pass = EntityResolutionPass(self._settings)
+            er_triples, er_pt, er_ct = _er_pass.run(
+                doc.raw_text, source.iri, list(source_subjects), profile
+            )
+            if er_triples:
+                written_er = load_triples_with_confidence(conn, er_triples, profile.named_graph)
+                stats["triples_written"] += written_er
+                stats["triples_trusted"] += written_er
+                stats["entity_resolution_triples"] += written_er
+            stats["entity_resolution_calls"] += 1
+            stats["preprocessing_prompt_tokens"] += er_pt
+            stats["preprocessing_completion_tokens"] += er_ct
+            logger.info(
+                "Entity resolution: %d owl:sameAs triples written for %s",
+                len(er_triples) if er_triples else 0,
+                source.iri,
+            )
 
         stats["cost_usd"] += _estimate_cost(
             stats["prompt_tokens"], stats["completion_tokens"], profile
@@ -1027,6 +1046,15 @@ class IngestPipeline:
 
         fragmenter_name: str = getattr(profile, "fragmenter", "heading")
 
+        if fragmenter_name == "llm_statement":
+            from riverbank.fragmenters.llm_statement import LLMStatementFragmenter  # noqa: PLC0415
+            return LLMStatementFragmenter.from_profile(profile, settings=self._settings)
+
+        if fragmenter_name == "direct":
+            from riverbank.fragmenters.direct import DirectFragmenter  # noqa: PLC0415
+            fallback = HeadingFragmenter(overlap_sentences=overlap_sentences)
+            return DirectFragmenter.from_profile(profile, fallback=fallback)
+
         if fragmenter_name != "semantic":
             return HeadingFragmenter(overlap_sentences=overlap_sentences)
 
@@ -1113,6 +1141,120 @@ class IngestPipeline:
 # ---------------------------------------------------------------------------
 # v0.5.0 helpers
 # ---------------------------------------------------------------------------
+
+
+def _process_extraction_result(
+    conn: Any,
+    result: Any,
+    frag: Any,
+    frag_iri: str,
+    source: Any,
+    profile: CompilerProfile,
+    mode: str,
+    stats: dict,
+    tracer: Any,
+    preprocessing_cfg: dict,
+) -> set[str]:
+    """Process extraction result (vocabulary or full pass).
+    
+    v0.17.0: Extracted to support both per-fragment and batch extraction modes.
+    Returns: set of subject IRIs for entity resolution pass.
+    """
+    from riverbank.catalog.graph import (  # noqa: PLC0415
+        load_triples_with_confidence,
+        record_artifact_dep,
+    )
+
+    frag_subjects: set[str] = set()
+
+    if mode == "vocabulary":
+        # Vocabulary pass: convert ExtractedEntity objects to SKOS triples
+        entities = getattr(result, "entities", [])
+        vocab_triples: list[Any] = []
+        for entity in entities:
+            vocab_triples.extend(entity.to_skos_triples(profile.vocab_graph))
+        # Also treat any triples already returned (noop extractor returns [])
+        vocab_triples.extend(result.triples)
+        if vocab_triples:
+            written = load_triples_with_confidence(
+                conn, vocab_triples, profile.vocab_graph
+            )
+            stats["triples_written"] += written
+            # Record artifact deps for each concept subject
+            record_artifact_dep(conn, vocab_triples, frag_iri, profile)
+    else:
+        # Full pass: v0.12.0 per-triple confidence routing
+        from riverbank.extractors.ontology_filter import OntologyFilter  # noqa: PLC0415
+        from riverbank.prov import ExtractedTriple as _ET  # noqa: PLC0415
+        from dataclasses import replace as _dc_r  # noqa: PLC0415
+
+        allowed_predicates: list = getattr(profile, "allowed_predicates", [])
+        allowed_classes: list = getattr(profile, "allowed_classes", [])
+        ontology_filt = OntologyFilter(allowed_predicates, allowed_classes)
+
+        all_triples = list(result.triples)
+        # Accumulate capped stat from extractor diagnostics
+        stats["triples_capped"] += result.diagnostics.get("triples_capped", 0)
+
+        # Pre-write structural filtering
+        passed_triples, rejected_count = ontology_filt.filter(all_triples)
+        stats["triples_rejected_ontology"] += rejected_count
+
+        # Literal normalisation + dedup
+        passed_triples = ontology_filt.normalize_triples(passed_triples)
+
+        # Per-triple confidence routing
+        trusted_triples: list[Any] = []
+        tentative_triples: list[Any] = []
+        for triple in passed_triples:
+            conf = float(getattr(triple, "confidence", 0.0))
+            if conf >= 0.75:
+                trusted_triples.append(triple)
+            elif conf >= 0.35:
+                # Route to tentative graph
+                tentative_triples.append(
+                    _ET(
+                        subject=triple.subject,
+                        predicate=triple.predicate,
+                        object_value=triple.object_value,
+                        confidence=triple.confidence,
+                        evidence=triple.evidence,
+                        named_graph=profile.tentative_graph,
+                    )
+                )
+            else:
+                stats["triples_discarded"] += 1
+
+        # Write trusted triples
+        if trusted_triples:
+            written = load_triples_with_confidence(
+                conn, trusted_triples, profile.named_graph
+            )
+            stats["triples_written"] += written
+            stats["triples_trusted"] += written
+            record_artifact_dep(conn, trusted_triples, frag_iri, profile)
+
+        # Write tentative triples
+        if tentative_triples:
+            written_tent = load_triples_with_confidence(
+                conn, tentative_triples, profile.tentative_graph
+            )
+            stats["triples_written"] += written_tent
+            stats["triples_tentative"] += written_tent
+            record_artifact_dep(conn, tentative_triples, frag_iri, profile)
+
+        # v0.16.0: Collect subjects for entity resolution pass
+        frag_subjects.update(
+            t.subject for t in (trusted_triples + tentative_triples)
+            if getattr(t, "subject", None)
+        )
+
+        # Embedding generation step (v0.5.0)
+        _generate_and_store_embeddings(
+            conn, trusted_triples, profile, frag.text
+        )
+
+    return frag_subjects
 
 
 def _generate_and_store_embeddings(
