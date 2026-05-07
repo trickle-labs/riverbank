@@ -4,8 +4,11 @@ Revision ID: 0004
 Revises: 0003
 Create Date: 2026-05-06
 
-Creates pg_ripple and pg_trickle extensions required for SPARQL queries
-and incremental view maintenance.
+Creates pg_ripple and pg_trickle extensions if available.
+
+Note: PostgreSQL extensions might not be available in all environments.
+This migration uses SAVEPOINTs to isolate extension creation attempts,
+so that missing extensions don't abort the entire migration.
 """
 from __future__ import annotations
 
@@ -20,22 +23,52 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Create pg_ripple extension (RDF triple store with SPARQL)
-    # Try to create, but fail gracefully if not available (e.g., standard PostgreSQL)
+    """Try to create extensions using SAVEPOINTs to avoid transaction abort."""
+    connection = op.get_context().bind
+
+    # Create pg_ripple extension with SAVEPOINT isolation
     try:
-        op.execute("CREATE EXTENSION IF NOT EXISTS pg_ripple")
+        connection.execute("SAVEPOINT sp_pg_ripple")
+        try:
+            connection.execute("CREATE EXTENSION IF NOT EXISTS pg_ripple")
+            connection.execute("RELEASE sp_pg_ripple")
+        except Exception:  # noqa: BLE001
+            connection.execute("ROLLBACK TO sp_pg_ripple")
     except Exception:  # noqa: BLE001
-        # Extension not available in this PostgreSQL installation
         pass
-    
-    # Create pg_trickle extension (incremental view maintenance and streams)
+
+    # Create pg_trickle extension with SAVEPOINT isolation
     try:
-        op.execute("CREATE EXTENSION IF NOT EXISTS pg_trickle")
+        connection.execute("SAVEPOINT sp_pg_trickle")
+        try:
+            connection.execute("CREATE EXTENSION IF NOT EXISTS pg_trickle")
+            connection.execute("RELEASE sp_pg_trickle")
+        except Exception:  # noqa: BLE001
+            connection.execute("ROLLBACK TO sp_pg_trickle")
     except Exception:  # noqa: BLE001
-        # Extension not available in this PostgreSQL installation
         pass
 
 
 def downgrade() -> None:
-    op.execute("DROP EXTENSION IF EXISTS pg_trickle")
-    op.execute("DROP EXTENSION IF EXISTS pg_ripple")
+    """Drop extensions using SAVEPOINTs."""
+    connection = op.get_context().bind
+
+    try:
+        connection.execute("SAVEPOINT sp_drop_pg_trickle")
+        try:
+            connection.execute("DROP EXTENSION IF EXISTS pg_trickle CASCADE")
+            connection.execute("RELEASE sp_drop_pg_trickle")
+        except Exception:  # noqa: BLE001
+            connection.execute("ROLLBACK TO sp_drop_pg_trickle")
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        connection.execute("SAVEPOINT sp_drop_pg_ripple")
+        try:
+            connection.execute("DROP EXTENSION IF EXISTS pg_ripple CASCADE")
+            connection.execute("RELEASE sp_drop_pg_ripple")
+        except Exception:  # noqa: BLE001
+            connection.execute("ROLLBACK TO sp_drop_pg_ripple")
+    except Exception:  # noqa: BLE001
+        pass

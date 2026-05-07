@@ -69,7 +69,7 @@ def test_downgrade_removes_application_tables(
 def test_alembic_version_is_0003_after_head_upgrade(
     db_dsn: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """After upgrade head, Alembic version must be 0003 (audit-trail migration)."""
+    """After upgrade head, Alembic version must be 0004 (create extensions migration)."""
     monkeypatch.setenv("RIVERBANK_DB__DSN", db_dsn)
 
     from alembic import command
@@ -86,7 +86,7 @@ def test_alembic_version_is_0003_after_head_upgrade(
     engine.dispose()
 
     assert row is not None
-    assert row[0] == "0003"
+    assert row[0] == "0004"
 
 
 def test_tenant_id_column_exists_after_migration(
@@ -171,7 +171,7 @@ def test_migration_0001_to_0002_is_incremental(
         ).fetchone()
     engine.dispose()
 
-    assert ver2 is not None and ver2[0] == "0003"
+    assert ver2 is not None and ver2[0] == "0004"
     assert row2 is not None, "tenant_id must exist after migration 0002"
 
 
