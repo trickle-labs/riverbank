@@ -61,7 +61,7 @@ _BAND_DEFAULTS: dict[TuningBand, dict] = {
     "small": {
         # Small corpus: need maximum context per fragment — fewer, larger chunks
         "similarity_threshold": 0.80,
-        "min_sentences_per_chunk": 6,
+        "min_sentences_per_chunk": 3,  # lowered from 6 — table/list-heavy docs produce fewer prose sentences
         "max_sentences_per_chunk": 20,
         "min_fragment_length": 300,
         "max_fragment_length": 2000,

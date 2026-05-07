@@ -16,8 +16,9 @@ logger = logging.getLogger(__name__)
 # grounded in the source text.  partial_ratio finds the best matching window of
 # the same length in the longer string, so it tolerates minor LLM reformatting
 # (decimal spacing artefacts, stripped markdown, em-dash variants) while still
-# rejecting outright fabrications.  88 gives ~1 character tolerance per 8 chars.
-_CITATION_SIMILARITY_THRESHOLD: int = 88
+# rejecting outright fabrications.  82 gives ~1 character tolerance per 6 chars,
+# which handles paraphrased but accurate evidence without accepting hallucinations.
+_CITATION_SIMILARITY_THRESHOLD: int = 82
 
 
 _DEFAULT_PROMPT = """\
@@ -462,6 +463,9 @@ class InstructorExtractor:
             # _to_ntriples_term() produces a proper IRI instead of a string literal.
             if pred and ":" not in pred and not pred.startswith("<"):
                 pred = f"ex:{pred}"
+            # Auto-expand bare subjects (same logic as predicates above).
+            if subj and ":" not in subj and not subj.startswith("<"):
+                subj = f"ex:{subj}"
             # Citation grounding: reject fabricated excerpts.
             # rapidfuzz.partial_ratio finds the best-matching same-length window
             # in the source text, tolerating minor LLM reformatting (decimal

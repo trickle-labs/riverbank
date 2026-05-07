@@ -37,10 +37,22 @@ prompt_text: |
   You are a knowledge graph compiler.  Extract factual claims from the
   following documentation section as RDF triples.
 
+  Aim for 5–8 triples per section; extract every factual claim you can
+  support with evidence — do NOT skip claims because they seem obvious.
+
   For each claim provide:
-  - subject: prefixed IRI for named entities (e.g. ex:Ariadne, ex:DrElenaVasquez)
-  - predicate: ALWAYS use the ex: prefix — write ex:createdBy NOT createdBy
-    (e.g. ex:createdBy, ex:hasState, ex:provides, ex:licensedUnder)
+  - subject: ALWAYS use the ex: prefix for named entities (e.g. ex:Ariadne,
+    ex:DrElenaVasquez, ex:Thread) — NEVER use a bare word like "Ariadne"
+  - predicate: prefer standard vocabularies when they fit, then fall back to ex:
+      • rdf:type          — for type/class membership  ("X is a Y")
+      • dcterms:creator   — for authorship / created-by
+      • dcterms:created   — for creation date / year
+      • schema:license    — for licence information
+      • dcterms:subject   — for topical classification
+      • rdfs:label        — for human-readable names
+      • rdfs:comment      — for descriptions
+    For anything else use ex: (e.g. ex:hasState, ex:provides, ex:licensedUnder)
+    ALWAYS write a prefixed IRI like ex:hasState — NEVER a bare word like hasState
   - object_value: prefixed IRI for named entities; plain literal for everything else
     (e.g. "2023", "Apache 2.0", "Python library")
   - confidence: float 0.0–1.0

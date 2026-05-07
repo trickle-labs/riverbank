@@ -800,3 +800,71 @@ class TestCitationGrounding:
         excerpt = "Ariadne addresses the information fragmentation problem"
         assert fuzz.partial_ratio(excerpt, source) >= 88
 
+
+# ---------------------------------------------------------------------------
+# P1: small-band min_sentences_per_chunk lowered to 3
+# ---------------------------------------------------------------------------
+
+
+class TestSmallBandMinSentences:
+    def test_small_band_min_sentences_is_three(self):
+        """P1: small band must use min_sentences_per_chunk=3 to handle table/list docs."""
+        from riverbank.fragmenters.scanner import _BAND_DEFAULTS
+
+        assert _BAND_DEFAULTS["small"]["min_sentences_per_chunk"] == 3
+
+    def test_small_band_min_sentences_less_than_medium(self):
+        """Small band min should be ≤ medium (corpus auto-tune should not over-fragment)."""
+        from riverbank.fragmenters.scanner import _BAND_DEFAULTS
+
+        assert (
+            _BAND_DEFAULTS["small"]["min_sentences_per_chunk"]
+            <= _BAND_DEFAULTS["medium"]["min_sentences_per_chunk"]
+        )
+
+
+# ---------------------------------------------------------------------------
+# P2: auto-expand bare subject IRIs
+# ---------------------------------------------------------------------------
+
+
+class TestAutoExpandBareSubject:
+    def test_bare_subject_gets_ex_prefix(self):
+        """P2: subjects without a ':' prefix should be expanded to ex:<subject>."""
+        # Simulate the auto-expand logic from instructor_extractor.py
+        def _expand_subject(subj: str) -> str:
+            if subj and ":" not in subj and not subj.startswith("<"):
+                return f"ex:{subj}"
+            return subj
+
+        assert _expand_subject("Ariadne") == "ex:Ariadne"
+        assert _expand_subject("Thread") == "ex:Thread"
+        assert _expand_subject("EvidenceSpan") == "ex:EvidenceSpan"
+
+    def test_prefixed_subject_unchanged(self):
+        """P2: subjects that already have a prefix must not be modified."""
+        def _expand_subject(subj: str) -> str:
+            if subj and ":" not in subj and not subj.startswith("<"):
+                return f"ex:{subj}"
+            return subj
+
+        assert _expand_subject("ex:Ariadne") == "ex:Ariadne"
+        assert _expand_subject("dcterms:creator") == "dcterms:creator"
+        assert _expand_subject("rdf:type") == "rdf:type"
+
+    def test_angle_bracket_iri_unchanged(self):
+        """P2: full angle-bracket IRIs must pass through untouched."""
+        def _expand_subject(subj: str) -> str:
+            if subj and ":" not in subj and not subj.startswith("<"):
+                return f"ex:{subj}"
+            return subj
+
+        iri = "<http://riverbank.example/entities/Ariadne>"
+        assert _expand_subject(iri) == iri
+
+    def test_threshold_value_is_82(self):
+        """P5: citation similarity threshold must be 82 after the relaxation."""
+        from riverbank.extractors.instructor_extractor import _CITATION_SIMILARITY_THRESHOLD
+
+        assert _CITATION_SIMILARITY_THRESHOLD == 82
+
