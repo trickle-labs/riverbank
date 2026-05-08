@@ -51,6 +51,7 @@
     - [Plugin API](reference/plugin-api.md)
     - [Metrics](reference/metrics.md)
     - [Error codes](reference/error-codes.md)
+    - [Glossary](reference/glossary.md)
     - [Changelog](reference/changelog.md)
 - Operations
     - [Overview](operations/index.md)
