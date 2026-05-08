@@ -241,6 +241,10 @@ def ingest(
         "--set",
         help="Override a config key at runtime, e.g. --set llm.provider=ollama (repeatable)",
     ),
+    force: bool = typer.Option(
+        False, "--force", "-f",
+        help="Force re-extraction of fragments even if unchanged (skips hash-based deduplication)",
+    ),
 ) -> None:
     """Ingest a document corpus into the knowledge graph.
 
@@ -275,6 +279,8 @@ def ingest(
     pipeline = IngestPipeline(set_overrides=set_overrides)
 
     rprint(f"[bold]riverbank ingest[/bold]  corpus={corpus!r}  profile={profile.name!r}")
+    if force:
+        rprint("[yellow]--force: hash-based deduplication disabled, all fragments will be re-extracted[/yellow]")
     if dry_run:
         rprint("[dim]dry-run mode — extraction and graph writes are skipped[/dim]")
 
@@ -324,6 +330,7 @@ def ingest(
             profile=profile,
             dry_run=dry_run,
             mode=mode,
+            force=force,
             progress_callback=_on_progress,
         )
 

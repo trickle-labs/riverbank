@@ -172,6 +172,7 @@ class IngestPipeline:
         profile: Optional[CompilerProfile] = None,
         dry_run: bool = False,
         mode: str = "full",
+        force: bool = False,
         progress_callback: Callable[[str, dict], None] | None = None,
     ) -> dict:
         """Run the pipeline against a corpus directory or single file.
@@ -586,9 +587,10 @@ class IngestPipeline:
                         len(stale_artifacts),
                     )
 
-            # Fragment hash check — skip if content unchanged
+            # Fragment hash check — skip if content unchanged (unless --force is set)
             if (
-                frag.fragment_key in existing_hashes
+                not force
+                and frag.fragment_key in existing_hashes
                 and existing_hashes[frag.fragment_key] == frag_hash_hex
             ):
                 stats["fragments_skipped_hash"] += 1
