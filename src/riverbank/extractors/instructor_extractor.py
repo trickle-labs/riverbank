@@ -31,14 +31,14 @@ You are a knowledge graph compiler. Extract factual claims from the technical do
 ```json
 [
   {
-    "subject": "ex:Ariadne",
-    "predicate": "ex:createdBy",
-    "object_value": "ex:Author1",
+    "subject": "ex:Subject_Entity",
+    "predicate": "ex:relatedTo",
+    "object_value": "ex:Object_Entity",
     "confidence": 0.95,
     "evidence": {
-      "char_start": 142,
-      "char_end": 189,
-      "excerpt": "Ariadne was created by Author1 in 2023",
+      "char_start": 0,
+      "char_end": 42,
+      "excerpt": "Subject Entity is related to Object Entity",
       "page_number": null
     }
   }
@@ -47,11 +47,11 @@ You are a knowledge graph compiler. Extract factual claims from the technical do
 
 ## Extraction Rules
 For each claim, provide:
-1. **subject**: prefixed IRI for named entities (e.g. ex:Ariadne, ex:DrElenaVasquez)
-2. **predicate**: ALWAYS use the ex: prefix — write ex:createdBy NOT createdBy
-   (e.g. ex:createdBy, ex:hasState, ex:provides, ex:licensedUnder)
+1. **subject**: prefixed IRI for named entities (e.g. ex:Solar_System, ex:Oxygen, ex:Contract_Act_1990)
+2. **predicate**: ALWAYS use the ex: prefix — write ex:relatedTo NOT relatedTo
+   (e.g. ex:relatedTo, ex:hasProperty, ex:partOf, ex:definedIn)
 3. **object_value**: prefixed IRI for named entities; plain literal for everything else
-   (e.g. "2023", "Apache 2.0", "Python library")
+   (e.g. "1.0", "active", "metric tonnes")
 4. **confidence**: float 0.0–1.0 reflecting how clearly the text supports the claim
 5. **evidence**: exact character offsets (char_start, char_end) and verbatim excerpt
 
