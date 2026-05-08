@@ -36,15 +36,31 @@ prompt_text: |
   You are a knowledge graph compiler.  Extract factual claims from the
   following documentation section as RDF triples.
 
+  CANONICAL PREDICATES (use these; do NOT invent others):
+  - born_in, born_on, died_in, died_on, age_at_death
+  - nationality, citizen_of, lived_in, worked_in, studied_at
+  - educated_at, degree_in, field_of_study
+  - worked_with, collaborated_with, married_to, family_member_of
+  - discovered, researched, developed, invented, founded
+  - wrote, published, authored, created
+  - received_award, won_prize, member_of, professor_at, director_of
+  - contributed_to, influenced, inspired_by, known_for
+  - associated_with, related_to (catch-all for other relationships)
+
   For each claim provide:
-  - subject: prefixed IRI (e.g. ex:Ariadne)
-  - predicate: prefixed IRI (e.g. ex:createdBy)
+  - subject: prefixed IRI (e.g. ex:Marie_Curie)
+  - predicate: ONLY use one of the canonical predicates above
   - object_value: prefixed IRI or literal
   - confidence: float 0.0–1.0
   - evidence: exact character offsets and a verbatim excerpt
 
-  Only extract claims directly supported by the text.
-  Do NOT fabricate evidence.
+  IMPORTANT:
+  - Do NOT extract Wikipedia metadata, infoboxes, categories, or templates
+  - Only extract factual claims about people, events, discoveries, institutions
+  - Ignore "See also", "References", "External links" sections
+  - Map variations to canonical predicates (e.g. "birth place" → born_in)
+  - Only extract claims directly supported by the text.
+  - Do NOT fabricate evidence.
 
 editorial_policy:
   min_fragment_length: 50
