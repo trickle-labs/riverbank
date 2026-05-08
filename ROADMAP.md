@@ -86,6 +86,16 @@
 | v0.15.0 | Wikidata evaluation framework — `riverbank evaluate-wikidata` command (single article or full dataset), 1,000-article benchmark dataset (7 domains), property alignment table, entity resolution pipeline, calibration curves, per-domain and per-property breakdowns | **Done** | Large |
 | v0.15.1 | Extraction improvement loop — per-property recall gap analysis, extraction prompt tuning from failure modes, 200+ novel-discovery annotations, published evaluation methodology | **Done** | Medium |
 
+### Adaptive Auto-Tuning (v0.16.x – v0.17.x)
+
+| Version | Description | Status | Size |
+|---|---|---|---|
+| v0.16.0 | Tuning diagnostics — `DiagnosticsEngine` with 7 priority-ordered rules, sliding-window metric aggregation, `_riverbank.tuning_diagnostics` catalog table, `riverbank tuning diagnose` command, Prometheus gauges for F1 and cost-per-triple | Planned | Large |
+| v0.16.1 | Hypothesis generation — `HypothesisGenerator` with five mutation backends: OPRO-style prompt patches, adjacent-step threshold sweeps, evaluation-driven few-shot injection, knowledge-prefix tuning, preprocessing strategy changes; `MutationRegistry` lineage tracking; `riverbank tuning propose` command | Planned | Large |
+| v0.17.0 | A/B testing harness — `CandidateRouter` (consistent-hash cohort assignment), `SignificanceTester` (Welch's t-test + early stopping), `_riverbank.tuning_experiments` and `tuning_cohorts` catalog tables, promotion and demotion logic, pg-tide event emission on state transitions | Planned | Large |
+| v0.17.1 | Orchestration and scheduling — `TuningOrchestrator` closed loop, `TuningScheduler` (APScheduler), `auto_tuning:` profile YAML section, `riverbank tuning run-once` command, safety guardrails (precision floor, cost ceiling, freeze-on-regression, generation-depth limit, mutation-conflict prevention) | Planned | Large |
+| v0.17.2 | Tuning observability — Perses dashboard panel, `riverbank tuning history` lineage tree, `riverbank tuning pareto` quality×cost frontier, `riverbank tuning rollback` / `freeze` / `unfreeze`, Langfuse experiment datasets, auto-tuning concepts and how-to documentation | Planned | Large |
+
 ---
 
 ### v0.15.0 — Wikidata Evaluation Framework
@@ -138,6 +148,227 @@ extraction pipeline — identify systematic failure modes and fix them.
 
 **Exit criterion:** second evaluation run shows measurable improvement over
 v0.15.0 baseline on at least two of: precision, recall, novel discovery rate.
+
+---
+
+### v0.16.0 — Tuning Diagnostics
+
+Goal: make all auto-tuning-relevant metrics queryable and trendable, establishing
+the observation layer that all subsequent adaptive work depends on. See
+[plans/auto-tuning.md](plans/auto-tuning.md) for the full design.
+
+- [ ] `_riverbank.tuning_diagnostics` table (Alembic migration): one row per
+  diagnosis cycle, storing `metrics` JSONB, `gaps` JSONB, and `recommendations`
+  JSONB with priority ordering
+- [ ] SQL sliding-window view: aggregate per-run F1, precision, recall,
+  cost-per-triple, SHACL score, rejection rate, and novel-discovery rate from
+  `_riverbank.runs` over a configurable time window
+- [ ] 7-day rolling baseline per profile: used to detect drift in each diagnosis
+  cycle; stored in `tuning_diagnostics` for trend charting
+- [ ] `DiagnosticsEngine.diagnose()` with 7 priority-ordered rules:
+  (1) F1 regression >5% vs. 7-day baseline — critical, triggers freeze;
+  (2) precision below configured floor — high, tighten routing thresholds;
+  (3) zero recall on common Wikidata P-ids — high, inject targeted examples;
+  (4) cost/triple increased >20% vs. baseline — medium, reduce safety cap;
+  (5) confidence miscalibration (ρ < 0.3) — medium, adjust routing thresholds;
+  (6) SHACL score declining — low, review shape constraints;
+  (7) novel-discovery rate >40% — low, review predicate alignment table
+- [ ] FP/FN pattern clustering: group false positives and false negatives by
+  predicate pattern; surface top-5 of each type with frequency counts
+- [ ] Confidence calibration check: Pearson ρ between confidence bucket midpoints
+  and observed accuracy; flag miscalibration below threshold
+- [ ] `riverbank tuning diagnose --profile <name> [--window <hours>]` CLI command:
+  prints ranked recommendations as JSON and human-readable summary table
+- [ ] `riverbank_tuning_f1_current` Prometheus gauge (labels: profile)
+- [ ] `riverbank_tuning_cost_per_triple` Prometheus gauge (labels: profile)
+- [ ] Unit tests for all 7 diagnosis rules with synthetic run data
+
+**Exit criterion:** `riverbank tuning diagnose --profile wikidata-eval-v1`
+produces a JSON report with at least one actionable recommendation on the
+1,000-article benchmark dataset, correctly identifying the highest-priority gap.
+
+---
+
+### v0.16.1 — Hypothesis Generation
+
+Goal: automatically generate well-reasoned profile mutations from diagnostic
+reports, using a combination of LLM-assisted optimization and deterministic
+rule-based strategies.
+
+- [ ] `ProfileMutation` dataclass: `mutation_type`, `mutation_yaml`, `rationale`,
+  `estimated_lift`, `parent_profile_id`, `generation` counter
+- [ ] `MutationRegistry`: stores and queries mutation lineage; supports
+  parent → child → outcome tree traversal
+- [ ] `PromptMutatorBackend` (OPRO-style): feeds current prompt + last 5 F1
+  results + top FP/FN patterns to a configurable hypothesis model (defaults to
+  `gpt-4o-mini`); requests one minimal targeted edit with rationale and estimated
+  lift; validates the returned YAML against `CompilerProfile` schema before
+  accepting
+- [ ] `ThresholdSweepBackend`: deterministic adjacent-step grid search over 7
+  numeric parameters (`trusted_threshold`, `tentative_threshold`, `safety_cap`,
+  `max_graph_context_tokens`, `top_entities`, `few_shot.max_examples`,
+  `preprocessing.max_entities`); selects direction based on the diagnosis
+  recommendation
+- [ ] `EvalDrivenFewShotMutator`: targets the top-3 lowest-recall Wikidata
+  properties; injects built-in extraction examples from
+  `RecallGapAnalyzer._BUILTIN_EXAMPLES` as targeted few-shot additions
+- [ ] `KnowledgePrefixTuner`: adjusts `max_graph_context_tokens` and
+  `top_entities` based on entity IRI fragmentation rate and observed prompt
+  truncation signals
+- [ ] `PreprocessingStrategyMutator`: toggles preprocessing backend (nlp ↔ llm)
+  and adjusts `max_entities` based on entity catalog quality signals from runs
+- [ ] `HypothesisGenerator`: wraps all five backends, applies priority ordering,
+  enforces `max_active_candidates` limit, validates generated YAML before
+  returning any mutation
+- [ ] `_tuning_metadata:` block auto-written into candidate profile YAML:
+  generation counter, parent profile IRI, mutation type, rationale, experiment ID
+- [ ] `riverbank tuning propose --profile <name> [--type <mutation_type>]` CLI
+  command
+- [ ] Unit tests for each mutation backend including regression tests against
+  known-bad mutation patterns
+
+**Exit criterion:** `riverbank tuning propose --profile wikidata-eval-v1`
+generates a syntactically valid candidate profile YAML with documented rationale,
+targeting the highest-priority gap from the diagnostics report.
+
+---
+
+### v0.17.0 — A/B Testing Harness
+
+Goal: safely validate candidate profile mutations against live traffic before
+any configuration change takes effect. No mutation goes live without statistical
+evidence.
+
+- [ ] `_riverbank.tuning_experiments` table: experiment lifecycle
+  (`active`, `promoted`, `demoted`, `expired`, `pending_review`), metrics at
+  resolution, p-value, Cohen's d effect size, decision rationale
+- [ ] `_riverbank.tuning_cohorts` table: per-source cohort assignment
+  (baseline / candidate) linked to experiment; idempotent — same source always
+  lands in the same cohort within an experiment
+- [ ] `CandidateRouter`: consistent-hash assignment using
+  `xxhash.xxh64(experiment_id + source_iri)`; configurable split ratio
+  (default 10% candidate, 90% baseline)
+- [ ] Modify `pipeline.run_source()` to query active experiments and route each
+  source to the appropriate profile before extraction; no change to the
+  extraction pipeline itself
+- [ ] `SignificanceTester`: Welch's t-test on per-article F1 score arrays
+  (unequal variance); Cohen's d effect size; early stopping when p < 0.01 and
+  effect clearly negative; minimum sample size enforcement (default 30 articles)
+- [ ] Promotion logic: promote when p < 0.05, ΔF1 ≥ `promotion_f1_delta`,
+  ΔCost ≤ `max_cost_increase`, and precision ≥ `min_precision` floor
+- [ ] Demotion logic: demote when p < 0.05 and regression ≥ `demotion_f1_delta`
+  or cost exceeds ceiling; automatic rollback if regression is on an
+  already-promoted variant
+- [ ] Audit trail: every promotion and demotion writes a `_riverbank.log` entry
+  (`operation='tuning_promotion'` / `'tuning_demotion'`) with metrics, p-value,
+  and effect size
+- [ ] pg-tide event emission on promotion (`riverbank.tuning.promoted`) and
+  demotion (`riverbank.tuning.demoted`) for downstream alerting
+- [ ] `riverbank tuning experiments [--profile <name>]` — list active experiments
+  with current sample counts, cohort sizes, and metric deltas
+- [ ] `riverbank tuning approve --experiment-id <id>` — manually approve a
+  `pending_review` experiment
+- [ ] `riverbank tuning reject --experiment-id <id> [--reason <text>]` — reject
+  with optional reason recorded in audit log
+- [ ] `riverbank_tuning_experiments_active` Prometheus gauge
+- [ ] `riverbank_tuning_promotions_total` and `riverbank_tuning_demotions_total`
+  Prometheus counters (labels: profile, mutation_type)
+- [ ] Integration tests: clearly-better candidate promoted after `min_sample_size`
+  evaluations; clearly-worse candidate demoted via early stopping
+
+**Exit criterion:** a synthetic experiment routes traffic correctly, collects
+per-cohort F1 scores, and promotes the winning candidate automatically when
+statistical significance is reached; the losing candidate is demoted via early
+stopping.
+
+---
+
+### v0.17.1 — Orchestration and Scheduling
+
+Goal: wire the full observe → diagnose → hypothesize → validate → promote loop
+to run autonomously, with configurable scheduling and comprehensive safety
+guardrails that prevent runaway quality or cost regressions.
+
+- [ ] `TuningOrchestrator.run_cycle()`: orchestrates one full loop iteration —
+  calls `DiagnosticsEngine`, selects top recommendation, calls
+  `HypothesisGenerator`, creates experiment record in DB, registers candidate
+  profile, activates `CandidateRouter` routing
+- [ ] `TuningScheduler`: APScheduler-based periodic trigger; configurable
+  interval per profile via `auto_tuning.diagnosis_interval_hours`; reuses the
+  existing APScheduler instance used by nightly lint
+- [ ] `auto_tuning:` section added to `CompilerProfile` dataclass and profile
+  YAML schema: `enabled`, `diagnosis_interval_hours`, `validation.*`
+  (split_ratio, min_sample_size, max_experiment_days), `thresholds.*`
+  (promotion_f1_delta, demotion_f1_delta, max_cost_increase, min_precision),
+  `mutations.*` (max_active_candidates, allowed_types, hypothesis_model),
+  and `cost_sensitivity` λ parameter
+- [ ] `riverbank tuning run-once --profile <name>` CLI command: executes one
+  full cycle synchronously, printing each step for debugging
+- [ ] Safety guardrails:
+  - Precision floor: immediate demotion if candidate precision < floor
+  - Cost ceiling: immediate demotion if candidate cost > `max_cost_increase`
+    × baseline
+  - Freeze-on-regression: if any promoted variant shows >5% F1 drop in 24h,
+    freeze ALL experiments for that profile and emit a critical alert
+  - Generation depth limit: pause auto-tuning if lineage depth exceeds 10;
+    require human review before continuing
+  - Mutation conflict prevention: at most one active experiment per parameter
+    type at a time
+- [ ] `riverbank tuning freeze --profile <name>` and
+  `riverbank tuning unfreeze --profile <name>` commands; freeze state persisted
+  in `_riverbank.profiles.metadata`
+- [ ] Mutation auto-approval rules: threshold sweeps (±1 step) and small prompt
+  patches (≤50 words changed) auto-approve; large prompt patches and structural
+  changes (backend toggle, model change) require `pending_review`
+- [ ] End-to-end integration test: run 3 full cycles on a 100-article subset of
+  the Wikidata benchmark; verify the profile evolves, each promotion improves
+  F1, and no guardrail fires falsely
+
+**Exit criterion:** `riverbank tuning run-once --profile wikidata-eval-v1`
+completes a full cycle and either promotes a candidate, demotes a bad one, or
+logs "no significant improvement found" — with a complete audit trail in
+`_riverbank.log` and a matching pg-tide event.
+
+---
+
+### v0.17.2 — Tuning Observability and Polish
+
+Goal: make the auto-tuning system fully transparent to operators; complete the
+CLI surface; integrate with Langfuse and Perses; publish the design as
+documentation.
+
+- [ ] Perses dashboard panel: active experiment count, F1 trend over time,
+  cost-per-triple trend, promotion and demotion event timeline, experiment
+  sample-size progress bars
+- [ ] `riverbank tuning history --profile <name>` CLI: renders the mutation
+  lineage tree (parent → child → outcome) with F1 delta, cost delta, and p-value
+  at each node; supports `--format json` for programmatic consumption
+- [ ] `riverbank tuning pareto --profile <name>` CLI: tables the quality × cost
+  Pareto frontier across all historical profile variants; marks the currently
+  active profile and highlights dominated variants
+- [ ] `riverbank tuning rollback --profile <name> --to-generation <n>` CLI:
+  reactivates a previous generation as the current active profile; records a
+  `tuning_rollback` event in the audit log
+- [ ] Langfuse dataset integration: each A/B experiment creates a Langfuse
+  dataset with baseline and candidate cohort results; diff annotations flag
+  which triples appeared, disappeared, or changed confidence between variants
+- [ ] `riverbank_tuning_f1_current` gauge updated on every diagnosis cycle, not
+  only on promotion events
+- [ ] Experiment expiry background task: mark experiments `expired` after
+  `max_experiment_days` with no significant result; archive or delete candidate
+  profiles per `auto_tuning.mutations.on_expiry` policy
+- [ ] `auto_tuning:` section added to example profiles (`wikidata-eval-v1`,
+  `docs-policy-v1-preprocessed`) with sensible defaults and inline YAML comments
+  explaining each option
+- [ ] How-to guide: [docs/how-to/enable-auto-tuning.md](docs/how-to/enable-auto-tuning.md)
+- [ ] Concepts page: [docs/concepts/adaptive-compilation.md](docs/concepts/adaptive-compilation.md)
+- [ ] [plans/auto-tuning.md](plans/auto-tuning.md) cross-referenced from ROADMAP
+  and concepts page
+
+**Exit criterion:** an operator can read the Perses dashboard, understand why
+the last promotion happened, inspect the full lineage tree, and perform a
+rollback from the CLI — without consulting the source code. Documentation site
+publishes the new concepts and how-to pages automatically on merge.
 
 ---
 
