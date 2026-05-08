@@ -4,7 +4,8 @@ All notable changes to riverbank, organized by release.
 
 ## Unreleased
 
-- LLM-based statement fragmentation (`llm_statement` fragmenter) with configurable distillation levels (`default`, `essential`, `minimal`)
+- LLM-based statement fragmentation (`llm_statement` fragmenter)
+- `extraction_focus` profile field: controls precision-vs-recall trade-off at the extractor layer (`comprehensive`, `high_precision`, `facts_only`)
 - Batch extraction: groups multiple fragments into a single LLM call via `extraction_strategy.batch_size` in the profile
 - `direct` fragmenter for pre-split corpora
 - SAVEPOINT-based handling of PostgreSQL extension creation in migrations to prevent transaction abort

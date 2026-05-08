@@ -109,7 +109,17 @@ Only used when `fragmenter: llm_statement`. Sends the whole document to the LLM 
 |-------|------|----------|---------|-------------|
 | `max_doc_chars` | int | no | `20000` | Maximum document characters sent to LLM |
 | `max_statements` | int | no | `200` | Maximum statements to extract |
-| `distillation_level` | string | no | `default` | `default` (all facts), `essential` (WHO + WHAT), `minimal` (achievements only) |
+| `prompt` | string | no | — | Custom system prompt override (replaces default) |
+
+### `extraction_focus`
+
+Controls the precision-vs-recall trade-off at the extraction layer. Applied as a guidance block injected into the extraction prompt. Does not affect fragmentation.
+
+| Value | Description |
+|-------|-------------|
+| `comprehensive` | All factual claims including strong inferences (default) |
+| `high_precision` | Explicitly stated claims only; confidence ≥ 0.90; no inference |
+| `facts_only` | Stated factual assertions only; excludes opinions, estimates, hedged language |
 
 ### `extraction_strategy`
 

@@ -138,9 +138,9 @@ See *Artifact dependency graph*.
 
 A computational model where results are maintained incrementally as inputs change, rather than being recomputed from scratch each time. pg-trickle uses a DBSP-inspired differential dataflow engine to keep derived views — quality scores, entity pages, topic indices — up to date in milliseconds whenever the underlying graph changes. The alternative would be running a full recomputation on every ingest, which becomes prohibitively slow for large corpora.
 
-### Distillation level
+### Extraction focus
 
-A setting in the `llm_statement` fragmenter that controls how much information is extracted from a document. `default` extracts all atomic facts comprehensively. `essential` extracts only the core WHO and WHAT facts — useful when storage or processing cost is a concern. `minimal` extracts only major achievements or discoveries — useful for quick high-level summarisation. The distillation level is part of the fragmentation prompt, not the extraction prompt, so it controls *what gets surfaced for extraction*, not *how facts are expressed*.
+A profile setting (`extraction_focus`) that controls the precision-vs-recall trade-off at the extractor layer. `comprehensive` (default) extracts all factual claims including strong inferences. `high_precision` extracts only claims explicitly and unambiguously stated in the text, with confidence ≥ 0.90. `facts_only` extracts stated factual assertions and excludes opinions, estimates, and hedged language. The extraction focus is injected into the extraction prompt — it does not affect fragmentation, which always produces all atomic statements.
 
 ### Draft graph
 
