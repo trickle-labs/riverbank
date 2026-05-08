@@ -33,6 +33,7 @@ ingest = [
     "spacy>=3.8",
     "coreferee>=1.4",
     "sentence-transformers>=3.1",
+    "sumy>=0.11",
     "rapidfuzz>=3.9",
     "tenacity>=8.3",
 ]

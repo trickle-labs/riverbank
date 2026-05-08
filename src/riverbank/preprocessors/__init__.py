@@ -138,47 +138,57 @@ class DocumentPreprocessor:
         strategies: list[str] = preprocessing_cfg.get(
             "strategies", ["document_summary", "entity_catalog"]
         )
+        backend: str = preprocessing_cfg.get("backend", "nlp")
+        max_entities: int = preprocessing_cfg.get("max_entities", 50)
 
         summary = ""
         entity_catalog: list[EntityCatalogEntry] = []
         prompt_tokens_total = 0
         completion_tokens_total = 0
 
-        # v0.12.0: merged preprocessing for short documents.
-        # When the document is below merge_preprocessing_below_chars, combine
-        # the document summary and entity catalog into a single LLM call.
-        token_opt: dict = getattr(profile, "token_optimization", {})
-        merge_threshold: int = token_opt.get("merge_preprocessing_below_chars", 0)
-        should_merge = (
-            merge_threshold > 0
-            and len(raw_text) < merge_threshold
-            and "document_summary" in strategies
-            and "entity_catalog" in strategies
-            and pre_computed_summary is None
-        )
-
-        if should_merge:
-            merged_sum, merged_cat, pt, ct = self._extract_merged(raw_text, profile)
-            summary = merged_sum or ""
-            entity_catalog = merged_cat
-            prompt_tokens_total += pt
-            completion_tokens_total += ct
-        else:
+        if backend == "nlp":
+            # Non-LLM path: sumy (summary) + spaCy NER + rapidfuzz (entity catalog)
             if "document_summary" in strategies:
                 if pre_computed_summary is not None:
-                    # §3.6 Phase 2 pre-scan dedup: reuse cached summary, no LLM call
                     summary = pre_computed_summary
                 else:
-                    summary_text, pt, ct = self._extract_summary(raw_text, profile)
-                    summary = summary_text or ""
-                    prompt_tokens_total += pt
-                    completion_tokens_total += ct
+                    summary = self._extract_summary_sumy(raw_text)
 
             if "entity_catalog" in strategies:
-                max_entities: int = preprocessing_cfg.get("max_entities", 50)
-                entity_catalog, pt, ct = self._extract_entity_catalog(raw_text, profile, max_entities)
+                entity_catalog = self._extract_entity_catalog_spacy(raw_text, max_entities)
+        else:
+            # LLM path (backend=="llm"): original behaviour
+            # v0.12.0: merged preprocessing for short documents.
+            token_opt: dict = getattr(profile, "token_optimization", {})
+            merge_threshold: int = token_opt.get("merge_preprocessing_below_chars", 0)
+            should_merge = (
+                merge_threshold > 0
+                and len(raw_text) < merge_threshold
+                and "document_summary" in strategies
+                and "entity_catalog" in strategies
+                and pre_computed_summary is None
+            )
+
+            if should_merge:
+                merged_sum, merged_cat, pt, ct = self._extract_merged(raw_text, profile)
+                summary = merged_sum or ""
+                entity_catalog = merged_cat
                 prompt_tokens_total += pt
                 completion_tokens_total += ct
+            else:
+                if "document_summary" in strategies:
+                    if pre_computed_summary is not None:
+                        summary = pre_computed_summary
+                    else:
+                        summary_text, pt, ct = self._extract_summary(raw_text, profile)
+                        summary = summary_text or ""
+                        prompt_tokens_total += pt
+                        completion_tokens_total += ct
+
+                if "entity_catalog" in strategies:
+                    entity_catalog, pt, ct = self._extract_entity_catalog(raw_text, profile, max_entities)
+                    prompt_tokens_total += pt
+                    completion_tokens_total += ct
 
         # §Noise sections: propagate profile-configured noise section headings
         noise_sections: list[str] = preprocessing_cfg.get("noise_sections", [])
@@ -275,7 +285,152 @@ class DocumentPreprocessor:
         return "\n\n".join(parts)
 
     # ------------------------------------------------------------------
-    # Private helpers
+    # Private helpers — NLP backends (no LLM)
+    # ------------------------------------------------------------------
+
+    def _extract_summary_sumy(self, raw_text: str) -> str:
+        """Produce a 2-3 sentence extractive summary using sumy LexRank (no LLM call).
+
+        Falls back to the first 3 sentences of the document when sumy is not
+        installed or fails.
+        """
+        try:
+            from sumy.nlp.tokenizers import Tokenizer  # noqa: PLC0415
+            from sumy.parsers.plaintext import PlaintextParser  # noqa: PLC0415
+            from sumy.summarizers.lex_rank import LexRankSummarizer  # noqa: PLC0415
+        except ImportError:
+            logger.debug("sumy not installed — falling back to first-3-sentences summary")
+            return self._first_sentences(raw_text, 3)
+
+        try:
+            parser = PlaintextParser.from_string(
+                raw_text[:8000], Tokenizer("english")
+            )
+            summarizer = LexRankSummarizer()
+            sentences = summarizer(parser.document, sentences_count=3)
+            result = " ".join(str(s) for s in sentences).strip()
+            if result:
+                return result
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("sumy summary failed: %s", exc)
+
+        return self._first_sentences(raw_text, 3)
+
+    @staticmethod
+    def _first_sentences(text: str, n: int) -> str:
+        """Return the first *n* non-empty sentences from *text* as a fallback."""
+        import re  # noqa: PLC0415
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+        return " ".join(sentences[:n])
+
+    def _extract_entity_catalog_spacy(
+        self, raw_text: str, max_entities: int
+    ) -> list[EntityCatalogEntry]:
+        """Extract entities using spaCy NER + rapidfuzz alias grouping (no LLM call).
+
+        spaCy entity types are mapped to riverbank entity_type labels.  Near-
+        duplicate surface forms (e.g. "Marie Curie" / "Curie") are grouped as
+        aliases using ``rapidfuzz.fuzz.token_sort_ratio`` (threshold 85).
+
+        Falls back to ``[]`` when spaCy or any English model is unavailable.
+        """
+        import re  # noqa: PLC0415
+        from collections import Counter  # noqa: PLC0415
+
+        try:
+            import spacy  # noqa: PLC0415
+        except ImportError:
+            logger.debug("spaCy not installed — entity catalog skipped")
+            return []
+
+        # spaCy NER label → riverbank entity_type
+        _SPACY_TYPE: dict[str, str] = {
+            "PERSON": "Role",
+            "ORG": "System",
+            "GPE": "Concept",
+            "LOC": "Concept",
+            "PRODUCT": "Component",
+            "EVENT": "Event",
+            "WORK_OF_ART": "Concept",
+            "LAW": "Concept",
+            "LANGUAGE": "Concept",
+            "FAC": "Component",
+            "NORP": "Concept",
+        }
+
+        nlp = None
+        for model_name in ("en_core_web_lg", "en_core_web_md", "en_core_web_sm"):
+            try:
+                nlp = spacy.load(model_name)
+                break
+            except OSError:
+                continue
+
+        if nlp is None:
+            logger.debug("No spaCy English model found — entity catalog skipped")
+            return []
+
+        try:
+            doc = nlp(raw_text[:12000])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("spaCy NER failed: %s", exc)
+            return []
+
+        counts: Counter = Counter()
+        type_map: dict[str, str] = {}
+        for ent in doc.ents:
+            if ent.label_ not in _SPACY_TYPE:
+                continue
+            text = ent.text.strip()
+            if len(text) < 2:
+                continue
+            counts[text] += 1
+            if text not in type_map:
+                type_map[text] = _SPACY_TYPE[ent.label_]
+
+        # Take top candidates (2x budget to allow merging)
+        candidates = [label for label, _ in counts.most_common(max_entities * 2)]
+
+        # Group near-duplicate surface forms into alias clusters
+        try:
+            from rapidfuzz.fuzz import token_sort_ratio  # noqa: PLC0415
+            groups: list[list[str]] = []
+            for label in candidates:
+                placed = False
+                for group in groups:
+                    if token_sort_ratio(label, group[0]) > 85:
+                        group.append(label)
+                        placed = True
+                        break
+                if not placed:
+                    groups.append([label])
+        except ImportError:
+            logger.debug("rapidfuzz not installed — skipping alias grouping")
+            groups = [[c] for c in candidates]
+
+        entries: list[EntityCatalogEntry] = []
+        for group in groups[:max_entities]:
+            head = max(group, key=lambda lb: counts[lb])
+            aliases = [a for a in group if a != head]
+            safe_name = re.sub(r"[^a-z0-9]+", "-", head.lower()).strip("-") or "entity"
+            entries.append(
+                EntityCatalogEntry(
+                    canonical_name=safe_name,
+                    label=head,
+                    entity_type=type_map.get(head, "Concept"),
+                    aliases=aliases,
+                )
+            )
+
+        logger.debug(
+            "spaCy entity catalog: %d entries from %d candidates",
+            len(entries),
+            len(candidates),
+        )
+        return entries
+
+    # ------------------------------------------------------------------
+    # Private helpers — LLM backends
     # ------------------------------------------------------------------
 
     def _get_llm_client(self, profile: Any) -> tuple[Any, str, str]:
