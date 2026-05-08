@@ -1053,7 +1053,7 @@ class IngestPipeline:
             from riverbank.fragmenters.llm_statement import LLMStatementFragmenter  # noqa: PLC0415
             return LLMStatementFragmenter.from_profile(profile, settings=self._settings)
 
-        if fragmenter_name == "direct":
+        if fragmenter_name in ("direct", "noop"):
             from riverbank.fragmenters.direct import DirectFragmenter  # noqa: PLC0415
             fallback = HeadingFragmenter(overlap_sentences=overlap_sentences)
             return DirectFragmenter.from_profile(profile, fallback=fallback)

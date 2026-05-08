@@ -58,8 +58,10 @@ editorial_policy:
   allowed_languages:
     - en
 
-# Fragmenter: noop — treats entire document as a single fragment
-fragmenter: noop
+# Fragmenter: direct — treats entire document as a single fragment
+fragmenter: direct
+direct_extraction:
+  max_doc_chars: 500000  # match max_fragment_length above
 
 # Competency questions — SPARQL ASK queries that the compiled graph must answer.
 # Used by the golden corpus CI gate (tests/golden/).
