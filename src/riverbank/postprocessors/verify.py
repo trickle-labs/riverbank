@@ -38,6 +38,13 @@ _DRAFT_GRAPH = "http://riverbank.example/graph/draft"
 # Maximum allowed batch size to prevent prompt explosion.
 _MAX_BATCH_SIZE = 10
 
+# NLI cross-encoder model used when backend=="nli".
+_NLI_MODEL_NAME = "cross-encoder/nli-distilroberta-base"
+# Label indices for cross-encoder/nli-distilroberta-base:
+#   0 = contradiction, 1 = entailment, 2 = neutral
+_NLI_IDX_CONTRADICTION = 0
+_NLI_IDX_ENTAILMENT = 1
+
 # System prompt for the verification LLM call.
 _VERIFIER_SYSTEM_PROMPT = """\
 You are a knowledge graph fact-checker.
@@ -188,19 +195,38 @@ class VerificationPass:
 
         result = VerificationResult(triples_examined=len(candidates))
 
-        # Load LLM client once (fail fast if unavailable).
-        try:
-            client, model_name = self._get_llm_client(profile)
-        except ImportError as exc:
-            logger.warning(
-                "verify: LLM not available — verification skipped. %s", exc
-            )
-            return result
+        # Load verifier once — NLI cross-encoder or LLM (fail fast if unavailable).
+        backend: str = verification_cfg.get("backend", "llm")
+        nli_model: Any = None
+        client: Any = None
+        model_name: str = ""
+
+        if backend == "nli":
+            try:
+                nli_model = self._get_nli_model()
+            except ImportError as exc:
+                logger.warning(
+                    "verify: NLI model not available — verification skipped. %s", exc
+                )
+                return result
+        else:
+            try:
+                client, model_name = self._get_llm_client(profile)
+            except ImportError as exc:
+                logger.warning(
+                    "verify: LLM not available — verification skipped. %s", exc
+                )
+                return result
 
         # Process candidates in batches
         for batch_start in range(0, len(candidates), batch_size):
             batch = candidates[batch_start : batch_start + batch_size]
-            if len(batch) == 1:
+            if nli_model is not None:
+                if len(batch) == 1:
+                    outcomes = [self._verify_triple_nli(batch[0], nli_model)]
+                else:
+                    outcomes = self._verify_batch_nli(batch, nli_model)
+            elif len(batch) == 1:
                 # Single-triple path — use the original per-triple verifier
                 outcomes = [self._verify_triple(batch[0], client, model_name)]
             else:
@@ -576,6 +602,80 @@ LIMIT 500
         except Exception as exc:  # noqa: BLE001
             logger.debug("verify: SPARQL DELETE failed (non-critical) — %s", exc)
 
+    def _get_nli_model(self) -> Any:
+        """Load and cache the NLI cross-encoder (sentence-transformers).
+
+        Raises ``ImportError`` when ``sentence-transformers`` is not installed.
+        """
+        if not hasattr(self, "_cached_nli_model"):
+            try:
+                from sentence_transformers import CrossEncoder  # noqa: PLC0415
+            except ImportError as exc:
+                raise ImportError(
+                    "sentence-transformers is required for NLI verification. "
+                    "Install with: pip install 'riverbank[ingest]'"
+                ) from exc
+            logger.info("verify: loading NLI model %r …", _NLI_MODEL_NAME)
+            self._cached_nli_model: Any = CrossEncoder(_NLI_MODEL_NAME)
+        return self._cached_nli_model
+
+    def _verify_triple_nli(self, triple: dict, model: Any) -> dict:
+        """Verify a single triple using the NLI cross-encoder (no LLM call)."""
+        evidence = triple.get("evidence", "") or "(no evidence available)"
+        hypothesis = _triple_to_hypothesis(triple)
+        try:
+            logits = model.predict([(evidence[:2000], hypothesis)])[0]
+            probs = _softmax(logits)
+            entailment_p = float(probs[_NLI_IDX_ENTAILMENT])
+            contradiction_p = float(probs[_NLI_IDX_CONTRADICTION])
+            supported = entailment_p >= contradiction_p
+            vc = entailment_p if supported else contradiction_p
+            return {
+                "supported": supported,
+                "verifier_confidence": vc,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "verify: NLI call failed for (%s, %s, %s) — %s",
+                triple["subject"],
+                triple["predicate"],
+                triple["object_value"],
+                exc,
+            )
+            return {"error": str(exc), "prompt_tokens": 0, "completion_tokens": 0}
+
+    def _verify_batch_nli(self, batch: list[dict], model: Any) -> list[dict]:
+        """Verify a batch of triples in a single NLI forward pass."""
+        # Build (premise, hypothesis) pairs
+        input_pairs = [
+            (
+                (t.get("evidence", "") or "(no evidence available)")[:2000],
+                _triple_to_hypothesis(t),
+            )
+            for t in batch
+        ]
+        try:
+            logits_batch = model.predict(input_pairs)
+            outcomes: list[dict] = []
+            for logits in logits_batch:
+                probs = _softmax(logits)
+                entailment_p = float(probs[_NLI_IDX_ENTAILMENT])
+                contradiction_p = float(probs[_NLI_IDX_CONTRADICTION])
+                supported = entailment_p >= contradiction_p
+                vc = entailment_p if supported else contradiction_p
+                outcomes.append({
+                    "supported": supported,
+                    "verifier_confidence": vc,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                })
+            return outcomes
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("verify: NLI batch call failed (%s) — falling back to individual calls", exc)
+            return [self._verify_triple_nli(t, model) for t in batch]
+
     def _get_llm_client(self, profile: Any) -> tuple[Any, str]:
         """Return an (instructor_client, model_name) pair."""
         try:
@@ -629,3 +729,29 @@ def _triple_id(triple: dict) -> str:
     p = triple.get("predicate", "?")
     o = triple.get("object_value", "?")
     return f"({s}, {p}, {o})"
+
+
+def _triple_to_hypothesis(triple: dict) -> str:
+    """Render a triple as a short natural-language hypothesis for NLI."""
+    def _localname(iri: str) -> str:
+        local = iri.split(":")[-1] if ":" in iri else iri
+        return local.replace("_", " ").replace("-", " ")
+
+    subj = _localname(triple["subject"])
+    pred = _localname(triple["predicate"])
+    obj_raw = triple["object_value"]
+    # If it looks like an IRI (contains ':' and no spaces), extract local name
+    if ":" in obj_raw and " " not in obj_raw and not obj_raw.startswith('"'):
+        obj = _localname(obj_raw)
+    else:
+        obj = obj_raw.strip('"')
+    return f"{subj} {pred} {obj}."
+
+
+def _softmax(logits: Any) -> list[float]:
+    """Compute softmax probabilities from a list/array of raw logits."""
+    import math  # noqa: PLC0415
+    max_l = max(float(x) for x in logits)
+    exp_l = [math.exp(float(x) - max_l) for x in logits]
+    total = sum(exp_l)
+    return [v / total for v in exp_l]

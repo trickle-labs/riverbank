@@ -119,27 +119,59 @@ class CoreferenceResolver:
         return text
 
     def _resolve_spacy(self, text: str) -> str:
-        """Use spaCy coreferee/neuralcoref for coreference resolution."""
+        """Use spaCy + coreferee for pronoun coreference resolution.
+
+        Prefers the larger ``en_core_web_lg`` model for higher accuracy
+        (coreferee accuracy: lg > md > sm).  Falls back gracefully when
+        spaCy, coreferee, or any English model is unavailable.
+        """
         try:
             import spacy  # noqa: PLC0415
-            nlp = spacy.load("en_core_web_sm")
-            # Try coreferee first
-            try:
-                import coreferee  # noqa: PLC0415, F401
-                nlp.add_pipe("coreferee")
-                doc = nlp(text)
-                resolved_tokens: list[str] = []
-                for token in doc:
-                    coref = doc._.coref_chains.resolve(token)
-                    if coref:
-                        resolved_tokens.append(coref[0].text)
-                    else:
-                        resolved_tokens.append(token.text_with_ws)
-                return "".join(resolved_tokens)
-            except (ImportError, Exception):
-                pass
-            # Fall through if coreferee unavailable
         except ImportError:
-            pass
-        logger.debug("spaCy coreference libraries not available — resolution skipped")
-        return text
+            logger.debug("spaCy not installed — coreference resolution skipped")
+            return text
+
+        try:
+            import coreferee  # noqa: PLC0415, F401
+        except ImportError:
+            logger.debug("coreferee not installed — coreference resolution skipped")
+            return text
+
+        # Prefer larger models; coreferee accuracy scales with model size
+        nlp = None
+        for model_candidate in ("en_core_web_lg", "en_core_web_md", "en_core_web_sm"):
+            try:
+                nlp = spacy.load(model_candidate)
+                break
+            except OSError:
+                continue
+
+        if nlp is None:
+            logger.debug("No spaCy English model found — coreference resolution skipped")
+            return text
+
+        try:
+            if "coreferee" not in nlp.pipe_names:
+                nlp.add_pipe("coreferee")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Could not add coreferee pipe: %s", exc)
+            return text
+
+        try:
+            doc = nlp(text)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("spaCy processing failed: %s", exc)
+            return text
+
+        tokens: list[str] = []
+        for token in doc:
+            # Only replace pronouns — resolve anaphors to their most specific mention
+            if token.pos_ == "PRON":
+                resolved = doc._.coref_chains.resolve(token)
+                if resolved:
+                    # Join all tokens in the resolved mention, e.g. ["Marie", "Curie"]
+                    resolved_text = " ".join(t.text for t in resolved)
+                    tokens.append(resolved_text + token.whitespace_)
+                    continue
+            tokens.append(token.text_with_ws)
+        return "".join(tokens)

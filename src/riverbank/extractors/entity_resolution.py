@@ -35,6 +35,10 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MAX_ENTITIES = 50
 _DEFAULT_CONFIDENCE = 0.8
 
+# Embedding-based entity resolution (backend="embeddings")
+_EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+_DEFAULT_SIMILARITY_THRESHOLD = 0.92
+
 _DEFAULT_PROMPT = """\
 You are a knowledge graph curator. You are given a list of entity IRIs \
 extracted from a document, followed by the document text.
@@ -89,6 +93,7 @@ class EntityResolutionPass:
         triples found.  Returns ``([], 0, 0)`` on any failure.
         """
         cfg: dict = getattr(profile, "entity_resolution", {}) or {}
+        backend: str = cfg.get("backend", "llm")
         max_entities: int = int(cfg.get("max_entities_per_call", _DEFAULT_MAX_ENTITIES))
         confidence_threshold: float = float(cfg.get("confidence_threshold", _DEFAULT_CONFIDENCE))
         system_prompt: str = cfg.get("prompt") or _DEFAULT_PROMPT
@@ -103,6 +108,15 @@ class EntityResolutionPass:
 
         if not unique:
             return [], 0, 0
+
+        # Embedding-based backend — no LLM call, uses cosine similarity
+        if backend == "embeddings":
+            similarity_threshold: float = float(
+                cfg.get("similarity_threshold", _DEFAULT_SIMILARITY_THRESHOLD)
+            )
+            return self._run_embeddings_pass(
+                source_iri, unique, profile, similarity_threshold
+            )
 
         all_triples: list[ExtractedTriple] = []
         total_pt = 0
@@ -122,6 +136,103 @@ class EntityResolutionPass:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _run_embeddings_pass(
+        self,
+        source_iri: str,
+        subjects: list[str],
+        profile: Any,
+        similarity_threshold: float,
+    ) -> tuple[list[ExtractedTriple], int, int]:
+        """Find entity aliases using embedding cosine similarity (no LLM call).
+
+        Embeds the human-readable label derived from each IRI using
+        ``all-MiniLM-L6-v2`` and pairs entities whose cosine similarity
+        exceeds *similarity_threshold*.
+
+        Returns ``(triples, 0, 0)`` — token counts are zero (no LLM used).
+        """
+        import re  # noqa: PLC0415
+
+        try:
+            from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+        except ImportError:
+            logger.warning(
+                "EntityResolutionPass: sentence-transformers not available "
+                "— skipping embedding entity resolution"
+            )
+            return [], 0, 0
+
+        try:
+            import numpy as np  # noqa: PLC0415
+        except ImportError:
+            logger.warning("EntityResolutionPass: numpy not available — skipping")
+            return [], 0, 0
+
+        def _iri_to_label(iri: str) -> str:
+            """Convert an IRI local name to a human-readable embedding input."""
+            local = iri.split(":")[-1] if ":" in iri else iri
+            # Split CamelCase: "MarieCurie" → "Marie Curie"
+            label = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", local)
+            return label.replace("_", " ").replace("-", " ").strip().lower() or iri
+
+        labels = [_iri_to_label(s) for s in subjects]
+
+        try:
+            model = SentenceTransformer(_EMBEDDING_MODEL_NAME)
+            embeddings = model.encode(
+                labels, normalize_embeddings=True, show_progress_bar=False
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("EntityResolutionPass: embedding failed: %s", exc)
+            return [], 0, 0
+
+        # Pairwise cosine similarity (L2-normalised → dot product == cosine)
+        sim_matrix: Any = embeddings @ embeddings.T
+        named_graph = getattr(profile, "named_graph", "<trusted>")
+        triples: list[ExtractedTriple] = []
+
+        for i in range(len(subjects)):
+            for j in range(i + 1, len(subjects)):
+                sim = float(sim_matrix[i, j])
+                if sim < similarity_threshold or subjects[i] == subjects[j]:
+                    continue
+                excerpt = (
+                    f"embedding similarity {sim:.3f}: "
+                    f"{subjects[i]} \u2261 {subjects[j]}"
+                )[:200]
+                try:
+                    evidence = EvidenceSpan(
+                        source_iri=source_iri,
+                        char_start=0,
+                        char_end=1,
+                        excerpt=excerpt,
+                    )
+                    for subj, obj in (
+                        (subjects[i], subjects[j]),
+                        (subjects[j], subjects[i]),
+                    ):
+                        triples.append(
+                            ExtractedTriple(
+                                subject=subj,
+                                predicate="owl:sameAs",
+                                object_value=obj,
+                                confidence=sim,
+                                evidence=evidence,
+                                named_graph=named_graph,
+                            )
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(
+                        "EntityResolutionPass: could not build triple: %s", exc
+                    )
+
+        logger.debug(
+            "EntityResolutionPass: embeddings found %d equivalence pair(s) from %d entities",
+            len(triples) // 2,
+            len(subjects),
+        )
+        return triples, 0, 0
 
     def _call_llm(
         self,
