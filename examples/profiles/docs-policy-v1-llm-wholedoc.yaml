@@ -1,0 +1,94 @@
+---
+# docs-policy-v1-llm-wholedoc — Single-document extraction (no fragmentation)
+#
+# This profile extracts the entire document in one LLM call instead of splitting
+# it into fragments. Best for documents < 50k characters (~15-20k tokens).
+#
+# Benefits:
+#   - ~17x faster for medium docs (1-2 min instead of 15-20 min)
+#   - Full cross-document context (LLM sees relationships across entire document)
+#   - Consistent predicates (no drift across fragments)
+#   - No fragmentation errors
+#
+# Drawbacks:
+#   - Limited by model's context window (usually 4-128k tokens)
+#   - Potential hallucination on very long documents
+#
+# Usage:
+#   riverbank ingest ~/.riverbank/article_cache/marie_curie.md \
+#     --profile examples/profiles/docs-policy-v1-llm-wholedoc.yaml
+#   riverbank ingest examples/markdown-corpus/ --profile examples/profiles/docs-policy-v1-llm-wholedoc.yaml
+#
+name: docs-policy-v1-llm-wholedoc
+version: 1
+
+# Extractor — "instructor" uses LLM via OpenAI API (or Ollama via base_url override)
+extractor: instructor
+
+model_provider: ollama
+model_name: llama3.2
+embed_model: nomic-embed-text
+max_fragment_tokens: 2000
+
+named_graph: "http://riverbank.example/graph/trusted"
+
+prompt_text: |
+  You are a knowledge graph compiler.  Extract factual claims from the
+  following documentation section as RDF triples.
+
+  For each claim provide:
+  - subject: prefixed IRI (e.g. ex:Ariadne)
+  - predicate: prefixed IRI (e.g. ex:createdBy)
+  - object_value: prefixed IRI or literal
+  - confidence: float 0.0–1.0
+  - evidence: exact character offsets and a verbatim excerpt
+
+  Only extract claims directly supported by the text.
+  Do NOT fabricate evidence.
+
+editorial_policy:
+  min_fragment_length: 50
+  max_fragment_length: 500000  # Very high to keep entire document as one fragment
+  min_heading_depth: 0
+  confidence_threshold: 0.7
+  allowed_languages:
+    - en
+
+# Fragmenter: noop — treats entire document as a single fragment
+fragmenter: noop
+
+# Competency questions — SPARQL ASK queries that the compiled graph must answer.
+# Used by the golden corpus CI gate (tests/golden/).
+competency_questions:
+  - id: cq-01
+    description: "The corpus defines a concept called 'Confidence'"
+    sparql: |
+      ASK {
+        ?s ?p "Confidence" .
+      }
+  - id: cq-02
+    description: "The corpus mentions evidence spans with character offsets"
+    sparql: |
+      ASK {
+        ?s ?p ?o .
+        FILTER(CONTAINS(STR(?o), "character"))
+      }
+  - id: cq-03
+    description: "The corpus contains at least one subject–predicate–object triple"
+    sparql: |
+      ASK {
+        ?s ?p ?o .
+      }
+
+# Preprocessing: now free with NLP backend (sumy + spaCy NER)
+# Injects domain summary + entity catalog to guide extraction
+preprocessing:
+  enabled: true
+  backend: "nlp"  # Uses sumy LexRank + spaCy NER (no LLM cost)
+  max_tokens_for_preprocessing: 4000
+
+# Verification: now free with NLI backend (cross-encoder)
+# Filters out hallucinated/contradictory triples against source
+verification:
+  enabled: true
+  backend: "nli"  # Uses cross-encoder/nli-distilroberta-base (no LLM cost)
