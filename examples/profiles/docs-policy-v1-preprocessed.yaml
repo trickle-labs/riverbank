@@ -35,18 +35,14 @@ max_fragment_tokens: 2000
 named_graph: "http://riverbank.example/graph/trusted"
 
 # ---------------------------------------------------------------------------
-# Phase 1: LLM Preprocessing
+# Phase 1: NLP Preprocessing (sumy + spaCy, no LLM cost)
 # ---------------------------------------------------------------------------
 preprocessing:
   enabled: true
-
-  # Which preprocessing strategies to run (in order)
-  strategies:
-    - document_summary    # Generate a 2-3 sentence domain summary
-    - entity_catalog      # Build a canonical entity name catalog
-
-  # Maximum number of entities to extract per document (cap to control prompt size)
-  max_entities: 50
+  backend: "nlp"  # Uses sumy LexRank + spaCy NER (no LLM cost)
+  # Note: NLP backend automatically extracts document_summary and entity_catalog
+  # max_entities is implicit in spaCy NER output
+  max_tokens_for_preprocessing: 4000
 
   # Predefined predicates — the extraction LLM will be instructed to use only these.
   # Add "ex:relatedTo" as a catch-all (automatically injected at confidence ≤ 0.6).

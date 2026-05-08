@@ -67,3 +67,16 @@ competency_questions:
       ASK {
         ?s ?p ?o .
       }
+
+# Preprocessing: now free with NLP backend (sumy + spaCy NER)
+# Injects domain summary + entity catalog to guide extraction
+preprocessing:
+  enabled: true
+  backend: "nlp"  # Uses sumy LexRank + spaCy NER (no LLM cost)
+  max_tokens_for_preprocessing: 4000
+
+# Verification: now free with NLI backend (cross-encoder)
+# Filters out hallucinated/contradictory triples against source
+verification:
+  enabled: true
+  backend: "nli"  # Uses cross-encoder/nli-distilroberta-base (no LLM cost)

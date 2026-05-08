@@ -15,21 +15,11 @@ prompt_text: |
     subject, predicate, object (all fully qualified IRIs or literals).
   Focus on the entities and relationships described in the text.
 
-# Phase 1: per-document summary + entity catalog
+# Phase 1: per-document summary + entity catalog (sumy + spaCy, no LLM cost)
 preprocessing:
   enabled: true
-  strategies:
-    - document_summary
-    - entity_catalog
-  max_entities: 50
-  predefined_predicates:
-    - rdf:type
-    - rdfs:label
-    - rdfs:comment
-    - schema:isPartOf
-    - schema:hasPart
-    - schema:name
-    - schema:description
+  backend: "nlp"  # Uses sumy LexRank + spaCy NER (no LLM cost)
+  max_tokens_for_preprocessing: 4000
 
 # Phase 2: corpus-level hierarchical clustering
 # Requires: pip install 'riverbank[embed]'  (sentence-transformers + scikit-learn)

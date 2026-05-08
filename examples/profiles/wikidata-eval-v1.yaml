@@ -41,18 +41,22 @@ extraction_strategy:
     trusted_threshold: 0.70
   safety_cap: 100  # Max triples per fragment
 
-# Preprocessing: disabled by default (can be enabled with longer contexts)
+# Preprocessing: now free with NLP backend (sumy + spaCy NER)
+# Injects domain summary + entity catalog to guide extraction
 preprocessing:
-  enabled: false
+  enabled: true
+  backend: "nlp"  # Uses sumy LexRank + spaCy NER (no LLM cost)
   max_tokens_for_preprocessing: 4000
 
 # Constrained decoding: enable Ollama's JSON schema grammar constraint
 # This forces valid JSON output at the token level, eliminating parse errors
 constrained_decoding: true
 
-# Verification: disabled for speed; enable with --verify flag
+# Verification: now free with NLI backend (cross-encoder)
+# Filters out hallucinated/contradictory triples against source
 verification:
-  enabled: false
+  enabled: true
+  backend: "nli"  # Uses cross-encoder/nli-distilroberta-base (no LLM cost)
 
 # Evaluation-specific configuration
 evaluation:

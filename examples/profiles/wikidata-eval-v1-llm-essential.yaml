@@ -49,17 +49,21 @@ extraction_strategy:
 # Extraction focus: high precision — only explicitly stated claims
 extraction_focus: "high_precision"
 
-# Preprocessing: disabled by default
+# Preprocessing: now free with NLP backend (sumy + spaCy NER)
+# Injects domain summary + entity catalog to guide extraction
 preprocessing:
-  enabled: false
+  enabled: true
+  backend: "nlp"  # Uses sumy LexRank + spaCy NER (no LLM cost)
   max_tokens_for_preprocessing: 4000
 
 # Constrained decoding
 constrained_decoding: true
 
-# Verification: disabled for speed
+# Verification: now free with NLI backend (cross-encoder)
+# Filters out hallucinated/contradictory triples against source
 verification:
-  enabled: false
+  enabled: true
+  backend: "nli"  # Uses cross-encoder/nli-distilroberta-base (no LLM cost)
 
 # Evaluation configuration
 evaluation:
