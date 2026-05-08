@@ -2,7 +2,7 @@
 
 riverbank is a knowledge compiler — a Python worker and CLI that turns raw documents into a governed, queryable knowledge graph stored entirely inside PostgreSQL. Feed it a corpus of Markdown files, PDFs, tickets, or API feeds; it parses and fragments the content, runs an LLM extraction pipeline to pull out structured facts and relationships, validates the output against quality contracts, and writes the results as a cited RDF knowledge graph that you can query with SPARQL or retrieve with plain English. The end state is not a search index you re-query every time — it is a compiled artifact you can interrogate directly and trust.
 
-The project is at the MVP completion stage (v0.3.0). The ingestion pipeline, graph writes, query surface, run inspection, and governance commands are all working. This README describes both what exists today and where the project is headed.
+The project is at v0.15.1 — a production-grade knowledge compiler with a validated extraction quality framework. Fifteen-plus release cycles have built out the full pipeline: incremental compilation, multi-format parsing, quality gates, human review, production hardening, an epistemic modelling layer, multi-tenancy, federated compilation, extraction improvement loops, and a Wikidata-grounded evaluation benchmark. This README describes what is working today and what remains on the roadmap.
 
 ---
 
@@ -26,7 +26,17 @@ The plan is organized into a sequence of concrete, testable releases that each e
 
 **The third milestone (v0.3.0, done)** closes out the MVP with the query surface, run inspection, cost accounting, and a golden corpus CI gate. `riverbank query` executes SPARQL SELECT or ASK queries directly against the compiled graph. `riverbank runs` shows recent compiler runs with outcome, token counts, cost, and Langfuse trace deep-links. `riverbank lint --shacl-only` runs a SHACL quality report against the trusted graph and exits non-zero if the score falls below the profile threshold, making governance a first-class operation from day one. Each compiler profile now carries a `competency_questions` array of SPARQL assertions that CI validates automatically — a regression test for knowledge quality, not just code correctness.
 
-**Later milestones (v0.4.0 and beyond)** extend the system in several directions. The artifact dependency graph makes the incremental recompilation story complete: when a source changes, exactly the downstream artifacts that depend on it rebuild, and `riverbank explain` can show you the full dependency tree for any compiled fact. A vocabulary pass introduces SKOS concept extraction as a prerequisite step before relationship extraction, so entity references snap to canonical preferred-label IRIs rather than being deduplicated after the fact. Additional document formats arrive through Docling integration. A human review loop connects to Label Studio, where low-confidence extractions are routed to reviewers whose corrections flow back into the graph and enrich the example bank for future compilation runs. Production hardening brings Kubernetes deployment, multi-replica workers with fragment-level advisory locking to prevent duplicate work, and Prometheus metrics dashboards.
+**v0.4.0–v0.5.0 (done)** delivered incremental compilation and multi-format enrichment. The artifact dependency graph makes the recompilation story complete — `riverbank explain` shows the full dependency tree for any compiled fact. A vocabulary pass introduces SKOS concept extraction. Docling brings PDF, DOCX, and HTML support. spaCy NER with fuzzy entity matching and embedding generation round out the enrichment layer.
+
+**v0.6.0–v0.7.0 (done)** added quality gates and production hardening. Label Studio integration routes low-confidence extractions to human reviewers whose corrections enrich the few-shot example bank. The Prefect nightly lint flow keeps SHACL quality scores current. Production hardening delivered the Helm chart, multi-replica advisory locking, Prometheus metrics, HashiCorp Vault secret management, and circuit breakers per LLM provider.
+
+**v0.8.0–v0.9.0 (done)** introduced the epistemic layer and multi-tenancy. Negative knowledge records, argument graphs, and an assumption registry make the absence of facts as queryable as their presence. Row-Level Security activates tenant isolation at the PostgreSQL level. Federated compilation lets one riverbank instance pull triples from remote pg-ripple instances. The rendering engine emits Markdown, JSON-LD, and HTML entity pages from the compiled graph.
+
+**v0.10.0–v0.14.0 (done)** built the extraction quality stack: a PyPI release with SBOM support; document-level LLM preprocessing with entity catalog injection; permissive extraction with per-triple confidence routing to a tentative graph; noisy-OR confidence consolidation; entity and predicate normalization; semantic few-shot selection; knowledge-prefix context injection; constrained decoding for local models; semantic chunking; SHACL shape validation; and SPARQL CONSTRUCT rules plus OWL 2 RL forward-chaining.
+
+**v0.15.0–v0.15.1 (done)** established the external evaluation framework. `riverbank evaluate-wikidata` compares compiled triples against Wikidata's curated statements for the same Wikipedia articles. A 1,000-article benchmark dataset covers seven domains; the v0.15.1 improvement loop closed the feedback cycle with per-property recall gap analysis, targeted prompt tuning, and 200+ novel-discovery annotations.
+
+**v1.0.0 (planned)** will deliver full API stability, signed release artifacts, Helm chart stability, and SLOs verified in CI.
 
 The full release plan is in [ROADMAP.md](ROADMAP.md).
 
@@ -46,23 +56,61 @@ riverbank delegates its most demanding responsibilities to three PostgreSQL exte
 
 ## Current status
 
-riverbank is at MVP completion (v0.3.0). The full ingestion pipeline, query surface, and governance commands are working.
+riverbank is at v0.15.1. The full pipeline is working end-to-end, from document ingest through quality-gated graph writes to SPARQL query and Wikidata-validated extraction evaluation.
 
-What is fully working today:
+**Core**
+- `riverbank version` / `config` / `health` / `init` — version, configuration, stack health checks, and catalog schema migrations.
+- `riverbank download-models` — pre-download sentence-transformer embedding models to the local cache.
 
-- `riverbank version` — prints the installed package version.
-- `riverbank config` — shows the resolved runtime settings from environment variables and the optional TOML config file.
-- `riverbank init` — applies the `_riverbank` catalog schema via Alembic migrations, creating the tables for sources, fragments, compiler profiles, runs, artifact dependencies, and audit log entries.
-- `riverbank health` — verifies the full extension stack is alive by calling `pgtrickle.preflight()` (seven system checks) and `pg_ripple.pg_tide_available()`.
-- `riverbank ingest <path>` — parses and fragments Markdown files, applies the editorial policy gate, extracts triples with the configured extractor, validates them against SHACL quality contracts, and writes them to pg_ripple with confidence scores and PROV-O provenance edges. Unchanged fragments (same xxh3_128 hash) are skipped automatically — re-ingesting an unchanged corpus produces zero LLM calls.
-- `riverbank query <sparql>` — executes a SPARQL SELECT or ASK query against the compiled graph via pg_ripple, with output as a rich table, JSON, or CSV.
-- `riverbank runs --since <duration>` — lists recent compiler runs with outcome, token counts, estimated cost, and Langfuse trace deep-links.
-- `riverbank profile register <yaml>` — registers a compiler profile from a YAML file into the catalog.
-- `riverbank source set-profile <iri> <profile>` — associates a registered source with a compiler profile.
-- `riverbank lint --shacl-only` — runs a SHACL quality report against a named graph and exits non-zero if the score falls below the profile threshold.
-- Plugin discovery loads parsers, fragmenters, extractors, connectors, and reviewers via Python entry points.
+**Ingest and data management**
+- `riverbank ingest <path>` — parse, fragment, extract, validate, and write to pg-ripple. Unchanged fragments (xxh3_128 hash) are skipped; re-ingesting an unchanged corpus costs zero LLM calls.
+- `riverbank clear-graph` / `reset-database` — targeted or full graph and catalog reset.
 
-Forward-looking work is tracked in [ROADMAP.md](ROADMAP.md), [plans/riverbank.md](plans/riverbank.md), and [plans/riverbank-implementation.md](plans/riverbank-implementation.md).
+**Query and analysis**
+- `riverbank query <sparql>` — SPARQL SELECT or ASK against the trusted graph; `--include-tentative` unions in lower-confidence triples.
+- `riverbank runs` — run inspection with outcome, token counts, cost, and Langfuse trace deep-links.
+- `riverbank lint` — SHACL quality report; exits non-zero below the profile threshold.
+- `riverbank explain` — dependency tree for a compiled artifact.
+- `riverbank explain-rejections` — triples discarded in recent runs, grouped by rejection reason.
+- `riverbank explain-conflict` — contradiction explanation for an entity or functional predicate.
+- `riverbank validate-graph` — competency-question coverage against the compiled graph.
+- `riverbank build-knowledge-context` — preview the KNOWN GRAPH CONTEXT block injected during extraction.
+
+**Post-processing passes**
+- `riverbank deduplicate-entities` — embed entity labels, write `owl:sameAs` links for duplicates.
+- `riverbank verify-triples` — re-evaluate low-confidence triples with a self-critique LLM call.
+- `riverbank normalize-predicates` — cluster near-duplicate predicates, write `owl:equivalentProperty` links.
+- `riverbank detect-contradictions` — detect and demote conflicting triples for functional predicates.
+- `riverbank promote-tentative` — promote tentative triples whose consolidated confidence crosses the trusted threshold.
+- `riverbank gc-tentative` — archive stale tentative triples that were never promoted.
+- `riverbank induce-schema` — cold-start schema induction: propose an OWL ontology from graph statistics.
+- `riverbank recompile` — bulk reprocess all sources compiled by an older profile version.
+
+**Reasoning and validation**
+- `riverbank validate-shapes` — validate a named graph against SHACL shapes.
+- `riverbank run-construct-rules` — execute SPARQL CONSTRUCT rules, write results to `graph/inferred`.
+- `riverbank run-owl-rl` — apply OWL 2 RL forward-chaining rules.
+
+**Evaluation**
+- `riverbank evaluate-wikidata` — compare compiled triples against Wikidata ground truth; single-article or full 1,000-article benchmark.
+- `riverbank recall-gap-analysis` — identify Wikidata properties with recall below threshold and generate extraction examples.
+- `riverbank tune-extraction-prompts` — analyse evaluation failures and generate targeted prompt patches.
+- `riverbank benchmark` — re-extract a golden corpus and compare against ground truth for quality regression.
+- `riverbank expand-few-shot` — auto-expand the few-shot example bank with high-confidence triples.
+
+**Rendering and supply chain**
+- `riverbank render` — render an entity page from the compiled graph (Markdown, JSON-LD, HTML).
+- `riverbank sbom` — generate a CycloneDX SBOM for the installed package.
+
+**Lifecycle management**
+- `riverbank profile` — register, list, and activate compiler profiles.
+- `riverbank source` — register and manage source records.
+- `riverbank review` — Label Studio human review queue management.
+- `riverbank tenant` — multi-tenant lifecycle (create, suspend, delete, activate RLS).
+- `riverbank federation` — federated compilation from remote pg-ripple instances.
+- `riverbank entities` — entity registry: list, merge, and inspect synonym rings.
+
+Forward-looking work is tracked in [ROADMAP.md](ROADMAP.md).
 
 ---
 
@@ -155,11 +203,11 @@ The built-in plugins shipped today:
 
 | Group | Built-in |
 |---|---|
-| `riverbank.parsers` | `markdown` |
-| `riverbank.fragmenters` | `heading` |
-| `riverbank.extractors` | `noop` (no-op, for testing) |
+| `riverbank.parsers` | `markdown`, `docling` (PDF, DOCX, HTML) |
+| `riverbank.fragmenters` | `heading`, `semantic` (embedding-based), `llm_statement` (distillation-aware), `direct` |
+| `riverbank.extractors` | `noop` (testing), `instructor` (LLM extraction via Instructor) |
 | `riverbank.connectors` | `filesystem` |
-| `riverbank.reviewers` | `file` |
+| `riverbank.reviewers` | `file`, `label_studio` |
 
 ---
 
@@ -168,9 +216,19 @@ The built-in plugins shipped today:
 - **v0.1.x** — skeleton: CLI, catalog schema, local stack, plugin architecture (done)
 - **v0.2.x** — MVP ingestion: Markdown corpus → pg-ripple triples with confidence scores and citation provenance; fragment-level skip on re-ingest (done)
 - **v0.3.x** — MVP completion: `riverbank query`, `riverbank lint --shacl-only`, run inspection, cost accounting, golden corpus CI gate (done)
-- **v0.4.x** — incremental compilation: artifact dependency graph, `riverbank explain`, vocabulary pass, Docling multi-format parser, Singer connector, embedding generation
-- **v0.5.x** — quality gates and review: Label Studio integration, active-learning review queue, Langfuse evaluations, full lint flow, Prefect orchestration
-- **v0.6.x** — production hardening: Helm chart, multi-replica workers, Prometheus metrics, audit trail, bulk reprocessing
+- **v0.4.x** — incremental compilation: artifact dependency graph, `riverbank explain`, vocabulary pass, Docling, embedding generation (done)
+- **v0.5.x** — multi-format and vocabulary: Docling parser, spaCy NER, fuzzy entity matching, Singer/pg-tide connector (done)
+- **v0.6.x** — quality gates and review: Label Studio, active-learning queue, Langfuse evaluations, Prefect nightly lint flow (done)
+- **v0.7.x** — production hardening: Helm chart, multi-replica advisory locking, Prometheus metrics, Vault secret management, circuit breakers (done)
+- **v0.8.x** — epistemic layer: negative knowledge, argument graphs, assumption registry, 9 epistemic status labels, model ensemble, contradiction explanation (done)
+- **v0.9.x** — multi-tenant and rendering: Row-Level Security, GDPR erasure, federated compilation, Markdown/JSON-LD/HTML rendering (done)
+- **v0.10.x** — release infrastructure: PyPI package, `riverbank sbom`, documentation site auto-publish (done)
+- **v0.11.x** — preprocessing and post-processing: LLM document preprocessing, entity catalog injection, entity deduplication, self-critique verification, token efficiency (done)
+- **v0.12.x** — permissive extraction: ontology-grounded prompts, per-triple confidence routing, tentative graph, noisy-OR consolidation, `riverbank promote-tentative` (done)
+- **v0.13.x** — entity convergence: predicate normalization, synonym rings, contradiction detection, schema induction, quality regression CI (done)
+- **v0.14.x** — structural improvements: constrained decoding, semantic chunking, SHACL shape validation, SPARQL CONSTRUCT rules, OWL 2 RL (done)
+- **v0.15.x** — Wikidata evaluation: `riverbank evaluate-wikidata`, 1,000-article benchmark, property alignment, extraction improvement loop (done)
+- **v1.0.0** — stable release: full API stability guarantee, signed artifacts, Helm chart stability, SLOs in CI (planned)
 
 See [ROADMAP.md](ROADMAP.md) for the full release-by-release specification.
 

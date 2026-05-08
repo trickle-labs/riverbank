@@ -17,3 +17,5 @@ How-to guides are task-oriented. They answer "how do I do X?" and stop when X is
 | [Rotate secrets](rotate-secrets.md) | Update credentials without downtime |
 | [Bulk reprocess a profile](bulk-reprocess-a-profile.md) | Re-extract all sources for a profile version |
 | [Generate an SBOM](generate-an-sbom.md) | Produce a software bill of materials |
+| [Use distillation presets](use-distillation-presets.md) | Control extraction depth with `default`, `essential`, and `minimal` levels |
+| [Use batch extraction](use-batch-extraction.md) | Group fragments into a single LLM call to reduce API costs |

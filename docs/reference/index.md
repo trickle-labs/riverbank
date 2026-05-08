@@ -12,4 +12,5 @@ Structured lookup tables for every configurable aspect of riverbank. Not prose â
 | [Plugin API](plugin-api.md) | Entry point groups and base classes |
 | [Metrics](metrics.md) | All Prometheus metric names and labels |
 | [Error codes](error-codes.md) | CLI exit codes and error categories |
+| [Evaluation methodology](evaluation-methodology.md) | Wikidata benchmark design, scoring pipeline, and result interpretation |
 | [Changelog](changelog.md) | Release history |

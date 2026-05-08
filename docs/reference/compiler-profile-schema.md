@@ -91,3 +91,133 @@ Multi-model ensemble configuration for higher extraction accuracy.
 | `models[].weight` | float | yes | Weight in merge (0.0–1.0) |
 | `strategy` | string | no | Merge strategy: `weighted_merge`, `majority_vote` |
 | `min_agreement` | float | no | Minimum agreement threshold |
+
+### `fragmenter` and `fragmenter_config`
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `fragmenter` | string | no | `heading` | Entry point name: `heading`, `semantic`, `llm_statement`, `direct` |
+| `fragmenter_config.min_heading_depth` | int | no | `1` | Minimum heading depth to split on |
+| `fragmenter_config.max_heading_depth` | int | no | `6` | Maximum heading depth to split on |
+| `fragmenter_config.overlap_sentences` | int | no | `0` | Sentences from the previous fragment to prepend |
+
+### `llm_statement_fragmentation`
+
+Only used when `fragmenter: llm_statement`. Sends the whole document to the LLM once and asks it to split it into individual statements before extraction.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `max_doc_chars` | int | no | `20000` | Maximum document characters sent to LLM |
+| `max_statements` | int | no | `200` | Maximum statements to extract |
+| `distillation_level` | string | no | `default` | `default` (all facts), `essential` (WHO + WHAT), `minimal` (achievements only) |
+
+### `extraction_strategy`
+
+Controls how triples are extracted and routed by confidence.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `mode` | string | no | `conservative` | `conservative` or `permissive` (tiered confidence guidance) |
+| `confidence_routing.trusted_threshold` | float | no | `0.75` | Confidence ≥ this → `graph/trusted` |
+| `confidence_routing.tentative_threshold` | float | no | `0.35` | Confidence ≥ this → `graph/tentative`; below → discarded |
+| `safety_cap` | int | no | `50` | Maximum triples per fragment; excess kept by confidence |
+| `batch_size` | int | no | `0` | Group N fragments per LLM call (0 = disabled) |
+
+### `preprocessing`
+
+Controls LLM document preprocessing (entity catalog, document summary) run before extraction.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `enabled` | bool | no | `true` | Enable Phase 1 preprocessing |
+| `max_tokens_for_preprocessing` | int | no | `4000` | Token budget for preprocessing call |
+| `skip_preprocessing_below_chars` | int | no | `2000` | Skip preprocessing for short documents |
+| `noise_filtering` | bool | no | `false` | Skip boilerplate sections identified by LLM |
+| `coreference` | string | no | `disabled` | `llm`, `spacy`, or `disabled` |
+| `merge_preprocessing_below_chars` | int | no | `4000` | Merge summary + catalog into one call for short documents |
+
+### `verification`
+
+Post-extraction self-critique pass for low-confidence triples.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `enabled` | bool | no | `false` | Enable the verification pass |
+| `batch_size` | int | no | `5` | Low-confidence triples per verification LLM call |
+| `confidence_boost` | float | no | `0.15` | Confidence increase on confirmation |
+
+### `few_shot`
+
+Few-shot example injection into the extraction prompt.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `enabled` | bool | no | `false` | Enable few-shot injection |
+| `path` | string | no | `examples/golden/<profile>.yaml` | Path to golden examples file |
+| `selection` | string | no | `random` | `random` or `semantic` (cosine similarity) |
+| `max_examples` | int | no | `3` | Maximum examples to inject per fragment |
+
+### `token_optimization`
+
+Controls token usage reduction strategies.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `filter_entities_by_mention` | bool | no | `false` | Only inject entity catalog entries that appear in the fragment text |
+| `compact_output_schema` | bool | no | `false` | Use short JSON keys (`s`, `p`, `o`, `c`) to reduce output tokens |
+| `max_input_tokens_per_fragment` | int | no | `3000` | Token budget for assembled prompt; trims few-shot → context → catalog in priority order |
+| `max_graph_context_tokens` | int | no | `200` | Maximum tokens for KNOWN GRAPH CONTEXT block |
+
+### `allowed_predicates` and `allowed_classes`
+
+Ontology constraints injected as a closed-world allowlist into the extraction prompt.
+
+```yaml
+allowed_predicates:
+  - "schema:name"
+  - "schema:birthDate"
+  - "schema:memberOf"
+
+allowed_classes:
+  - "schema:Person"
+  - "schema:Organization"
+```
+
+Triples with predicates or classes outside these lists are rejected before writing (`triple_rejected_ontology` stat).
+
+### `predicate_constraints`
+
+Cardinality and domain/range hints for individual predicates.
+
+```yaml
+predicate_constraints:
+  - predicate: "schema:birthDate"
+    max_cardinality: 1          # functional: only one value per subject
+  - predicate: "schema:memberOf"
+    domain: "schema:Person"
+    range: "schema:Organization"
+```
+
+### `tentative_ttl_days`
+
+```yaml
+tentative_ttl_days: 30   # Archive tentative triples older than 30 days
+```
+
+### `constrained_decoding`
+
+```yaml
+constrained_decoding: true   # Force JSON schema conformance via Ollama grammar constraints
+```
+
+Only effective for `model_provider: ollama`.
+
+### `evaluation`
+
+Evaluation-specific flags used by `riverbank evaluate-wikidata`.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `wikidata_benchmark` | bool | no | `false` | Enable Wikidata-specific scoring pipeline |
+| `novel_discovery_sampling_rate` | float | no | `0.10` | Fraction of unmatched triples sampled for manual novel-discovery annotation |
+| `min_confidence_for_scoring` | float | no | `0.30` | Minimum confidence to include a triple in precision/recall scoring |

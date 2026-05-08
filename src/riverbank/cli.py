@@ -3943,6 +3943,12 @@ def evaluate_wikidata(
             )
 
         rprint(f"  [dim]Wikidata statements:[/dim] {len(wd_item.statements)}")
+        if len(wd_item.statements) == 0 and (wp_article.qid or wp_article.title):
+            rprint(
+                "[yellow]  Warning: Wikidata returned 0 statements — the SPARQL query may have "
+                "failed silently (rate limit / timeout). Precision/recall will be 0. "
+                "Re-run to retry.[/yellow]"
+            )
 
         # ── Run ingest pipeline and score extracted triples ──────────────
         import uuid as _uuid  # noqa: PLC0415
