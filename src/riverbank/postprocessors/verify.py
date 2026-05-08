@@ -196,7 +196,7 @@ class VerificationPass:
         result = VerificationResult(triples_examined=len(candidates))
 
         # Load verifier once — NLI cross-encoder or LLM (fail fast if unavailable).
-        backend: str = verification_cfg.get("backend", "llm")
+        backend: str = verification_cfg.get("backend", "nli")
         nli_model: Any = None
         client: Any = None
         model_name: str = ""

@@ -93,7 +93,7 @@ class EntityResolutionPass:
         triples found.  Returns ``([], 0, 0)`` on any failure.
         """
         cfg: dict = getattr(profile, "entity_resolution", {}) or {}
-        backend: str = cfg.get("backend", "llm")
+        backend: str = cfg.get("backend", "embeddings")
         max_entities: int = int(cfg.get("max_entities_per_call", _DEFAULT_MAX_ENTITIES))
         confidence_threshold: float = float(cfg.get("confidence_threshold", _DEFAULT_CONFIDENCE))
         system_prompt: str = cfg.get("prompt") or _DEFAULT_PROMPT
