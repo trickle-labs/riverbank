@@ -11,7 +11,7 @@
 ## 1. Executive Summary
 
 riverbank already contains all the individual components needed for a
-self-improving knowledge compiler: evaluation scoring against Wikidata ground
+self-improving knowledge compiler: evaluation scoring against labeled ground
 truth, recall-gap analysis, prompt tuning patch generation, auto few-shot
 expansion, confidence-based routing, and noisy-OR consolidation. What is missing
 is the **orchestration layer** that wires these components into a closed-loop
@@ -34,7 +34,7 @@ design draws on four research threads:
 
 The key insight from this literature is that **prompt optimization is not a
 one-shot task** — it is an iterative search process that requires:
-- A clear metric to maximize (riverbank has this: F1 vs. Wikidata)
+- A clear metric to maximize (riverbank has this: F1 vs. labeled ground truth)
 - A feedback signal per iteration (riverbank has this: per-property recall/precision)
 - A mechanism for generating candidate improvements (riverbank has the PromptTuner)
 - A mechanism for validating candidates safely (riverbank needs this: A/B testing)
@@ -62,7 +62,7 @@ each differently.
        └───────────────────┬────────────────────┘
                            │
        ┌───────────────────▼────────────────────┐
-       │  riverbank evaluate-wikidata            │
+       │  riverbank evaluate                     │
        └───────────────────┬────────────────────┘
                            │
        ┌───────────────────▼────────────────────┐
@@ -139,7 +139,7 @@ proposes exactly **one** change to the profile. This ensures:
 ### 3.2 Metrics-first, not vibes-first
 
 Every decision is grounded in a numeric signal:
-- **Primary metric:** F1 vs. Wikidata ground truth (existing `Scorer`)
+- **Primary metric:** F1 vs. labeled ground truth (existing `Scorer`; ground truth may be a curated reference dataset, Wikidata for public knowledge, or human-validated spot samples)
 - **Secondary metrics:** cost per accepted triple, SHACL score, novel discovery
   rate, confidence calibration Pearson ρ
 - **Guardrails:** maximum acceptable precision drop (5%), maximum cost increase
@@ -180,7 +180,7 @@ the active corpus, and it must treat low-quality signal appropriately.
 |------|-----------|---------------|-----------------|
 | Profile mis-tuned | Extraction prompt too strict/loose | Tune thresholds | Correct |
 | Corpus drift | Topic or style of new documents has shifted | Tune prompt for old domain | Detect drift, adapt separately |
-| Measurement miscalibration | Wikidata property alignment stale or coverage map outdated | React to phantom signal | Re-calibrate alignment table first |
+| Measurement miscalibration | Predicate alignment table stale or reference dataset coverage is low | React to phantom signal | Re-calibrate alignment table first |
 
 The `DiagnosticsEngine` must distinguish these before triggering hypothesis
 generation. Corpus drift is detected by comparing the embedding centroid and
@@ -327,11 +327,17 @@ depends on it.
 For any given corpus, exactly one of three measurement tiers is available:
 
 ```
-Tier 1 (Gold)   — Wikidata F1
-  Available:    Wikipedia-sourced corpora with Wikidata-aligned entities
-  Signal:       Absolute precision/recall/F1 per property against curated facts
+Tier 1 (Gold)   — Labeled ground truth
+  Available:    Any corpus for which a verified reference dataset exists.
+                Examples: Wikidata statements for public knowledge graphs;
+                a curated JSONL of (text snippet, expected triples) pairs
+                for domain corpora; a golden test set built during onboarding.
+                Operators provide this via the `evaluation.ground_truth`
+                profile field.
+  Signal:       Absolute precision/recall/F1 per property against the
+                reference dataset
   Drives:       All promotion/demotion decisions when available
-  Limitation:   Only covers ~20% of real-world use cases
+  Limitation:   Requires up-front curation effort; coverage is finite
 
 Tier 2 (Silver) — Structural quality
   Available:    Always (requires only the compiled graph)
@@ -351,7 +357,9 @@ Tier 3 (Bronze) — Self-assessed quality
 Tier 4 (Human)  — Spot-sampling
   Available:    On demand (requires Label Studio + reviewer time)
   Signal:       Human-validated accuracy on a random sample of 20–50 triples
-  Drives:       Re-anchoring calibration after N promotions without Tier 1 data
+  Drives:       Re-anchoring calibration after N auto-promotions without
+                Tier 1 data; the primary ongoing signal for corpora with no
+                curated reference set
   Limitation:   Expensive; not automatable; sampled, not exhaustive
 ```
 
@@ -364,7 +372,7 @@ class MeasurementStrategy:
     """Select and blend measurement tiers for a given profile and corpus."""
     
     def select(self, profile: CompilerProfile, corpus_stats: CorpusStats) -> MeasurementPlan:
-        tier1_available = self._check_wikidata_coverage(corpus_stats)
+        tier1_available = self._check_ground_truth_coverage(corpus_stats)
         tier2_metrics   = self._compute_structural(profile)
         tier3_metrics   = self._compute_self_assessed(profile)
         
@@ -401,7 +409,8 @@ $$\text{composite} = w_1 \cdot \text{shacl\_score} + w_2 \cdot \text{cq\_coverag
 
 Default weights: $w_1 = 0.35$, $w_2 = 0.30$, $w_3 = 0.20$, $w_4 = 0.15$.
 The weights are themselves tunable (via the `measurement.weights` profile YAML
-section) but require a Tier 1 calibration run to justify any change.
+section) but require a Tier 1 calibration run against a reference dataset to
+justify any change.
 
 ### 5.3 Human Spot-Sampling Protocol
 
@@ -446,13 +455,19 @@ When either drift signal fires:
 Before running the diagnosis cycle, verify that the measurement instrument is
 itself calibrated:
 
-- Wikidata alignment table: `alignment_coverage = aligned_predicates / top_k_corpus_predicates`
-  If < 0.5, alignment table is outdated for this corpus; flag before diagnosing recall gaps
+- Predicate alignment table: `alignment_coverage = aligned_predicates / top_k_corpus_predicates`
+  If < 0.5, the profile's alignment table is outdated for this corpus; flag
+  before diagnosing recall gaps. For corpora using Wikidata as Tier 1, this
+  is the Wikidata property map; for custom reference datasets, it is the
+  predicate vocabulary in the JSONL ground truth file.
 - CQ coverage: if the profile's competency questions don't cover any extracted
   predicates (CQ relevance < 0.2), the CQ-based signals are uninformative; flag
   before using them as guards
 - Calibration freshness: if the last calibration run was > 30d ago, mark Tier 3
   confidence as stale
+- Reference dataset staleness: if the ground truth file has not been updated in
+  > `evaluation.max_reference_age_days` (default 90), emit a warning that
+  promotions are based on potentially outdated labels
 
 ---
 
@@ -544,9 +559,9 @@ other profiles share domain D and have similar failure modes. If so, it queues a
 "transfer suggestion" — not an automatic mutation, but a recommendation:
 
 ```
-Profile B (domain: biographies) has been successfully improved by 
-"few_shot_expansion targeting P569" in Profile A. Profile B currently 
-has P569 recall = 0.12. Consider running: riverbank tuning suggest --profile B
+Profile B (domain: technical-docs) has been successfully improved by
+"few_shot_expansion targeting hasDependency" in Profile A. Profile B currently
+has hasDependency recall = 0.12. Consider running: riverbank tuning suggest --profile B
 ```
 
 Transfer suggestions are surfaced in `riverbank tuning insights` and require
@@ -577,7 +592,7 @@ _tuning_metadata:
   parent_profile: "docs-adaptive-v1@v2"
   mutation_type: "prompt_patch"
   mutation_applied_at: "2026-05-08T14:22:00Z"
-  rationale: "Added targeted birthDate extraction instruction (P569 recall was 0.12)"
+  rationale: "Added targeted hasDependency extraction instruction (recall was 0.12)"
   experiment_id: 42
 ```
 
@@ -643,12 +658,16 @@ emits a notification event.
 
 ## 10. Integration with Existing Systems
 
-### 8.1 Wikidata Evaluation (v0.15.x)
+### 8.1 Evaluation Framework (v0.15.x)
 
-The auto-tuner uses `Scorer.score_article()` directly as its objective
-function. No modification to the evaluation framework is needed — it is already
-designed to produce per-property breakdowns that feed directly into the
-diagnostics engine.
+The auto-tuner uses `Scorer.score_document()` directly as its objective
+function. The `Scorer` is corpus-agnostic: it compares extracted triples against
+whatever reference dataset is configured in the profile
+(`evaluation.ground_truth`). This may be Wikidata statements for a public
+knowledge graph corpus, a curated JSONL file for a domain corpus, or
+noisy-OR-promoted triples accumulated during bootstrapping. No modification to
+the evaluation framework is needed — it is already designed to produce
+per-property breakdowns that feed directly into the diagnostics engine.
 
 ### 8.2 PromptTuner (v0.15.1)
 
@@ -693,7 +712,9 @@ specific recall gaps rather than general high-confidence triples.
 Promoted tentative triples provide **additional ground truth** for the auto-
 tuner. When a triple is promoted via cross-document corroboration, the scorer
 can use it as a "soft positive" in future evaluations (with lower weight than
-Wikidata statements).
+curated reference triples). For corpora with no initial Tier 1 reference set,
+accumulating noisy-OR-promoted triples over time naturally bootstraps a
+weaker-but-useful Tier 1 signal.
 
 ### 8.6 Prometheus Metrics (v0.7.0)
 
@@ -778,57 +799,63 @@ riverbank tuning pareto --profile docs-adaptive-v1
 
 ## 12. Worked Example
 
+This example uses a **technical documentation corpus** — internal product docs
+for a software project — with a curated JSONL reference dataset as Tier 1
+ground truth. The profile tracks predicates like `hasDependency`,
+`releasedIn`, `maintainedBy`, and `deprecatedIn`.
+
 ### Initial state
 
-Profile `wikidata-eval-v1` achieves:
+Profile `tech-docs-v1` achieves:
 - F1 = 0.42, Precision = 0.68, Recall = 0.31
 - Cost per triple = $0.0023
-- P569 (birthDate) recall = 0.12
-- P106 (occupation) recall = 0.08
+- `hasDependency` recall = 0.12
+- `releasedIn` recall = 0.08
 
 ### Cycle 1: Diagnosis
 
 The `DiagnosticsEngine` identifies:
-- Priority 3: P569 recall is 0.12 (below 0.25 → "prompt lacks examples")
-- Priority 3: P106 recall is 0.08 (below 0.25 → "prompt lacks examples")
-- Priority 5: Confidence miscalibrated (ρ = 0.21, bucket 0.75–1.0 has only 45% accuracy)
+- Priority 3: `hasDependency` recall is 0.12 (below 0.25 → "prompt lacks examples")
+- Priority 3: `releasedIn` recall is 0.08 (below 0.25 → "prompt lacks examples")
+- Priority 6: Confidence miscalibrated (ρ = 0.21, bucket 0.75–1.0 has only 45% accuracy)
 
 ### Cycle 1: Hypothesis
 
-The `HypothesisGenerator` proposes: **few_shot_expansion** targeting P569 and P106.
+The `HypothesisGenerator` proposes: **few_shot_expansion** targeting
+`hasDependency` and `releasedIn`.
 
 Mutation YAML:
 ```yaml
 few_shot:
   additional_examples:
-    - text: "Marie Curie was born on 7 November 1867 in Warsaw"
-      triple: "(ex:Marie_Curie, pgc:birthDate, '1867-11-07')"
-      property: P569
-    - text: "She worked as a physicist and chemist"
-      triple: "(ex:Marie_Curie, pgc:occupation, ex:Physicist)"
-      property: P106
+    - text: "The auth module requires the crypto library ≥ 2.4"
+      triple: "(ex:auth_module, pgc:hasDependency, ex:crypto_library)"
+      property: hasDependency
+    - text: "Version 3.0 shipped in March 2025"
+      triple: "(ex:Version_3_0, pgc:releasedIn, '2025-03')"
+      property: releasedIn
 ```
 
 ### Cycle 1: Validation
 
-10% of new articles are processed with the candidate profile. After 35 articles:
+10% of new documents are processed with the candidate profile. After 35 documents:
 
 | Metric | Baseline | Candidate |
 |--------|----------|-----------|
 | F1 | 0.42 | 0.47 |
-| P569 recall | 0.12 | 0.58 |
-| P106 recall | 0.08 | 0.34 |
+| `hasDependency` recall | 0.12 | 0.58 |
+| `releasedIn` recall | 0.08 | 0.34 |
 | Cost/triple | $0.0023 | $0.0025 |
-| p-value | — | 0.003 |
+| SPRT decision | — | promote |
 
 ### Cycle 1: Promotion
 
 - ΔF1 = +0.05 > promotion threshold (0.02) ✓
 - ΔCost = +8.7% < max cost increase (30%) ✓
-- p-value = 0.003 < 0.05 ✓
+- SPRT LLR ≥ upper bound A ✓
 - Precision = 0.71 > precision floor (0.60) ✓
 
-**Result:** Candidate promoted → becomes `wikidata-eval-v1@v2`.
+**Result:** Candidate promoted → becomes `tech-docs-v1@v2`.
 
 ### Cycle 2: Diagnosis (24h later)
 
@@ -845,12 +872,12 @@ well-calibrated).
 
 ### Cycle 2: Validation
 
-After 42 articles:
+After 42 documents:
 - F1: 0.47 → 0.50 (+0.03)
 - Cost: $0.0025 → $0.0024 (slightly lower — fewer self-critique calls needed)
-- p-value: 0.012
+- SPRT decision: promote
 
-**Result:** Promoted → `wikidata-eval-v1@v3`.
+**Result:** Promoted → `tech-docs-v1@v3`.
 
 ### After 5 cycles
 
@@ -884,7 +911,9 @@ calls. riverbank's tuning problem is broader:
 3. **Cost as a first-class constraint** — DSPy optimizes for a single metric;
    riverbank needs Pareto-optimal exploration on quality×cost
 4. **Evaluation against external ground truth** — DSPy uses held-out training
-   examples; riverbank uses Wikidata as an independent oracle
+   examples; riverbank uses a configurable reference dataset (curated JSONL,
+   Wikidata for public knowledge graphs, or human spot samples) as an
+   independent oracle
 5. **Production safety** — A/B testing with statistical significance,
    guardrails, and human override are not part of DSPy's design
 
@@ -984,7 +1013,7 @@ restart strategy.
 | Safety guardrails: freeze on regression, generation depth limit | 1d | — |
 | Post-promotion recompilation policy (`recompile_on_promotion` config) | 1d | TuningOrchestrator |
 | `riverbank tuning stale-sources` CLI command | 4h | sources table |
-| End-to-end integration test with Wikidata benchmark subset | 2d | all above |
+| End-to-end integration test with evaluation benchmark | 2d | all above |
 
 **Acceptance:** `riverbank tuning run-once` executes the full loop and either
 promotes, demotes, or logs "no improvement found". After 3 small-delta promotions,
@@ -1008,25 +1037,29 @@ plateau detection fires and strategy shifts.
 **Acceptance:** Operators can visualize the tuning history, understand why each
 promotion happened, and intervene at any point.
 
-### Phase F: Measurement Architecture — Non-Wikidata Corpora (1.5 weeks)
+### Phase F: Measurement Architecture — Tier Selection and Ground Truth (1.5 weeks)
 
-**Goal:** Enable auto-tuning for arbitrary domain corpora without Wikidata
-ground truth.
+**Goal:** Implement the full measurement tier selection pipeline so the tuner
+works with any ground truth source: curated JSONL, Wikidata, noisy-OR bootstrap,
+or human spot-sampling.
 
 | Task | Effort | Dependencies |
 |------|--------|--------------|
 | Implement `MeasurementPlan` and composite score computation (§5.2) | 1d | DiagnosticsEngine |
+| Add `evaluation.ground_truth` field to profile YAML schema (path or `wikidata`) | 4h | CompilerProfile |
 | Human spot-sampling integration with Label Studio (§5.3) | 1.5d | Label Studio connector |
 | Add `spot_sample_every_n_promotions` config; trigger logic | 4h | TuningOrchestrator |
+| Bootstrap mode: queue initial spot-sampling task for cold-start corpora (§6.1) | 4h | TuningOrchestrator |
 | Implement measurement miscalibration detection (alignment coverage check, §5.5) | 4h | eval module |
 | Update `SignificanceTester` to use composite score when Tier 1 unavailable | 4h | SignificanceTester |
 | Add per-tier confidence labels to all promotion audit records | 2h | audit trail |
 | Add `riverbank tuning status` output: current measurement tier + drift status | 2h | CLI |
-| Integration tests: full cycle without Wikidata ground truth | 1.5d | — |
+| Integration tests: full cycle with curated JSONL ground truth | 1.5d | — |
 
 **Acceptance:** `riverbank tuning diagnose --profile X` correctly identifies Tier
 1/2/3 availability and adjusts recommendations accordingly. Human spot-sampling
-is triggered after N promotions on a non-Wikidata corpus.
+is triggered after N promotions on a corpus with no reference dataset. A new
+corpus with a curated JSONL ground truth file achieves Tier 1 confidence.
 
 ### Phase G: Learning from History (1 week)
 
@@ -1053,14 +1086,14 @@ cross-profile transfer suggestions.
 | Auto-tuning degrades quality silently | Medium | High | Precision floor guardrail + freeze on regression + 7-day rollback window + SPRT early stopping |
 | LLM-generated mutations are nonsensical | Medium | Low | Syntax validation + bounded impact (one mutation per cycle) + A/B testing catches bad mutations |
 | Cost explosion from hypothesis generation | Low | Medium | Hypothesis model is cheap (gpt-4o-mini); cap at 1 hypothesis/day |
-| Overfitting to Wikidata benchmark | Medium | Medium | Held-out validation set (20% of benchmark never used during A/B); novel discovery rate tracking; periodic benchmark expansion |
+| Overfitting to the reference benchmark | Medium | Medium | Held-out validation set (20% of reference dataset never used during A/B); novel discovery rate tracking; periodic benchmark expansion |
 | Statistical noise in small corpora / underpowered tests | High | Medium | SPRT reaches decision faster on large effects; minimum 50 articles with explicit power trade-off documented; expire inconclusive experiments after 14 days |
 | Corpus drift misdiagnosed as profile weakness | Medium | High | Corpus drift detection (embedding centroid + JSD) must clear before hypothesis generation; drift → domain adaptation path, not quality tuning |
 | Mutation loop (same fix tried repeatedly) | Medium | Medium | TriedPatchesRegistry suppresses mutations tried ≥3 times in 30d; MutationEffectivenessRegistry favours proven approaches |
 | Tuning plateau wastes experiments | Medium | Low | Plateau detection (3 consecutive promotions with ΔF1 < 0.01) triggers strategy shift and human escalation |
 | Stale compiled graph after promotion | Medium | Medium | Post-promotion stale-graph flag in `_riverbank.sources.metadata`; `recompile_on_promotion` policy (default=off); `riverbank tuning stale-sources` command |
 | Measurement miscalibration (alignment table stale) | Medium | High | Pre-diagnosis alignment coverage check; flag when < 50% predicates aligned before running recall-gap rules |
-| Human spot-sampling never triggered on non-Wikidata corpora | Low | High | Configurable `spot_sample_every_n_promotions` (default 5); alert fires regardless of whether human responds |
+| Human spot-sampling never triggered on corpora with no reference dataset | Low | High | Configurable `spot_sample_every_n_promotions` (default 5); alert fires regardless of whether human responds; cold-start bootstrap queues initial spot-sample immediately |
 | Interaction effects between parameters cause confounded attribution | Low | Medium | Coordinated mutations require manual approval; interaction pairs documented in §6.3.7; single-mutation default always preserved |
 | Mutation conflicts (two experiments touch same parameter) | Low | Low | Max 1 active experiment per parameter type |
 | Profile drift makes lineage tree unreadable | Low | Low | Generation depth limit (10); periodic "squash" operation |
@@ -1072,18 +1105,18 @@ cross-profile transfer suggestions.
 The auto-tuning system is successful when the following criteria are met,
 organized by the measurement tier available:
 
-### Tier 1 (Gold — Wikidata corpora)
+### Tier 1 (Gold — labeled ground truth available)
 
-1. **F1 improves autonomously** — Starting from a baseline profile, 5 tuning
-   cycles produce ≥5 percentage points of absolute F1 improvement without human
-   intervention (validated on held-out articles not used during A/B testing)
+1. **Primary score improves autonomously** — Starting from a baseline profile, 5
+   tuning cycles produce ≥5 percentage points of absolute F1 improvement without
+   human intervention (validated on held-out documents not used during A/B testing)
 2. **No silent regressions** — Zero cases where a promoted variant later
-   regresses on the full benchmark (detected by continuous monitoring within 48h)
+   regresses on the full reference benchmark (detected by continuous monitoring within 48h)
 3. **Statistical validity** — All promotion decisions are made with SPRT
    log-likelihood ratio ≥ A threshold; no promotions with fewer than 10 paired
    observations
 4. **Overfitting guard** — Novel discovery rate stays within 10–30% band after
-   5 tuning cycles (the system is not just fitting Wikidata facts)
+   5 tuning cycles (the system is not just fitting reference-dataset facts)
 
 ### Tier 2+3 (Silver/Bronze — arbitrary corpora)
 
