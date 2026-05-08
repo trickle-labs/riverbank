@@ -1,6 +1,6 @@
 # riverbank — Adaptive Auto-Tuning
 
-> **Date:** 2026-05-08 · **Revised:** 2026-05-08
+> **Date:** 2026-05-08 · **Revised:** 2026-05-08 (v3)
 > **Status:** Strategy document and implementation plan  
 > **Project:** [riverbank](https://github.com/trickle-labs/riverbank)  
 > **Prerequisites:** v0.15.1 (evaluation framework + improvement loops must be stable)  
@@ -128,13 +128,20 @@ each differently.
 
 ## 3. Design Principles
 
-### 3.1 One mutation at a time
+### 3.1 One mutation at a time — with interaction awareness
 
 Inspired by DSPy's modular credit assignment (MIPRO), each tuning cycle
 proposes exactly **one** change to the profile. This ensures:
-- Clear attribution: if F1 improves, we know which change caused it
+- Clear attribution: if the primary score improves, we know which change caused it
 - Safe rollback: one knob to revert
 - Interpretable history: the audit trail reads like a lab notebook
+
+The exception is **coordinated mutations** — parameter pairs known to interact
+strongly (e.g., `trusted_threshold` + `safety_cap`, or `few_shot.max_examples`
++ `knowledge_prefix.top_entities`). When both are flagged by the same diagnosis
+rule, the `HypothesisGenerator` may propose a joint mutation tagged
+`mutation_type='coordinated_sweep'`. These require manual approval regardless
+of individual change size.
 
 ### 3.2 Metrics-first, not vibes-first
 
@@ -147,12 +154,25 @@ Every decision is grounded in a numeric signal:
 
 ### 3.3 Cost-awareness as a first-class constraint
 
-Auto-tuning must not silently increase token spend. The system optimizes:
+Auto-tuning must not silently increase token spend. The system tracks a
+bi-objective: quality (primary score) and cost (cost per accepted triple).
 
-$$\text{objective} = F_1 - \lambda \cdot \frac{\text{cost}}{\text{cost}_{\text{baseline}}}$$
+For **acceptance decisions** (should this candidate be promoted?), Pareto
+dominance is used — a candidate must not regress on either axis beyond
+configured tolerances (`max_cost_increase`, `min_precision`).
 
-where $\lambda$ is a user-configurable cost sensitivity (default 0.1). This means
-a 10% cost increase must be justified by a >1 percentage point F1 improvement.
+For **ranking competing candidates** when more than one experiment is active,
+a weighted scalar objective is used:
+
+$$\text{objective} = \text{score} - \lambda \cdot \frac{\text{cost}}{\text{cost}_{\text{baseline}}}$$
+
+where $\lambda$ (default 0.1) is the cost sensitivity. At $\lambda = 0.1$, a 10%
+cost increase (ratio = 1.1) costs 0.01 objective units — exactly one percentage
+point of primary score. The formula is dimensionally consistent because both
+terms are in the same [0, ~1] range under normal conditions.
+
+Operators with tight budgets set $\lambda = 0.5$; those optimising purely for
+quality set $\lambda = 0.0$.
 
 ### 3.4 Pareto-optimal exploration
 
@@ -174,7 +194,7 @@ Auto-tuning is only as good as the signal it optimizes. Before any mutation is
 proposed, the system must establish *which measurement tier is available* for
 the active corpus, and it must treat low-quality signal appropriately.
 
-**Three failure modes look identical in aggregate F1:**
+**Three failure modes look identical in aggregate primary score:**
 
 | Mode | Root cause | Wrong response | Correct response |
 |------|-----------|---------------|-----------------|
@@ -188,19 +208,53 @@ predicate distribution of recent fragments against the profile's training
 window. Measurement miscalibration is detected by checking the alignment
 table's coverage fraction against the corpus's top-K predicates.
 
-### 3.7 One mutation at a time — with interaction awareness
+### 3.7 Convergence and maintenance mode
 
-Each tuning cycle proposes exactly **one** change. This ensures:
-- Clear attribution: if F1 improves, we know which change caused it
-- Safe rollback: one knob to revert
-- Interpretable history: the audit trail reads like a lab notebook
+A self-improving system that runs full hypothesis cycles forever on a stable
+profile wastes compute and creates noise. When a profile has not improved for
+an extended period, the tuner shifts from **active mode** to **maintenance mode**.
 
-The exception is **coordinated mutations** — parameter pairs known to interact
-strongly (e.g., `trusted_threshold` + `safety_cap`, or `few_shot.max_examples`
-+ `knowledge_prefix.top_entities`). When both parameters are flagged by the
-same diagnosis rule, the `HypothesisGenerator` may propose a joint mutation
-tagged `mutation_type='coordinated_sweep'`. These require manual approval
-regardless of individual change size.
+**Active mode** (default): runs the full observe→diagnose→hypothesize cycle at
+`diagnosis_interval_hours`. Generates and validates new candidates.
+
+**Maintenance mode**: triggered when both are true:
+- No promotion in the last `convergence_window_days` (default 30)
+- The last 3 experiments all expired or were demoted with ΔF1 < 0.005
+
+In maintenance mode:
+- Diagnosis and observation continue (monitoring quality is always valuable)
+- Hypothesis generation is suspended
+- Diagnosis interval is multiplied by `maintenance_interval_multiplier` (default 4×)
+- Any significant metric change (±3% primary score, corpus drift flag, or
+  document volume spike > 2×) automatically reverts to active mode
+- Operators are notified: "Profile X has converged; auto-tuning in maintenance mode"
+
+```yaml
+auto_tuning:
+  convergence:
+    window_days: 30
+    maintenance_interval_multiplier: 4
+    reactivation_score_delta: 0.03   # resume active mode if score shifts by this
+```
+
+### 3.8 New profile onboarding path
+
+A new profile has no history and no baseline — auto-tuning cannot run
+meaningfully from zero. The recommended onboarding sequence:
+
+1. **Bootstrap ingestion** — run `riverbank ingest` on a representative sample
+   of 20–50 documents with `auto_tuning.enabled: false`
+2. **Evaluate** — run `riverbank evaluate --profile X` or supply a reference
+   dataset via `evaluation.ground_truth`
+3. **Snapshot baseline** — run `riverbank tuning init --profile X` to capture
+   current metrics as the generation-0 baseline and enable auto-tuning
+4. **For corpora with no reference dataset** — after step 1, the system
+   automatically queues an initial spot-sampling task. Auto-tuning activates
+   once the first human review returns ≥10 labelled triples.
+
+The single command `riverbank tuning init --profile X` automates steps 2–3 and
+prints a readiness report: which measurement tier is active, how many documents
+were seen, and what the initial baseline metrics are.
 
 ---
 
@@ -282,8 +336,12 @@ auto_tuning:
   # A/B testing parameters
   validation:
     split_ratio: 0.10          # 10% of new sources go to candidate
-    min_sample_size: 30        # minimum articles before significance test
+    min_sample_size: 30        # minimum documents before significance test
     max_experiment_days: 14    # expire experiment after 14 days
+    # For low-volume corpora: replay existing documents through both profiles
+    # instead of waiting for new ones. Only safe for deterministic profiles.
+    replay_on_low_volume: false
+    low_volume_threshold: 5    # docs/week below which replay mode activates
     
   # Promotion / demotion thresholds
   thresholds:
@@ -295,6 +353,8 @@ auto_tuning:
   # Mutation generation settings
   mutations:
     max_active_candidates: 3   # max simultaneous experiments
+    max_batch_examples: 5      # max few-shot examples per batch mutation
+    max_properties_per_mutation: 3  # property triage: group at most N gaps
     allowed_types:             # which mutation types are permitted
       - prompt_patch
       - threshold_sweep
@@ -473,9 +533,158 @@ itself calibrated:
 
 ## 6. The Tuning Loop in Detail
 
-*(See §6.1 through §6.7 in the Measurement Architecture section above — the loop
-detail was expanded into the measurement section to keep measurement and tuning
-steps co-located. This section header is retained for cross-reference.)*
+The loop runs on a schedule (`diagnosis_interval_hours`) and on an event-driven
+trigger (after `trigger_after_n_documents` new documents are ingested). Each
+iteration passes through five steps.
+
+### 6.1 OBSERVE — Metrics Collection
+
+Collect all available signals and store them as a `DiagnosticsSnapshot` in
+`_riverbank.tuning_diagnostics`. The full snapshot JSON is always stored (not
+just aggregates) so that any future post-mortem analysis can reconstruct exactly
+what the system was seeing when it made each decision.
+
+**Signal sources by tier:**
+
+| Signal | Source | Tier |
+|--------|--------|------|
+| Primary score, precision, recall | `Scorer.score_document()` | 1 |
+| Per-property recall/precision | `Scorer` breakdown | 1 |
+| Confidence calibration ρ | `DatasetEvaluator` | 1 / 3 |
+| SHACL score | SHACL validation module | 2 |
+| CQ coverage fraction | `validate-graph` | 2 |
+| Noisy-OR promotion rate | `_riverbank.runs` stats | 2 |
+| Entity IRI fragmentation rate | dedup stats | 2 |
+| Self-critique pass rate | `verify-triples` stats | 3 |
+| Cost per accepted triple | `_riverbank.runs.cost_usd` | 3 |
+| Rejection rate by reason | `_riverbank.runs.outcome` counts | 3 |
+| Triple yield per fragment | `triples_written / fragments_processed` | 3 |
+| Latency | `runs.finished_at - started_at` | 3 |
+| Embedding centroid distance | pg_trickle stream table | drift |
+| Predicate distribution JSD | SQL over runs | drift |
+
+**Cold start:** when a profile has fewer than `min_history_runs` (default 5)
+completed runs, the system operates in bootstrap mode: applies only non-baseline-
+requiring diagnosis rules, marks all recommendations as `confidence='bootstrap'`,
+and (for corpora without a reference dataset) immediately queues a spot-sampling
+task.
+
+### 6.2 DIAGNOSE — Gap Identification
+
+Before applying any diagnosis rules, run three precondition checks:
+
+1. **Drift check** — if corpus drift is detected (§5.4), label cycle as
+   `drift_detected` and redirect to domain adaptation; skip quality rules
+2. **Calibration check** — if predicate alignment coverage < 50% (§5.5), flag
+   before running recall-gap rules
+3. **Tried-patches check** — suppress mutation types attempted ≥ 3 times in 30d
+   without promotion
+
+If all checks pass, apply diagnosis rules (from §5.2 Rule Table) and produce a
+`DiagnosticsReport` with ranked recommendations. The full report is stored so
+experiments can later be cross-referenced against the diagnosis that created them.
+
+### 6.3 HYPOTHESIZE — Mutation Generation
+
+When `DiagnosticsReport.recommendations` is non-empty and fewer than
+`max_active_candidates` experiments are running:
+
+1. **Consult `MutationEffectivenessRegistry`** — rank candidate mutation types
+   by empirical success rate for this failure mode and corpus domain
+2. **Apply multi-property triage** — cluster related recall gaps (§7.6); batch
+   up to `max_properties_per_mutation` into a single mutation
+3. **Check `TriedPatchesRegistry`** — exclude mutation types tried recently
+   without success; inject past successful mutations as positive examples into
+   the OPRO prompt
+4. **Generate proposal** — the selected backend produces a `ProfileMutation`
+   with `estimated_f1_lift` (raw), which `ProposalCalibrator` corrects for
+   systematic bias (§7.5)
+5. **Abort if calibrated lift < noise floor (0.005)** — skip experiment
+   creation and log "no promising hypothesis found"
+
+### 6.4 VALIDATE — A/B Testing
+
+**Cohort assignment** uses consistent hashing (xxhash) so the same document
+always lands in the same cohort within an experiment (idempotent re-ingest):
+
+```python
+h = xxhash.xxh64(f"{experiment_id}:{source_iri}").intdigest()
+cohort = "candidate" if (h % 100) < (split_ratio * 100) else "baseline"
+```
+
+**Replay evaluation for low-volume corpora:** for corpora ingesting fewer than
+`low_volume_threshold` documents per week, waiting for new documents would make
+experiments expire before reaching any SPRT decision. When
+`validation.replay_on_low_volume: true`, the system re-processes already-ingested
+documents through both the baseline and candidate profiles. Replay is only safe
+when the profile and documents are deterministic (no random seeds, no external
+state changes). It is disabled by default and requires explicit opt-in.
+
+**Statistical test — SPRT:** the `SignificanceTester` accumulates a
+log-likelihood ratio comparing H₁ (candidate better by `effect_size`) against
+H₀ (no difference). When the ratio crosses the upper bound A → promote; lower
+bound B → demote; otherwise continue collecting data. This is statistically
+correct for sequential monitoring without inflating Type I error rate.
+
+**Holdout:** documents used to generate the diagnosis that triggered this
+experiment are excluded from the A/B cohort, preventing the validation set from
+being the same as the training signal.
+
+### 6.5 PROMOTE / DEMOTE — Profile Lifecycle
+
+**On promotion:**
+- Candidate becomes active profile; parent is archived
+- `_riverbank.tuning_experiments.status` → `'promoted'`
+- Audit log entry, pg-tide event, Prometheus counter
+- If `recompile_on_promotion: true`, schedule background recompile of sources
+  compiled by the previous profile version (default off)
+- `MutationEffectivenessRegistry.record(outcome='promoted', ...)`
+- `ProposalCalibrator.record(predicted=..., actual=...)` for calibration update
+
+**On demotion/expiry:**
+- Candidate deactivated; `ExperimentPostmortem` auto-generated
+- `MutationEffectivenessRegistry.record(outcome='demoted', ...)`
+- If demotion is a regression on an already-promoted variant → auto-rollback
+
+### 6.6 Plateau Detection and Restart
+
+After 3 consecutive promotions with mean ΔF1 < `plateau_threshold` (default
+0.01), the `PlateauDetector` fires and triggers a response in order:
+
+1. Switch to a different mutation type family
+2. Expand the parameter search space (allow 2-step sweeps)
+3. Reset generation counter (treat current state as new baseline)
+4. Escalate to human review: "possible local optimum"
+
+### 6.7 Loop State Machine
+
+```
+         ┌──────────────────────────────────┐
+         │                                  │
+  NEW ──▶│  BOOTSTRAP  (< min_history_runs) │──▶ spot-sample queued
+         │                                  │
+         └──────────────┬───────────────────┘
+                        │ enough history
+                        ▼
+         ┌──────────────────────────────────┐
+         │                                  │
+         │     ACTIVE  (normal tuning)      │◀── reactivation trigger
+         │                                  │
+         └──────────────┬───────────────────┘
+                        │ 30d no promotion
+                        ▼
+         ┌──────────────────────────────────┐
+         │                                  │
+         │   MAINTENANCE  (reduced cadence) │
+         │                                  │
+         └──────────────┬───────────────────┘
+                        │ score shift / drift
+                        ▼
+                   back to ACTIVE
+```
+
+**FROZEN** state (operator command or regression guardrail) can be entered from
+any state and requires explicit `riverbank tuning unfreeze` to exit.
 
 ---
 
@@ -579,6 +788,67 @@ $w = e^{-\lambda \cdot \Delta t}$ where $\Delta t$ is days since last success
 and $\lambda = \ln(2) / 90$ (half-life of 90 days). Entries with $w < 0.1$
 are still retained but flagged as "stale evidence" in recommendations.
 
+### 7.5 Proposal Quality Calibration
+
+The `HypothesisGenerator` estimates an `estimated_f1_lift` for each proposed
+mutation. Over time, the gap between predicted and actual lift is tracked via
+the `ExperimentPostmortem.calibration_error` field. If the hypothesis model is
+systematically over-optimistic or under-optimistic, its estimates should be
+corrected.
+
+**Calibration tracking:**
+
+```python
+class ProposalCalibrator:
+    """Track and correct bias in hypothesis model F1 lift predictions."""
+
+    def record(self, predicted: float, actual: float) -> None:
+        self._history.append((predicted, actual))
+
+    def bias(self) -> float:
+        """Return mean (predicted - actual) over recent history."""
+        if len(self._history) < 5:
+            return 0.0
+        diffs = [p - a for p, a in self._history[-20:]]
+        return sum(diffs) / len(diffs)
+
+    def calibrate(self, raw_estimate: float) -> float:
+        """Subtract systematic bias from a new prediction."""
+        return raw_estimate - self.bias()
+```
+
+The calibrated estimate is used in two ways:
+1. **Candidate ranking** — when multiple hypotheses are queued, the system
+   picks the one with the highest calibrated lift estimate
+2. **Early abort** — if all queued hypotheses have calibrated lift < 0.005
+   (below the noise floor), skip this cycle rather than run a costly experiment
+
+Calibration history is stored in `_riverbank.proposal_calibration` and reset
+when the LLM model changes.
+
+### 7.6 Multi-Property Triage
+
+Profiles that extract many predicates often have several simultaneous recall
+gaps. Addressing them serially (one per 14-day experiment) is too slow. The
+`HypothesisGenerator` uses a triage strategy to handle them efficiently:
+
+**Triage rules:**
+1. **Cluster by root cause** — if 5 properties all have recall < 0.20 and the
+   same FN pattern ("model names the property but doesn't output the value"),
+   a single prompt patch targeting that pattern may fix all 5 at once. The
+   `DiagnosticsEngine` clusters gaps by shared FN/FP patterns before ranking.
+2. **Batch few-shot injection** — up to `max_batch_examples` (default 5) recall
+   gaps can be addressed by a single few-shot mutation. This is always safe
+   (additive) and counts as a single experiment.
+3. **Prioritise by recall × frequency** — gaps in high-frequency predicates
+   (appear in > 30% of documents) are weighted more heavily than rare predicates.
+4. **Property budget per cycle** — at most `max_properties_per_mutation` (default
+   3) distinct properties targeted by a single mutation. Beyond this, split into
+   separate experiments to preserve attribution.
+
+The result is that a profile with 10 recall gaps can often be improved in 3–4
+experiments rather than 10, by intelligently grouping related gaps.
+
 ---
 
 ## 8. Mutation Lineage and Audit Trail
@@ -614,7 +884,7 @@ node.
 
 ## 9. Safety Mechanisms
 
-### 7.1 Guardrails
+### 9.1 Guardrails
 
 | Guardrail | Default | Behavior |
 |-----------|---------|----------|
@@ -625,7 +895,7 @@ node.
 | Freeze on regression | enabled | If F1 drops >5% in 24h, freeze ALL experiments |
 | Minimum eval coverage | 10 articles | No promotion decision without ≥10 scored articles |
 
-### 7.2 Rollback
+### 9.2 Rollback
 
 ```bash
 # Manual rollback to any previous generation
@@ -638,7 +908,7 @@ riverbank tuning freeze --profile docs-adaptive-v1
 riverbank tuning unfreeze --profile docs-adaptive-v1
 ```
 
-### 7.3 Human-in-the-loop checkpoints
+### 9.3 Human-in-the-loop checkpoints
 
 Certain mutations require human approval before activation:
 
@@ -763,6 +1033,9 @@ This enables visual inspection of what changed and why.
 ## 11. CLI Commands
 
 ```bash
+# Bootstrap a new profile for tuning (snapshot baseline, enable auto-tuning)
+riverbank tuning init --profile docs-adaptive-v1
+
 # Run diagnosis manually
 riverbank tuning diagnose --profile docs-adaptive-v1 --window 48h
 
@@ -793,6 +1066,9 @@ riverbank tuning run-once --profile docs-adaptive-v1
 
 # Show Pareto frontier (quality vs. cost)
 riverbank tuning pareto --profile docs-adaptive-v1
+
+# Show learning history (insights, post-mortems, cross-profile transfers)
+riverbank tuning insights --profile docs-adaptive-v1
 ```
 
 ---
