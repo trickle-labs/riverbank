@@ -529,6 +529,31 @@ itself calibrated:
   > `evaluation.max_reference_age_days` (default 90), emit a warning that
   promotions are based on potentially outdated labels
 
+### 5.6 Single-Document Evaluation
+
+Before committing a corpus to auto-tuning, operators need to validate that a
+profile works on the domain at all — without waiting for 50+ documents to
+accumulate. `riverbank evaluate` provides Tier 2 and Tier 3 signals on a single
+document as a pre-tuning sanity check.
+
+**Signals reported:**
+
+| Signal | Source | Interpretation |
+|--------|--------|----------------|
+| SHACL score | SHACL validation | Fraction of triples conforming to shapes (no Tier 1 needed) |
+| CQ coverage | SPARQL ASK queries | Which competency questions are answered? |
+| Entity fragmentation rate | dedup stats | Duplicate IRIs per entity (1.0 = no duplication) |
+| Tentative ratio | routing stats | Fraction of triples in tentative graph (high = low confidence) |
+| Confidence distribution | extraction | Mean and std dev of confidence scores |
+| Calibration ρ | self-consistency | Pearson r between confidence buckets and accuracy |
+| Rejection breakdown | run stats | Below threshold, evidence not found, ontology mismatch, safety cap |
+| Entity IRI redundancy | linker | Avg ratio of unique-iri to intended-entities |
+| Cost and latency | pipeline | Tokens, USD cost, wall-clock extraction time |
+
+Optional (if `--reference-triples` provided): Precision, Recall, F1, novel discoveries, false positives.
+
+**Use cases:** domain validation, profile comparison, sanity check before tuning, debugging rejection patterns, operator onboarding.
+
 ---
 
 ## 6. The Tuning Loop in Detail
@@ -1069,6 +1094,15 @@ riverbank tuning pareto --profile docs-adaptive-v1
 
 # Show learning history (insights, post-mortems, cross-profile transfers)
 riverbank tuning insights --profile docs-adaptive-v1
+
+# Evaluate a single document without auto-tuning (Tier 2 + 3 signals)
+riverbank evaluate <path> --profile docs-adaptive-v1
+
+# With optional ground truth for Tier 1 metrics
+riverbank evaluate <path> --profile docs-adaptive-v1 --reference <ground-truth.jsonl>
+
+# Compare two profiles on the same document
+riverbank evaluate <path> --profile docs-adaptive-v1 --compare docs-adaptive-v2
 ```
 
 ---

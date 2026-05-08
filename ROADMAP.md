@@ -461,6 +461,12 @@ mode and onboarding path; publish the design as documentation.
 - [ ] `auto_tuning:` section added to example profiles (`wikidata-eval-v1`,
   `docs-policy-v1-preprocessed`) with sensible defaults, convergence config,
   and inline YAML comments explaining each option
+- [ ] `riverbank evaluate <document> --profile <name>` CLI: pre-tuning diagnostic
+  for a single document — reports Tier 2 (SHACL score, CQ coverage, entity
+  fragmentation) and Tier 3 (confidence calibration ρ, rejection breakdown) signals
+  without needing auto-tuning loop; optional `--reference <jsonl>` for Tier 1
+  metrics (precision, recall, F1); `--compare <profile>` for side-by-side
+  comparison on the same document
 - [ ] How-to guide: [docs/how-to/enable-auto-tuning.md](docs/how-to/enable-auto-tuning.md)
 - [ ] Concepts page: [docs/concepts/adaptive-compilation.md](docs/concepts/adaptive-compilation.md)
 - [ ] [plans/auto-tuning.md](plans/auto-tuning.md) cross-referenced from ROADMAP
