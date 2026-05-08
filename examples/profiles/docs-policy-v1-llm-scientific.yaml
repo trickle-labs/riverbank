@@ -1,0 +1,85 @@
+---
+# docs-policy-v1-llm-scientific — Scientific extraction (research papers)
+#
+# This profile is optimized for scientific and research documents
+# (academic papers, technical reports, research notes). Uses science-specific predicates.
+#
+# Benefits:
+#   - Captures research-specific relationships (cites, uses_method, measures, etc.)
+#   - High precision for scientific content
+#   - ~2-3 minutes for medium documents (~10k chars)
+#   - Consistent scientific vocabulary
+#
+# Drawbacks:
+#   - Only works well for scientific/technical content
+#   - Biographical or narrative content will be missed or misinterpreted
+#
+# Usage:
+#   riverbank ingest /path/to/research_paper.md \
+#     --profile examples/profiles/docs-policy-v1-llm-scientific.yaml
+#
+name: docs-policy-v1-llm-scientific
+version: 1
+
+extractor: instructor
+
+model_provider: ollama
+model_name: llama3.2
+embed_model: nomic-embed-text
+max_fragment_tokens: 2000
+
+named_graph: "http://riverbank.example/graph/trusted"
+
+prompt_text: |
+  You are a knowledge graph compiler specialized in scientific and technical documents.
+  Extract factual claims from the following document as RDF triples.
+
+  SCIENTIFIC PREDICATES (use only these):
+  - authored_by, published_by, published_in, published_on
+  - cites, cited_by, references, is_referenced_by
+  - uses_method, proposes_method, evaluates_method, improves_on
+  - measures, evaluates, compares, studies
+  - proposes, demonstrates, validates, contradicts, refutes
+  - depends_on, enables, requires, assumes
+  - results_in, leads_to, causes, affects
+  - dataset, baseline, model, framework, algorithm
+  - achieves_result, improves_score, outperforms, underperforms
+  - affiliated_with, supported_by, funded_by
+  - uses_dataset, uses_benchmark, uses_model, uses_tool
+  - problem_formulation, solution_approach, evaluation_metric
+  - related_to, associated_with, similar_to
+
+  For each claim provide:
+  - subject: prefixed IRI (e.g. ex:AttentionIsAllYouNeed)
+  - predicate: ONLY use one of the scientific predicates above
+  - object_value: prefixed IRI or literal
+  - confidence: float 0.0–1.0
+  - evidence: exact character offsets and a verbatim excerpt
+
+  FILTERING:
+  - Do NOT extract boilerplate (page numbers, headers, footers, metadata)
+  - Ignore "Acknowledgments", "References", "Supplementary Material" sections (extract from main body)
+  - Only extract factual claims about research, methods, results, datasets
+  - Only extract claims directly supported by the text
+  - Do NOT fabricate evidence or invent citations
+
+editorial_policy:
+  min_fragment_length: 50
+  max_fragment_length: 500000
+  min_heading_depth: 0
+  confidence_threshold: 0.7
+  allowed_languages:
+    - en
+
+fragmenter: noop
+
+# Preprocessing: NLP backend (sumy + spaCy)
+preprocessing:
+  enabled: true
+  backend: "nlp"
+  max_tokens_for_preprocessing: 4000
+
+# Verification: NLI backend (cross-encoder)
+verification:
+  enabled: true
+  backend: "nli"

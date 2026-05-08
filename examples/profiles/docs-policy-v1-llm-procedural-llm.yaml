@@ -1,0 +1,87 @@
+---
+# docs-policy-v1-llm-procedural-llm — Procedural extraction with LLM (runbooks, guides)
+#
+# This profile is optimized for procedural, operational, and instructional documents
+# (runbooks, how-to guides, SOPs, incident response guides).
+# Similar to procedural-v1 but uses LLM extraction instead of PKO ontology.
+#
+# Benefits:
+#   - Captures procedural steps, dependencies, prerequisites
+#   - Works for any procedural domain (not locked to PKO)
+#   - ~2-3 minutes for medium documents (~10k chars)
+#   - Extracts decision points, prerequisites, error handling
+#
+# Drawbacks:
+#   - Only optimized for procedural/operational content
+#   - Will miss or misinterpret narrative or biographical content
+#
+# Usage:
+#   riverbank ingest /path/to/runbook.md \
+#     --profile examples/profiles/docs-policy-v1-llm-procedural-llm.yaml
+#
+name: docs-policy-v1-llm-procedural-llm
+version: 1
+
+extractor: instructor
+
+model_provider: ollama
+model_name: llama3.2
+embed_model: nomic-embed-text
+max_fragment_tokens: 2000
+
+named_graph: "http://riverbank.example/graph/trusted"
+
+prompt_text: |
+  You are a knowledge graph compiler specialized in procedural and operational documents.
+  Extract factual claims from the following document as RDF triples.
+
+  PROCEDURAL PREDICATES (use only these):
+  - next_step, previous_step, alternative_step, parallel_step
+  - prerequisite, requires, required_by, depends_on
+  - has_decision_point, condition, then_step, else_step
+  - has_error_handling, error_condition, recovery_action
+  - uses_tool, requires_tool, requires_resource, requires_permission
+  - has_input, has_output, produces, consumes
+  - duration, estimated_time, timeout, retry_count
+  - success_criterion, validation_step, verification_step
+  - role_required, expertise_level, approval_required
+  - escalation_path, escalates_to, notify, alerts
+  - applies_to, applies_in_context, applies_when
+  - related_to, similar_to, alternative_approach
+
+  For each claim provide:
+  - subject: prefixed IRI (e.g. ex:Step_1, ex:Incident_Response_Restart_Service)
+  - predicate: ONLY use one of the procedural predicates above
+  - object_value: prefixed IRI or literal
+  - confidence: float 0.0–1.0
+  - evidence: exact character offsets and a verbatim excerpt
+
+  FILTERING:
+  - Do NOT extract document metadata, headers, footers, or boilerplate
+  - Ignore "Overview", "Background", "Appendix", "Glossary" sections (focus on procedure steps)
+  - Only extract procedural claims: steps, sequencing, conditions, requirements, decisions
+  - Extract decision trees and branching logic (if-then-else)
+  - Extract error handling and recovery procedures
+  - Only extract claims directly supported by the text
+  - Do NOT fabricate steps or procedures
+
+editorial_policy:
+  min_fragment_length: 50
+  max_fragment_length: 500000
+  min_heading_depth: 0
+  confidence_threshold: 0.7
+  allowed_languages:
+    - en
+
+fragmenter: noop
+
+# Preprocessing: NLP backend (sumy + spaCy)
+preprocessing:
+  enabled: true
+  backend: "nlp"
+  max_tokens_for_preprocessing: 4000
+
+# Verification: NLI backend (cross-encoder)
+verification:
+  enabled: true
+  backend: "nli"

@@ -1,0 +1,81 @@
+---
+# docs-policy-v1-llm-biography — Biographical/encyclopedic extraction (high quality)
+#
+# This profile is optimized for biographical, encyclopedic, and historical documents
+# (Wikipedia, biographies, historical records). Uses constrained predicates for high quality.
+#
+# Benefits:
+#   - Consistent, standardized predicates
+#   - High precision (fewer hallucinated triples)
+#   - ~2-3 minutes for medium documents (~10k chars)
+#   - All triples use domain-appropriate vocabulary
+#
+# Drawbacks:
+#   - Only works well for biographical/encyclopedic content
+#   - Claims outside biographical scope will be missed or misinterpreted
+#
+# Usage:
+#   riverbank ingest ~/.riverbank/article_cache/marie_curie.md \
+#     --profile examples/profiles/docs-policy-v1-llm-biography.yaml
+#
+name: docs-policy-v1-llm-biography
+version: 1
+
+extractor: instructor
+
+model_provider: ollama
+model_name: llama3.2
+embed_model: nomic-embed-text
+max_fragment_tokens: 2000
+
+named_graph: "http://riverbank.example/graph/trusted"
+
+prompt_text: |
+  You are a knowledge graph compiler specialized in biographical and encyclopedic data.
+  Extract factual claims from the following document as RDF triples.
+
+  BIOGRAPHICAL PREDICATES (use only these):
+  - born_in, born_on, died_in, died_on, age_at_death
+  - nationality, citizen_of, lived_in, worked_in, studied_at
+  - educated_at, degree_in, field_of_study, discipline
+  - worked_with, collaborated_with, married_to, family_member_of, parent_of, child_of
+  - discovered, researched, developed, invented, founded, created
+  - wrote, published, authored, edited
+  - received_award, won_prize, honored_for, member_of, professor_at, director_of
+  - contributed_to, influenced, inspired_by, known_for
+  - associated_with, related_to
+
+  For each claim provide:
+  - subject: prefixed IRI (e.g. ex:Marie_Curie)
+  - predicate: ONLY use one of the biographical predicates above
+  - object_value: prefixed IRI or literal
+  - confidence: float 0.0–1.0
+  - evidence: exact character offsets and a verbatim excerpt
+
+  FILTERING:
+  - Do NOT extract Wikipedia metadata, infoboxes, categories, or templates
+  - Ignore "See also", "References", "External links", "Notes" sections
+  - Only extract facts about people, institutions, discoveries
+  - Only extract claims directly supported by the text
+  - Do NOT fabricate evidence
+
+editorial_policy:
+  min_fragment_length: 50
+  max_fragment_length: 500000
+  min_heading_depth: 0
+  confidence_threshold: 0.7
+  allowed_languages:
+    - en
+
+fragmenter: noop
+
+# Preprocessing: NLP backend (sumy + spaCy)
+preprocessing:
+  enabled: true
+  backend: "nlp"
+  max_tokens_for_preprocessing: 4000
+
+# Verification: NLI backend (cross-encoder)
+verification:
+  enabled: true
+  backend: "nli"
