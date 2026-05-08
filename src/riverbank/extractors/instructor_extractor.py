@@ -74,12 +74,37 @@ for discovery. Extract broadly within the ontology constraints — do NOT skip
 claims just because they are implied rather than explicit.
 """
 
+_HIGH_PRECISION_GUIDANCE = """\
+EXTRACTION FOCUS — HIGH PRECISION:
+Extract ONLY claims that are explicitly and unambiguously stated in the text.
+Do NOT infer, imply, or interpret. Assign confidence 0.90–1.00 only.
+Skip any claim that requires reading between the lines.
+"""
+
+_FACTS_ONLY_GUIDANCE = """\
+EXTRACTION FOCUS — FACTS ONLY:
+Extract only explicitly stated factual assertions. Exclude:
+- Opinions, estimates, or hedged language ("might", "could", "arguably")
+- Metadata about the document structure itself
+- Contextual or background framing that is not a standalone fact
+Assign confidence strictly based on how directly the text states the claim.
+"""
+
 _CQ_OBJECTIVES_PREFIX = "EXTRACTION OBJECTIVES (derived from competency questions):\n"
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _build_extraction_focus_prompt(base_prompt: str, extraction_focus: str) -> str:
+    """Inject extraction focus guidance based on the profile's extraction_focus setting."""
+    if extraction_focus == "high_precision":
+        return f"{_HIGH_PRECISION_GUIDANCE}\n\n{base_prompt}"
+    if extraction_focus == "facts_only":
+        return f"{_FACTS_ONLY_GUIDANCE}\n\n{base_prompt}"
+    return base_prompt  # "comprehensive" = no additional constraint
 
 
 def _build_permissive_prompt(base_prompt: str, extraction_strategy: dict) -> str:
@@ -340,6 +365,10 @@ class InstructorExtractor:
 
         # v0.12.0: permissive mode — inject tiered confidence guidance
         prompt_text = _build_permissive_prompt(prompt_text, extraction_strategy)
+
+        # v0.17.0: extraction focus — precision vs recall trade-off
+        extraction_focus: str = getattr(profile, "extraction_focus", "comprehensive")
+        prompt_text = _build_extraction_focus_prompt(prompt_text, extraction_focus)
 
         # v0.12.0: CQ-guided extraction — prepend EXTRACTION OBJECTIVES
         cq_block = _build_cq_objectives(competency_questions)

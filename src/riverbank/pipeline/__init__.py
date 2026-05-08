@@ -93,6 +93,9 @@ class CompilerProfile:
     direct_extraction: dict = field(default_factory=dict)
     # v0.16.0: Entity resolution — post-extraction owl:sameAs alias merging
     entity_resolution: dict = field(default_factory=dict)
+    # v0.17.0: Extraction focus — precision vs recall trade-off at extraction layer
+    # Options: "comprehensive" (default), "high_precision", "facts_only"
+    extraction_focus: str = "comprehensive"
     # v0.14.0: SPARQL CONSTRUCT inference rules (list of SPARQL CONSTRUCT query strings)
     construct_rules: list = field(default_factory=list)
     # v0.14.0: SHACL shape validation

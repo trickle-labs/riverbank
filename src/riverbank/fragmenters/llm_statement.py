@@ -59,44 +59,7 @@ Return a JSON object with a single key "statements" containing an array of \
 statement strings. Do not include empty or duplicate statements.\
 """
 
-_ESSENTIAL_SYSTEM_PROMPT = """\
-Extract ONLY the core essential facts from this document. Include only:
-- What the entity IS or DOES (type, role, core purpose)
-- Its primary attributes, properties, or defining characteristics
-- Key relationships to other entities that are central to understanding it
-- WHERE/WHEN only if essential to understanding the entity
 
-Exclude:
-- Secondary or contextual details
-- Redundant or supporting information
-- Facts that only make sense with extensive surrounding context
-
-Replace all pronouns (she, he, they, it, who, her, his, etc.) with the \
-full name of the entity they refer to.
-
-Return a JSON object with a single key "statements" containing a minimal list \
-of essential facts. Each should be 1-2 sentences maximum.\
-"""
-
-_MINIMAL_SYSTEM_PROMPT = """\
-Extract ONLY the single most important fact or defining characteristic of \
-the primary subject of this document. One statement only.
-
-Focus on: what makes this entity unique, its primary purpose, or its most \
-significant attribute or contribution.
-
-Replace all pronouns (she, he, they, it, who, her, his, etc.) with the \
-full name of the entity they refer to.
-
-Return a JSON object with a single key "statements" containing exactly one \
-statement string.\
-"""
-
-_DISTILLATION_LEVELS = {
-    "default": _DEFAULT_SYSTEM_PROMPT,
-    "essential": _ESSENTIAL_SYSTEM_PROMPT,
-    "minimal": _MINIMAL_SYSTEM_PROMPT,
-}
 
 
 def _make_fragment(idx: int, source_iri: str, text: str) -> DocumentFragment:
@@ -131,8 +94,6 @@ class LLMStatementFragmenter:
         max_statements: Hard cap on the number of statements returned.
         max_doc_chars: Documents longer than this are truncated before sending.
         system_prompt: Custom system prompt override.
-        distillation_level: Preset level ("default", "essential", "minimal").
-            Ignored if system_prompt is provided.
     """
 
     name: ClassVar[str] = "llm_statement"
@@ -143,19 +104,11 @@ class LLMStatementFragmenter:
         max_statements: int = _DEFAULT_MAX_STATEMENTS,
         max_doc_chars: int = _DEFAULT_MAX_DOC_CHARS,
         system_prompt: str | None = None,
-        distillation_level: str = "default",
     ) -> None:
         self._settings = settings
         self._max_statements = max_statements
         self._max_doc_chars = max_doc_chars
-        
-        # Use custom prompt if provided, otherwise use distillation level
-        if system_prompt:
-            self._system_prompt = system_prompt
-        else:
-            self._system_prompt = _DISTILLATION_LEVELS.get(
-                distillation_level, _DEFAULT_SYSTEM_PROMPT
-            )
+        self._system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
 
     # ------------------------------------------------------------------
     # Public API
@@ -170,7 +123,6 @@ class LLMStatementFragmenter:
             max_statements=int(cfg.get("max_statements", _DEFAULT_MAX_STATEMENTS)),
             max_doc_chars=int(cfg.get("max_doc_chars", _DEFAULT_MAX_DOC_CHARS)),
             system_prompt=cfg.get("prompt"),
-            distillation_level=cfg.get("distillation_level", "default"),
         )
 
     def fragment(self, doc: object, **_kwargs: Any) -> Iterator[DocumentFragment]:

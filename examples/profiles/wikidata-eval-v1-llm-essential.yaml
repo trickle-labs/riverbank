@@ -1,19 +1,20 @@
-# Wikidata evaluation profile using LLM statement fragmenter with ESSENTIAL distillation
+# Wikidata evaluation profile — high precision extraction
 #
-# This profile uses the LLMStatementFragmenter with "essential" distillation level,
-# which extracts only the bare essential facts: core identity, major achievements,
-# and key contributions. This reduces noise and focuses on primary claims.
+# Uses the LLMStatementFragmenter (default: all atomic statements) with
+# extraction_focus: "high_precision" at the extractor layer.
+# Only claims that are explicitly and unambiguously stated in the text are
+# extracted. Confidence floor is 0.90. No inference or implication.
 #
 # Use this profile when running:
 #   riverbank evaluate-wikidata --article "Marie Curie" --profile wikidata-eval-v1-llm-essential
 #
-# Distillation levels available:
-#   - "default": All atomic statements (most comprehensive)
-#   - "essential": Core facts only (bare essentials)
-#   - "minimal": Achievements/discoveries only (most distilled)
+# extraction_focus options (set at extraction layer, not fragmenter):
+#   - "comprehensive": All factual claims including inferences (default)
+#   - "high_precision": Explicitly stated claims only (confidence ≥ 0.90)
+#   - "facts_only": Stated facts only, no opinions or hedged claims
 
 name: "wikidata-eval-v1-llm-essential"
-description: "Evaluation profile using LLM statement fragmenter (essential distillation)"
+description: "Evaluation profile using LLM statement fragmenter with high-precision extraction"
 
 run_mode_sequence: ["full"]
 
@@ -25,12 +26,11 @@ model_name: "llama3.2"
 # Parser: plain Markdown from Wikipedia download pipeline
 parser: "markdown"
 
-# Fragment using LLM statement splitting with essential distillation
+# Fragment using LLM statement splitting — default level (all atomic statements)
 fragmenter: "llm_statement"
 llm_statement_fragmentation:
   max_doc_chars: 20000
   max_statements: 200
-  distillation_level: "essential"  # ← Core facts only
 
 # Editorial policy gate — relaxed for evaluation (Wikipedia text is high quality)
 ingest_gate:
@@ -38,13 +38,16 @@ ingest_gate:
   max_fragment_length: 8000
   check_language: true
 
-# LLM extraction — permissive mode for maximum recall
+# LLM extraction — high precision: explicit claims only, no inference
 extraction_strategy:
   mode: "permissive"
   confidence_routing:
     tentative_threshold: 0.40
     trusted_threshold: 0.70
   safety_cap: 100
+
+# Extraction focus: high precision — only explicitly stated claims
+extraction_focus: "high_precision"
 
 # Preprocessing: disabled by default
 preprocessing:

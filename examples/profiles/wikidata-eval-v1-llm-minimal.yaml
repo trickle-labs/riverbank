@@ -1,20 +1,20 @@
-# Wikidata evaluation profile using LLM statement fragmenter with MINIMAL distillation
+# Wikidata evaluation profile — facts only extraction
 #
-# This profile uses the LLMStatementFragmenter with "minimal" distillation level,
-# which extracts ONLY achievements, discoveries, and major contributions.
-# All biographical details, dates, family information are filtered out.
-# This maximizes focus on what the entity actually accomplished.
+# Uses the LLMStatementFragmenter (default: all atomic statements) with
+# extraction_focus: "facts_only" at the extractor layer.
+# Only explicitly stated factual assertions are extracted. Opinions,
+# estimates, hedged language, and document metadata are excluded.
 #
 # Use this profile when running:
 #   riverbank evaluate-wikidata --article "Marie Curie" --profile wikidata-eval-v1-llm-minimal
 #
-# Distillation levels available:
-#   - "default": All atomic statements (most comprehensive)
-#   - "essential": Core facts only (bare essentials)
-#   - "minimal": Achievements/discoveries only (most distilled)
+# extraction_focus options (set at extraction layer, not fragmenter):
+#   - "comprehensive": All factual claims including inferences (default)
+#   - "high_precision": Explicitly stated claims only (confidence ≥ 0.90)
+#   - "facts_only": Stated facts only, no opinions or hedged claims
 
 name: "wikidata-eval-v1-llm-minimal"
-description: "Evaluation profile using LLM statement fragmenter (minimal distillation)"
+description: "Evaluation profile using LLM statement fragmenter with facts-only extraction"
 
 run_mode_sequence: ["full"]
 
@@ -26,12 +26,11 @@ model_name: "llama3.2"
 # Parser: plain Markdown from Wikipedia download pipeline
 parser: "markdown"
 
-# Fragment using LLM statement splitting with minimal distillation
+# Fragment using LLM statement splitting — default level (all atomic statements)
 fragmenter: "llm_statement"
 llm_statement_fragmentation:
   max_doc_chars: 20000
   max_statements: 200
-  distillation_level: "minimal"  # ← Achievements/discoveries only
 
 # Editorial policy gate — relaxed for evaluation (Wikipedia text is high quality)
 ingest_gate:
@@ -39,13 +38,16 @@ ingest_gate:
   max_fragment_length: 8000
   check_language: true
 
-# LLM extraction — permissive mode for maximum recall
+# LLM extraction — facts only: stated assertions, no opinions or hedging
 extraction_strategy:
   mode: "permissive"
   confidence_routing:
     tentative_threshold: 0.40
     trusted_threshold: 0.70
   safety_cap: 100
+
+# Extraction focus: facts only — exclude opinions, estimates, hedged claims
+extraction_focus: "facts_only"
 
 # Preprocessing: disabled by default
 preprocessing:
