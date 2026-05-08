@@ -1,6 +1,6 @@
 # riverbank — Adaptive Auto-Tuning
 
-> **Date:** 2026-05-08  
+> **Date:** 2026-05-08 · **Revised:** 2026-05-08
 > **Status:** Strategy document and implementation plan  
 > **Project:** [riverbank](https://github.com/trickle-labs/riverbank)  
 > **Prerequisites:** v0.15.1 (evaluation framework + improvement loops must be stable)  
@@ -38,6 +38,13 @@ one-shot task** — it is an iterative search process that requires:
 - A feedback signal per iteration (riverbank has this: per-property recall/precision)
 - A mechanism for generating candidate improvements (riverbank has the PromptTuner)
 - A mechanism for validating candidates safely (riverbank needs this: A/B testing)
+
+A second insight, less prominent in the literature, is equally important:
+**a self-improving system must distinguish between three failure modes** that look
+identical in aggregate metrics: (a) the profile is wrong for the data, (b) the data
+has changed, (c) the measurement instrument is miscalibrated. Treating all three the
+same way produces random walks that look like improvement. The plan below handles
+each differently.
 
 ---
 
@@ -161,6 +168,40 @@ tolerance.
 - Operators can inject manual mutations into the candidate queue
 - Every promotion fires a pg-tide event (webhook, Slack, email)
 
+### 3.6 Measurement integrity before tuning
+
+Auto-tuning is only as good as the signal it optimizes. Before any mutation is
+proposed, the system must establish *which measurement tier is available* for
+the active corpus, and it must treat low-quality signal appropriately.
+
+**Three failure modes look identical in aggregate F1:**
+
+| Mode | Root cause | Wrong response | Correct response |
+|------|-----------|---------------|-----------------|
+| Profile mis-tuned | Extraction prompt too strict/loose | Tune thresholds | Correct |
+| Corpus drift | Topic or style of new documents has shifted | Tune prompt for old domain | Detect drift, adapt separately |
+| Measurement miscalibration | Wikidata property alignment stale or coverage map outdated | React to phantom signal | Re-calibrate alignment table first |
+
+The `DiagnosticsEngine` must distinguish these before triggering hypothesis
+generation. Corpus drift is detected by comparing the embedding centroid and
+predicate distribution of recent fragments against the profile's training
+window. Measurement miscalibration is detected by checking the alignment
+table's coverage fraction against the corpus's top-K predicates.
+
+### 3.7 One mutation at a time — with interaction awareness
+
+Each tuning cycle proposes exactly **one** change. This ensures:
+- Clear attribution: if F1 improves, we know which change caused it
+- Safe rollback: one knob to revert
+- Interpretable history: the audit trail reads like a lab notebook
+
+The exception is **coordinated mutations** — parameter pairs known to interact
+strongly (e.g., `trusted_threshold` + `safety_cap`, or `few_shot.max_examples`
++ `knowledge_prefix.top_entities`). When both parameters are flagged by the
+same diagnosis rule, the `HypothesisGenerator` may propose a joint mutation
+tagged `mutation_type='coordinated_sweep'`. These require manual approval
+regardless of individual change size.
+
 ---
 
 ## 4. Architecture
@@ -274,303 +315,258 @@ auto_tuning:
 
 ---
 
-## 5. The Tuning Loop in Detail
+## 5. Measurement Architecture
 
-### 5.1 OBSERVE — Metrics Collection
+The auto-tuner cannot optimize what it cannot measure. The measurement
+architecture defines *what* is measurable, *when*, and *how much to trust it*.
+This section is the most important part of the plan — every subsequent decision
+depends on it.
 
-**Trigger:** After every `riverbank ingest` or `riverbank evaluate-wikidata` run.
+### 5.1 The Three-Tier Signal Hierarchy
 
-**Collected signals:**
+For any given corpus, exactly one of three measurement tiers is available:
 
-| Signal | Source | Granularity |
-|--------|--------|-------------|
-| F1, precision, recall | `Scorer.score_article()` | Per article, per property |
-| Confidence calibration | `DatasetEvaluator.aggregate()` | Per confidence bucket |
-| Token cost | `_riverbank.runs.cost_usd` | Per fragment |
-| SHACL score | `shacl_score()` | Per named graph |
-| Rejection rate | `_riverbank.runs.outcome` counts | Per profile |
-| Novel discovery rate | `DatasetEvaluator` | Per article |
-| Latency | `_riverbank.runs.finished_at - started_at` | Per fragment |
-| Triple yield | `triples_written / fragments_processed` | Per run |
+```
+Tier 1 (Gold)   — Wikidata F1
+  Available:    Wikipedia-sourced corpora with Wikidata-aligned entities
+  Signal:       Absolute precision/recall/F1 per property against curated facts
+  Drives:       All promotion/demotion decisions when available
+  Limitation:   Only covers ~20% of real-world use cases
 
-**Storage:** Metrics are stored in the existing `_riverbank.runs` table and
-aggregated into `_riverbank.tuning_diagnostics` snapshots by the diagnosis
-engine.
+Tier 2 (Silver) — Structural quality
+  Available:    Always (requires only the compiled graph)
+  Signals:      SHACL score, CQ coverage fraction, predicate distribution,
+                entity IRI fragmentation rate, noisy-OR promotion rate
+  Drives:       Diagnosis and candidate selection when Tier 1 absent
+  Limitation:   Measures consistency and structure, not factual correctness
 
-### 5.2 DIAGNOSE — Gap Identification
+Tier 3 (Bronze) — Self-assessed quality
+  Available:    Always (requires only extraction run data)
+  Signals:      Self-critique NLI pass rate, confidence calibration ρ,
+                triple yield per fragment, rejection rate by reason,
+                cost per accepted triple
+  Drives:       Cost and efficiency optimisation; early-warning drift signal
+  Limitation:   Can be gamed by over-confident or tautological extractions
 
-**Trigger:** Periodic (every `diagnosis_interval_hours`) or on-demand via
-`riverbank diagnose --profile <name>`.
+Tier 4 (Human)  — Spot-sampling
+  Available:    On demand (requires Label Studio + reviewer time)
+  Signal:       Human-validated accuracy on a random sample of 20–50 triples
+  Drives:       Re-anchoring calibration after N promotions without Tier 1 data
+  Limitation:   Expensive; not automatable; sampled, not exhaustive
+```
 
-**Algorithm:**
+### 5.2 Tier Selection and Blending
+
+The `DiagnosticsEngine` selects the appropriate tier automatically:
 
 ```python
-class DiagnosticsEngine:
-    """Aggregate metrics and identify improvement opportunities."""
+class MeasurementStrategy:
+    """Select and blend measurement tiers for a given profile and corpus."""
     
-    def diagnose(self, profile: CompilerProfile, window_hours: int = 24) -> DiagnosticsReport:
-        # 1. Aggregate recent run metrics
-        metrics = self._aggregate_metrics(profile, window_hours)
+    def select(self, profile: CompilerProfile, corpus_stats: CorpusStats) -> MeasurementPlan:
+        tier1_available = self._check_wikidata_coverage(corpus_stats)
+        tier2_metrics   = self._compute_structural(profile)
+        tier3_metrics   = self._compute_self_assessed(profile)
         
-        # 2. Compare against historical baseline (rolling 7-day average)
-        baseline = self._get_baseline(profile, days=7)
-        drift = self._detect_drift(metrics, baseline)
+        if tier1_available:
+            # Gold: use F1 as primary, structural/self-assessed as guards
+            return MeasurementPlan(
+                primary=tier1_available,
+                guards=[tier2_metrics, tier3_metrics],
+                confidence="high",
+            )
         
-        # 3. Run recall-gap analysis on recent evaluation results
-        gaps = self._recall_gap_analysis(profile, threshold=0.50)
+        # Silver/Bronze blend: use composite structural score
+        composite = self._compute_composite_score(tier2_metrics, tier3_metrics)
         
-        # 4. Identify FP/FN pattern clusters
-        patterns = self._fp_fn_patterns(profile, window_hours)
+        # Trigger human spot-sampling if no Tier 1 data after N promotions
+        if profile.promotions_since_human_review >= profile.spot_sample_every_n:
+            return MeasurementPlan(
+                primary=composite,
+                guards=[tier3_metrics],
+                confidence="low",
+                request_human_review=True,
+            )
         
-        # 5. Check confidence calibration
-        calibration = self._calibration_check(profile)
-        
-        # 6. Generate ranked recommendations
-        recommendations = self._rank_recommendations(
-            drift, gaps, patterns, calibration, metrics
-        )
-        
-        return DiagnosticsReport(
-            metrics=metrics,
-            baseline=baseline,
-            drift=drift,
-            gaps=gaps,
-            patterns=patterns,
-            calibration=calibration,
-            recommendations=recommendations,
-        )
-```
-
-**Diagnosis rules (priority-ordered):**
-
-| Priority | Condition | Recommendation |
-|----------|-----------|----------------|
-| 1 (Critical) | F1 dropped >5% vs. 7-day baseline | Roll back last promotion; freeze tuning |
-| 2 (High) | Precision < `min_precision` floor | Tighten confidence thresholds |
-| 3 (High) | Property recall = 0 for common P-ids | Add targeted few-shot examples |
-| 4 (Medium) | Cost/triple increased >20% vs. baseline | Reduce `safety_cap` or `max_tokens` |
-| 5 (Medium) | Confidence miscalibrated (ρ < 0.3) | Adjust routing thresholds |
-| 6 (Low) | SHACL score declining | Enable/tighten SHACL validation |
-| 7 (Low) | Novel discovery rate > 40% | Review alignment table coverage |
-
-### 5.3 HYPOTHESIZE — Mutation Generation
-
-**Trigger:** When `DiagnosticsReport.recommendations` is non-empty and fewer
-than `max_active_candidates` experiments are running.
-
-**Mutation types:**
-
-#### 5.3.1 Prompt Patches (OPRO-style)
-
-Uses the LLM as an optimizer. The hypothesis model receives:
-- Current prompt text
-- Last 5 evaluation results (F1, per-property breakdown)
-- Top FN patterns (what the model missed)
-- Top FP patterns (what the model hallucinated)
-- A meta-instruction to propose one targeted edit
-
-```python
-class PromptMutator:
-    """Generate prompt mutations using OPRO-style optimization."""
-    
-    MUTATION_PROMPT = """
-You are optimizing an extraction prompt for a knowledge compiler.
-
-CURRENT PROMPT:
-{current_prompt}
-
-RECENT PERFORMANCE (last {n} articles):
-- F1: {f1:.3f} | Precision: {precision:.3f} | Recall: {recall:.3f}
-- Cost per triple: ${cost_per_triple:.4f}
-
-TOP MISSED EXTRACTIONS (false negatives):
-{fn_patterns}
-
-TOP HALLUCINATIONS (false positives):
-{fp_patterns}
-
-CONSTRAINT: Propose exactly ONE targeted edit to the prompt that would
-address the highest-priority issue. The edit should be minimal — change
-as few words as possible while maximizing expected F1 improvement.
-
-Return your edit as a JSON object:
-{{
-  "section": "system" | "few_shot" | "output_format",
-  "action": "add" | "modify" | "remove",
-  "original_text": "...",   // null for 'add'
-  "new_text": "...",         // null for 'remove'
-  "rationale": "...",
-  "estimated_f1_lift": 0.0   // percentage points
-}}
-"""
-```
-
-#### 5.3.2 Threshold Sweeps (Grid Search)
-
-Numeric parameters are swept deterministically:
-
-```python
-SWEEP_SPACE = {
-    "confidence_routing.trusted_threshold": [0.60, 0.65, 0.70, 0.75, 0.80],
-    "confidence_routing.tentative_threshold": [0.30, 0.35, 0.40, 0.45, 0.50],
-    "extraction_strategy.safety_cap": [50, 75, 100, 150, 200],
-    "knowledge_prefix.max_graph_context_tokens": [100, 150, 200, 300, 400],
-    "knowledge_prefix.top_entities": [5, 10, 15, 20],
-    "few_shot.max_examples": [2, 3, 5, 7],
-    "preprocessing.max_entities": [20, 30, 50, 75],
-}
-```
-
-The sweep selects the **adjacent** value to the current setting (one step up
-or down) based on the diagnosis:
-- If recall is low → lower `trusted_threshold`
-- If precision is low → raise `trusted_threshold`
-- If cost is high → lower `safety_cap`
-- If entity consistency is poor → increase `knowledge_prefix.top_entities`
-
-#### 5.3.3 Few-Shot Mutations
-
-Extends the existing `FewShotExpander` with evaluation-driven selection:
-
-```python
-class EvalDrivenFewShotMutator:
-    """Select few-shot examples targeting specific recall gaps."""
-    
-    def mutate(self, profile, gaps: list[PropertyRecallGap]) -> ProfileMutation:
-        # For each gap with recall < 0.25, inject a targeted example
-        # from RecallGapAnalyzer._BUILTIN_EXAMPLES
-        new_examples = []
-        for gap in sorted(gaps, key=lambda g: g.recall)[:3]:
-            examples = self.recall_gap_analyzer.get_examples(gap.property_id)
-            if examples:
-                new_examples.append(examples[0])
-        
-        return ProfileMutation(
-            mutation_type="few_shot_expansion",
-            mutation_yaml=self._format_examples_yaml(new_examples),
-            rationale=f"Targeting {len(new_examples)} properties with recall < 0.25",
+        return MeasurementPlan(
+            primary=composite,
+            guards=[tier3_metrics],
+            confidence="medium",
         )
 ```
 
-#### 5.3.4 Knowledge-Prefix Tuning
+**Composite score for Tier 2+3 (when Tier 1 is unavailable):**
 
-Adjusts `max_graph_context_tokens` and `top_entities` based on entity
-consistency metrics:
+$$\text{composite} = w_1 \cdot \text{shacl\_score} + w_2 \cdot \text{cq\_coverage} + w_3 \cdot \text{noisy\_or\_rate} + w_4 \cdot \text{calibration\_}\rho$$
 
-- If entity IRI fragmentation is high (many IRIs for the same real-world
-  entity) → increase `top_entities` and `max_graph_context_tokens`
-- If token budget is tight (truncation observed) → decrease context size
+Default weights: $w_1 = 0.35$, $w_2 = 0.30$, $w_3 = 0.20$, $w_4 = 0.15$.
+The weights are themselves tunable (via the `measurement.weights` profile YAML
+section) but require a Tier 1 calibration run to justify any change.
 
-#### 5.3.5 Preprocessing Strategy Mutations
+### 5.3 Human Spot-Sampling Protocol
 
-- Toggle `preprocessing.backend` between `"nlp"` and `"llm"` when NLP backend
-  produces poor entity catalogs (measured by entity recall in extraction)
-- Adjust `preprocessing.max_entities` based on prompt truncation rate
-- Enable/disable `corpus_preprocessing` based on corpus size
+When `MeasurementPlan.request_human_review = True`, the system:
 
-### 5.4 VALIDATE — A/B Testing
+1. Samples 20 triples uniformly at random from recent extractions (last 7d),
+   stratified by predicate type
+2. Enqueues them in Label Studio with task type `spot_check` (binary accept/reject)
+3. Pauses hypothesis generation (not experiment execution — running experiments
+   continue) until the review is complete
+4. On completion, computes `human_accuracy = accepted / 20` and uses it to
+   re-calibrate the composite score weights for this corpus
 
-**Cohort assignment:**
+**Trigger condition:** default is every 5 promotions without Tier 1 data, configurable
+via `auto_tuning.spot_sample_every_n_promotions` (default 5, minimum 2).
 
-When an experiment is active, the `CandidateRouter` assigns new sources:
+### 5.4 Corpus Drift Detection
 
-```python
-class CandidateRouter:
-    """Deterministic cohort assignment for A/B testing."""
-    
-    def assign(self, source_iri: str, experiment: TuningExperiment) -> str:
-        """Assign a source to 'baseline' or 'candidate' cohort.
-        
-        Uses consistent hashing so the same source always lands in the
-        same cohort within an experiment (idempotent re-ingest).
-        """
-        h = xxhash.xxh64(f"{experiment.id}:{source_iri}").intdigest()
-        if (h % 100) < (experiment.split_ratio * 100):
-            return "candidate"
-        return "baseline"
-```
+Corpus drift must be detected *before* the diagnostics engine attributes a quality
+drop to the profile. Two drift signals are tracked continuously:
 
-**Evaluation:**
+**Embedding centroid drift:** The `pg_trickle` stream table maintains
+`avg(embedding)::vector` per named graph. If the cosine distance between the
+centroid of the last N fragments and the centroid of the profile's training window
+exceeds a threshold, drift is flagged.
 
-Both cohorts are scored using the same `Scorer` against Wikidata ground truth.
-The comparison uses **paired evaluation** — the same article is always scored
-in both cohorts, eliminating variance from article difficulty.
+**Predicate distribution drift:** The distribution of extracted predicate types
+(top-20 by frequency) is compared between the current sliding window and the
+profile's baseline window using Jensen–Shannon divergence. A JSD above 0.15 flags
+drift.
 
-**Statistical significance:**
+When either drift signal fires:
+1. The `DiagnosticsEngine` labels the cycle as `drift_detected` rather than
+   `quality_degraded`
+2. Hypothesis generation shifts to **domain adaptation** mutations rather than
+   quality-improvement mutations: enabling corpus-level clustering
+   (`corpus_preprocessing`), re-generating the entity catalog for the new domain,
+   or (with human approval) spawning a new child profile for the drifted segment
 
-```python
-class SignificanceTester:
-    """Welch's t-test for A/B comparison with early stopping."""
-    
-    def test(self, experiment: TuningExperiment) -> SignificanceResult:
-        baseline_scores = self._get_cohort_scores(experiment, "baseline")
-        candidate_scores = self._get_cohort_scores(experiment, "candidate")
-        
-        if len(candidate_scores) < experiment.min_sample_size:
-            return SignificanceResult(ready=False, reason="insufficient samples")
-        
-        # Welch's t-test (unequal variance)
-        t_stat, p_value = scipy.stats.ttest_ind(
-            candidate_scores, baseline_scores, equal_var=False
-        )
-        
-        # Effect size (Cohen's d)
-        effect_size = (
-            np.mean(candidate_scores) - np.mean(baseline_scores)
-        ) / np.sqrt(
-            (np.var(candidate_scores) + np.var(baseline_scores)) / 2
-        )
-        
-        return SignificanceResult(
-            ready=True,
-            p_value=p_value,
-            effect_size=effect_size,
-            candidate_mean=np.mean(candidate_scores),
-            baseline_mean=np.mean(baseline_scores),
-            should_promote=(
-                p_value < 0.05
-                and effect_size > 0
-                and (np.mean(candidate_scores) - np.mean(baseline_scores))
-                    >= experiment.promotion_f1_delta
-            ),
-            should_demote=(
-                p_value < 0.05
-                and effect_size < 0
-                and (np.mean(baseline_scores) - np.mean(candidate_scores))
-                    >= abs(experiment.demotion_f1_delta)
-            ),
-        )
-```
+### 5.5 Measurement Miscalibration Detection
 
-**Early stopping:** If after `min_sample_size` articles the candidate is
-clearly worse (p < 0.01 and effect negative), demote immediately without
-waiting for `max_experiment_days`.
+Before running the diagnosis cycle, verify that the measurement instrument is
+itself calibrated:
 
-### 5.5 PROMOTE / DEMOTE — Profile Lifecycle
-
-**Promotion:**
-1. Candidate profile becomes the new active profile
-2. Parent profile is archived (retained for `rollback_retention_days`)
-3. `_riverbank.tuning_experiments.status` → `'promoted'`
-4. Audit log entry: `operation='tuning_promotion'`
-5. pg-tide event: `riverbank.tuning.promoted` (downstream alerting)
-6. Prometheus counter: `riverbank_tuning_promotions_total`
-
-**Demotion:**
-1. Candidate profile is deactivated
-2. `_riverbank.tuning_experiments.status` → `'demoted'`
-3. Audit log entry: `operation='tuning_demotion'`
-4. If the demotion was for a *regression* on an already-promoted variant,
-   automatic rollback to the parent profile
-
-**Expiry:**
-1. If `max_experiment_days` elapsed without reaching significance
-2. `_riverbank.tuning_experiments.status` → `'expired'`
-3. Candidate profile deleted (insufficient evidence either way)
+- Wikidata alignment table: `alignment_coverage = aligned_predicates / top_k_corpus_predicates`
+  If < 0.5, alignment table is outdated for this corpus; flag before diagnosing recall gaps
+- CQ coverage: if the profile's competency questions don't cover any extracted
+  predicates (CQ relevance < 0.2), the CQ-based signals are uninformative; flag
+  before using them as guards
+- Calibration freshness: if the last calibration run was > 30d ago, mark Tier 3
+  confidence as stale
 
 ---
 
-## 6. Mutation Lineage and Audit Trail
+## 6. The Tuning Loop in Detail
+
+*(See §6.1 through §6.7 in the Measurement Architecture section above — the loop
+detail was expanded into the measurement section to keep measurement and tuning
+steps co-located. This section header is retained for cross-reference.)*
+
+---
+
+## 7. Learning from History
+
+One of the most important properties of a self-improving system is that it learns
+*across experiments*, not just within them. The naive implementation of a tuning
+loop treats each experiment as independent; an advanced one accumulates a living
+memory of what works, what fails, and why.
+
+### 7.1 Experiment Post-Mortem
+
+After every experiment that ends in `'demoted'` or `'expired'`, the system
+automatically runs an `ExperimentPostmortem`:
+
+```python
+@dataclass
+class ExperimentPostmortem:
+    experiment_id: str
+    mutation_type: str
+    failure_mode: str       # 'regression', 'no_improvement', 'expired'
+    diagnostic_snapshot: DiagnosticsReport   # stored at creation time
+    actual_f1_delta: float
+    predicted_f1_delta: float   # from the hypothesis model
+    calibration_error: float    # |predicted - actual|
+    root_cause: str             # derived by analysis
+    lesson: str                 # e.g. "threshold sweep does not help when corpus drift > 0.15 JSD"
+```
+
+Post-mortems are stored in `_riverbank.experiment_postmortems` and surface via
+`riverbank tuning insights`.
+
+### 7.2 Mutation Effectiveness Registry
+
+The `MutationEffectivenessRegistry` maintains historical evidence about which
+mutation types work for which failure modes:
+
+```python
+class MutationEffectivenessRegistry:
+    """Track empirical effectiveness of mutation types by failure mode.
+    
+    Used by HypothesisGenerator to rank candidate mutations and by
+    PromptMutator to avoid previously failed approaches.
+    """
+    
+    @dataclass
+    class Entry:
+        mutation_type: str
+        failure_mode: str        # matches DiagnosticsEngine rule ID
+        corpus_domain: str       # coarse domain tag
+        success_count: int
+        failure_count: int
+        mean_f1_lift: float
+        last_success: datetime | None
+        decay_weight: float      # time-decayed relevance (exp decay, half-life=90d)
+    
+    def recommend(self, failure_mode: str, corpus_domain: str) -> list[str]:
+        """Return mutation types ranked by expected effectiveness."""
+        entries = self._get_relevant_entries(failure_mode, corpus_domain)
+        return sorted(
+            entries,
+            key=lambda e: e.success_count / max(e.success_count + e.failure_count, 1)
+                          * e.decay_weight,
+            reverse=True,
+        )
+    
+    def record(self, mutation_type: str, failure_mode: str, corpus_domain: str,
+               outcome: str, f1_delta: float) -> None:
+        """Update registry after experiment resolves."""
+        ...
+```
+
+The `HypothesisGenerator` consults this registry when choosing which mutation
+type to try next. Rather than cycling mutation types in round-robin order, it
+preferentially tries approaches that have worked before for this type of failure.
+
+### 7.3 Cross-Profile Transfer
+
+When a mutation is promoted for profile A in domain D, the system checks whether
+other profiles share domain D and have similar failure modes. If so, it queues a
+"transfer suggestion" — not an automatic mutation, but a recommendation:
+
+```
+Profile B (domain: biographies) has been successfully improved by 
+"few_shot_expansion targeting P569" in Profile A. Profile B currently 
+has P569 recall = 0.12. Consider running: riverbank tuning suggest --profile B
+```
+
+Transfer suggestions are surfaced in `riverbank tuning insights` and require
+human approval before any action is taken.
+
+### 7.4 Mutation Half-Life
+
+The effectiveness of a mutation decays over time because:
+- The underlying LLM may have changed (model provider updates)
+- The corpus may have drifted
+- What worked 6 months ago may not work today
+
+All entries in the `MutationEffectivenessRegistry` are weighted by
+$w = e^{-\lambda \cdot \Delta t}$ where $\Delta t$ is days since last success
+and $\lambda = \ln(2) / 90$ (half-life of 90 days). Entries with $w < 0.1$
+are still retained but flagged as "stale evidence" in recommendations.
+
+---
+
+## 8. Mutation Lineage and Audit Trail
 
 Every profile carries a `generation` counter and a `parent_id`:
 
@@ -601,7 +597,7 @@ node.
 
 ---
 
-## 7. Safety Mechanisms
+## 9. Safety Mechanisms
 
 ### 7.1 Guardrails
 
@@ -645,7 +641,7 @@ emits a notification event.
 
 ---
 
-## 8. Integration with Existing Systems
+## 10. Integration with Existing Systems
 
 ### 8.1 Wikidata Evaluation (v0.15.x)
 
@@ -743,7 +739,7 @@ This enables visual inspection of what changed and why.
 
 ---
 
-## 9. CLI Commands
+## 11. CLI Commands
 
 ```bash
 # Run diagnosis manually
@@ -780,7 +776,7 @@ riverbank tuning pareto --profile docs-adaptive-v1
 
 ---
 
-## 10. Worked Example
+## 12. Worked Example
 
 ### Initial state
 
@@ -864,7 +860,7 @@ contributed and by how much.
 
 ---
 
-## 11. Comparison with Related Work
+## 13. Comparison with Related Work
 
 | Approach | Key idea | riverbank adaptation |
 |----------|----------|---------------------|
@@ -898,76 +894,101 @@ existing profile and evaluation infrastructure.
 
 ---
 
-## 12. Implementation Plan
+## 14. Implementation Plan
+
+Phases A–E address the core auto-tuning loop. Phases F–G address the new
+components added by this revised plan (measurement architecture, learning from
+history, corpus drift, plateau detection, SPRT, and post-promotion recompilation).
 
 ### Phase A: Instrumentation & Diagnostics (2 weeks)
 
 **Goal:** Close the observability gap — make all tuning-relevant metrics
-queryable and trendable.
+queryable and trendable. Add corpus drift detection and measurement tier selection.
 
 | Task | Effort | Dependencies |
 |------|--------|--------------|
 | Add `_riverbank.tuning_diagnostics` table + Alembic migration | 2h | — |
-| Implement `DiagnosticsEngine` with 7 diagnosis rules | 3d | Scorer, RecallGapAnalyzer |
+| Implement `MeasurementStrategy` with three-tier selection logic | 1d | Scorer, SHACL module |
+| Implement `DiagnosticsEngine` with 10 diagnosis rules (expanded from 7) | 3d | Scorer, RecallGapAnalyzer, MeasurementStrategy |
+| Add corpus drift detection: embedding centroid + JSD signals | 1d | pg_trickle stream table |
+| Add cold-start bootstrap mode (< min_history_runs → skip baseline rules) | 4h | DiagnosticsEngine |
 | `riverbank tuning diagnose` CLI command | 4h | DiagnosticsEngine |
 | Add `riverbank_tuning_f1_current` and `cost_per_triple` Prometheus gauges | 2h | metrics module |
 | Aggregate per-run metrics into sliding-window snapshots (SQL view) | 4h | existing runs table |
-| Unit tests for diagnosis rules | 1d | — |
+| Store full `DiagnosticsReport` JSON per diagnosis (not just aggregates) | 2h | DiagnosticsEngine |
+| Unit tests for diagnosis rules + drift detection | 1.5d | — |
 
 **Acceptance:** `riverbank tuning diagnose --profile X` produces a JSON report
-with gaps, patterns, and ranked recommendations.
+with gaps, patterns, ranked recommendations, active measurement tier, and drift
+status.
 
-### Phase B: Hypothesis Generation (2 weeks)
+### Phase B: Hypothesis Generation with Mutation Registry (2 weeks)
 
 **Goal:** Automatically generate profile mutations from diagnostic reports.
+Add the `TriedPatchesRegistry` and `MutationEffectivenessRegistry` from §7.
 
 | Task | Effort | Dependencies |
 |------|--------|--------------|
-| Define `ProfileMutation` dataclass and `MutationRegistry` | 4h | — |
-| Implement `PromptMutatorBackend` (OPRO-style LLM optimizer) | 2d | DiagnosticsEngine |
+| Define `ProfileMutation` dataclass | 2h | — |
+| Implement `TriedPatchesRegistry` + `_riverbank.tried_patches` table | 1d | — |
+| Implement `MutationEffectivenessRegistry` + `_riverbank.mutation_effectiveness` table | 1d | — |
+| Implement `PromptMutatorBackend` (OPRO-style, feeds tried-patches and effectiveness to LLM) | 2d | DiagnosticsEngine, TriedPatchesRegistry |
 | Implement `ThresholdSweepBackend` (grid + adjacent-step) | 1d | — |
 | Implement `EvalDrivenFewShotMutator` (recall-gap → examples) | 1d | RecallGapAnalyzer |
 | Implement `KnowledgePrefixTuner` (token budget optimization) | 4h | KnowledgePrefixAdapter |
-| Wire backends into `HypothesisGenerator` with priority selection | 1d | all backends |
+| Implement coordinated mutation detection (§6.3.7) | 1d | DiagnosticsEngine |
+| Wire backends into `HypothesisGenerator` with effectiveness-ranked selection | 1d | all backends, MutationEffectivenessRegistry |
 | `riverbank tuning propose` CLI command | 4h | HypothesisGenerator |
-| Unit tests for each mutation backend | 2d | — |
+| Unit tests for each mutation backend + registry | 2d | — |
 
-**Acceptance:** `riverbank tuning propose --profile X` produces a valid
-candidate profile YAML with documented rationale.
+**Acceptance:** `riverbank tuning propose --profile X` produces a valid candidate
+profile YAML with documented rationale, and does not reproduce recently-tried-and-failed
+mutations.
 
-### Phase C: A/B Testing Harness (2 weeks)
+### Phase C: A/B Testing Harness with SPRT (2 weeks)
 
-**Goal:** Route traffic to candidate profiles and compare outcomes.
+**Goal:** Route traffic to candidate profiles and compare outcomes using
+statistically correct sequential testing.
 
 | Task | Effort | Dependencies |
 |------|--------|--------------|
 | Add `_riverbank.tuning_experiments` and `tuning_cohorts` tables | 4h | — |
 | Implement `CandidateRouter` with consistent hashing | 1d | — |
 | Modify `pipeline.ingest()` to check for active experiments and route | 1d | CandidateRouter |
-| Implement `SignificanceTester` (Welch's t-test + early stopping) | 1d | scipy |
-| Implement promotion/demotion logic with audit trail | 1d | — |
+| Replace Welch's t-test with SPRT (`SignificanceTester` with `_compute_llr`) | 1.5d | scipy |
+| Implement held-out validation set management (20% of benchmark reserved) | 1d | Scorer |
+| Implement event-driven OBSERVE trigger (after N articles, not just periodic) | 4h | pipeline.ingest() |
+| Implement promotion/demotion logic with audit trail + `ExperimentPostmortem` | 1d | MutationEffectivenessRegistry |
 | `riverbank tuning experiments` CLI (list, approve, reject) | 1d | — |
 | pg-tide event emission on promotion/demotion | 4h | pg-tide integration |
 | Integration tests: full cycle (propose → route → score → promote) | 2d | all above |
 
 **Acceptance:** A synthetic experiment with a clearly-better candidate is
-automatically promoted after `min_sample_size` evaluations.
+automatically promoted. The SPRT reaches a decision in fewer articles than
+the fixed-sample test for large effects, and reaches the correct decision on
+small effects given sufficient data.
 
-### Phase D: Orchestration & Scheduling (1 week)
+### Phase D: Orchestration, Plateau Detection, and Scheduling (1.5 weeks)
 
-**Goal:** Wire the full loop to run autonomously.
+**Goal:** Wire the full loop to run autonomously, with plateau detection and
+restart strategy.
 
 | Task | Effort | Dependencies |
 |------|--------|--------------|
 | Implement `TuningOrchestrator` (diagnose → hypothesize → validate → promote) | 1d | Phases A–C |
-| Implement `TuningScheduler` (APScheduler periodic trigger) | 4h | TuningOrchestrator |
-| Add `auto_tuning:` section to profile YAML schema | 4h | CompilerProfile |
+| Implement `PlateauDetector` with 3-window rolling mean check (§6.6) | 1d | TuningOrchestrator |
+| Implement plateau response: strategy shift, search-space expansion, escalation | 1d | PlateauDetector, HypothesisGenerator |
+| Implement `TuningScheduler` (APScheduler periodic + event-driven trigger) | 4h | TuningOrchestrator |
+| Add `auto_tuning:` section to profile YAML schema (including measurement weights) | 4h | CompilerProfile |
 | `riverbank tuning run-once` CLI command | 2h | TuningOrchestrator |
 | Safety guardrails: freeze on regression, generation depth limit | 1d | — |
+| Post-promotion recompilation policy (`recompile_on_promotion` config) | 1d | TuningOrchestrator |
+| `riverbank tuning stale-sources` CLI command | 4h | sources table |
 | End-to-end integration test with Wikidata benchmark subset | 2d | all above |
 
 **Acceptance:** `riverbank tuning run-once` executes the full loop and either
-promotes, demotes, or logs "no improvement found".
+promotes, demotes, or logs "no improvement found". After 3 small-delta promotions,
+plateau detection fires and strategy shifts.
 
 ### Phase E: Observability & Polish (1 week)
 
@@ -979,64 +1000,130 @@ promotes, demotes, or logs "no improvement found".
 | Perses dashboard panel: tuning experiments, F1 trend, cost trend | 1d | Prometheus |
 | `riverbank tuning history` CLI (tree visualization) | 1d | MutationRegistry |
 | `riverbank tuning pareto` CLI (quality×cost frontier) | 4h | — |
+| `riverbank tuning insights` CLI (post-mortems + effectiveness registry) | 1d | §7 components |
 | Langfuse dataset integration (experiment results as datasets) | 1d | Langfuse |
 | `riverbank tuning rollback` and `freeze`/`unfreeze` commands | 1d | — |
 | Documentation: how-to guide, concepts page | 1d | — |
-| Update ROADMAP.md | 1h | — |
 
 **Acceptance:** Operators can visualize the tuning history, understand why each
 promotion happened, and intervene at any point.
 
+### Phase F: Measurement Architecture — Non-Wikidata Corpora (1.5 weeks)
+
+**Goal:** Enable auto-tuning for arbitrary domain corpora without Wikidata
+ground truth.
+
+| Task | Effort | Dependencies |
+|------|--------|--------------|
+| Implement `MeasurementPlan` and composite score computation (§5.2) | 1d | DiagnosticsEngine |
+| Human spot-sampling integration with Label Studio (§5.3) | 1.5d | Label Studio connector |
+| Add `spot_sample_every_n_promotions` config; trigger logic | 4h | TuningOrchestrator |
+| Implement measurement miscalibration detection (alignment coverage check, §5.5) | 4h | eval module |
+| Update `SignificanceTester` to use composite score when Tier 1 unavailable | 4h | SignificanceTester |
+| Add per-tier confidence labels to all promotion audit records | 2h | audit trail |
+| Add `riverbank tuning status` output: current measurement tier + drift status | 2h | CLI |
+| Integration tests: full cycle without Wikidata ground truth | 1.5d | — |
+
+**Acceptance:** `riverbank tuning diagnose --profile X` correctly identifies Tier
+1/2/3 availability and adjusts recommendations accordingly. Human spot-sampling
+is triggered after N promotions on a non-Wikidata corpus.
+
+### Phase G: Learning from History (1 week)
+
+**Goal:** The system accumulates cross-experiment knowledge and transfers it.
+
+| Task | Effort | Dependencies |
+|------|--------|--------------|
+| Implement `ExperimentPostmortem` analysis and storage | 1d | Phase C outcomes |
+| Add cross-profile transfer suggestions (§7.3) | 1d | MutationEffectivenessRegistry |
+| Implement mutation half-life decay in effectiveness registry (§7.4) | 4h | MutationEffectivenessRegistry |
+| Surface insights in `riverbank tuning insights` | 4h | Phase E CLI |
+| A/B test that Phase G actually improves proposal hit-rate | 1d | — |
+
+**Acceptance:** After 20+ experiments, recommended mutation types succeed at a
+higher rate than random selection. `riverbank tuning insights` surfaces actionable
+cross-profile transfer suggestions.
+
 ---
 
-## 13. Risk Analysis
+## 15. Risk Analysis
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| Auto-tuning degrades quality silently | Medium | High | Precision floor guardrail + freeze on regression + 7-day rollback window |
+| Auto-tuning degrades quality silently | Medium | High | Precision floor guardrail + freeze on regression + 7-day rollback window + SPRT early stopping |
 | LLM-generated mutations are nonsensical | Medium | Low | Syntax validation + bounded impact (one mutation per cycle) + A/B testing catches bad mutations |
 | Cost explosion from hypothesis generation | Low | Medium | Hypothesis model is cheap (gpt-4o-mini); cap at 1 hypothesis/day |
-| Overfitting to Wikidata benchmark | Medium | Medium | Track novel discovery rate; periodically add new benchmark articles; separate validation set |
-| Statistical noise in small corpora | High | Medium | Minimum sample size (30); expire inconclusive experiments after 14 days |
+| Overfitting to Wikidata benchmark | Medium | Medium | Held-out validation set (20% of benchmark never used during A/B); novel discovery rate tracking; periodic benchmark expansion |
+| Statistical noise in small corpora / underpowered tests | High | Medium | SPRT reaches decision faster on large effects; minimum 50 articles with explicit power trade-off documented; expire inconclusive experiments after 14 days |
+| Corpus drift misdiagnosed as profile weakness | Medium | High | Corpus drift detection (embedding centroid + JSD) must clear before hypothesis generation; drift → domain adaptation path, not quality tuning |
+| Mutation loop (same fix tried repeatedly) | Medium | Medium | TriedPatchesRegistry suppresses mutations tried ≥3 times in 30d; MutationEffectivenessRegistry favours proven approaches |
+| Tuning plateau wastes experiments | Medium | Low | Plateau detection (3 consecutive promotions with ΔF1 < 0.01) triggers strategy shift and human escalation |
+| Stale compiled graph after promotion | Medium | Medium | Post-promotion stale-graph flag in `_riverbank.sources.metadata`; `recompile_on_promotion` policy (default=off); `riverbank tuning stale-sources` command |
+| Measurement miscalibration (alignment table stale) | Medium | High | Pre-diagnosis alignment coverage check; flag when < 50% predicates aligned before running recall-gap rules |
+| Human spot-sampling never triggered on non-Wikidata corpora | Low | High | Configurable `spot_sample_every_n_promotions` (default 5); alert fires regardless of whether human responds |
+| Interaction effects between parameters cause confounded attribution | Low | Medium | Coordinated mutations require manual approval; interaction pairs documented in §6.3.7; single-mutation default always preserved |
 | Mutation conflicts (two experiments touch same parameter) | Low | Low | Max 1 active experiment per parameter type |
 | Profile drift makes lineage tree unreadable | Low | Low | Generation depth limit (10); periodic "squash" operation |
 
 ---
 
-## 14. Success Criteria
+## 16. Success Criteria
 
-The auto-tuning system is successful when:
+The auto-tuning system is successful when the following criteria are met,
+organized by the measurement tier available:
+
+### Tier 1 (Gold — Wikidata corpora)
 
 1. **F1 improves autonomously** — Starting from a baseline profile, 5 tuning
-   cycles should produce ≥5 percentage points of F1 improvement without human
-   intervention (validated on held-out articles)
-2. **Cost stays bounded** — Total cost (extraction + tuning overhead) grows by
+   cycles produce ≥5 percentage points of absolute F1 improvement without human
+   intervention (validated on held-out articles not used during A/B testing)
+2. **No silent regressions** — Zero cases where a promoted variant later
+   regresses on the full benchmark (detected by continuous monitoring within 48h)
+3. **Statistical validity** — All promotion decisions are made with SPRT
+   log-likelihood ratio ≥ A threshold; no promotions with fewer than 10 paired
+   observations
+4. **Overfitting guard** — Novel discovery rate stays within 10–30% band after
+   5 tuning cycles (the system is not just fitting Wikidata facts)
+
+### Tier 2+3 (Silver/Bronze — arbitrary corpora)
+
+5. **Structural quality improves** — SHACL score + CQ coverage composite
+   increases by ≥10% over baseline after 5 tuning cycles
+6. **Human spot-sampling** — At least one spot-sampling review completed per
+   5 promotions; human accuracy ≥ 0.75 on reviewed triples
+7. **Calibration maintained** — Confidence calibration ρ stays ≥ 0.4 throughout
+   tuning (the system doesn't inflate confidence to game the composite score)
+
+### Operational
+
+8. **Cost stays bounded** — Total cost (extraction + tuning overhead) grows by
    <15% over 30 days of auto-tuning
-3. **No silent regressions** — Zero cases where a promoted variant is later
-   found to have regressed on the full benchmark (detected within 48h)
-4. **Human time saved** — Operator effort for profile maintenance drops by >80%
-   (from ~2h/week manual tuning to <30min/week review of promotion events)
-5. **Audit trail is complete** — Every promoted mutation can be explained: what
-   triggered it, what it changed, what evidence justified promotion
+9. **Human time saved** — Operator effort for profile maintenance drops >80%
+   (from ~2h/week manual tuning to <30min/week reviewing promotion events)
+10. **Audit trail is complete** — Every promoted mutation can be explained: what
+    triggered it, what it changed, what evidence justified promotion, and which
+    measurement tier drove the decision
+11. **Learning accumulates** — After 20 experiments, `MutationEffectivenessRegistry`
+    predicts outcome better than random (success rate of recommended mutations
+    > base rate)
 
 ---
 
-## 15. Future Extensions (Out of Scope for v0.16)
+## 17. Future Extensions (Out of Scope for v0.16)
 
 | Extension | Description | When |
 |-----------|-------------|------|
-| **Thompson Sampling for split ratio** | Adaptive exploration rate based on uncertainty about candidate quality | v1.2 |
-| **Cross-model tuning** | Auto-select between Ollama models based on quality/cost/latency Pareto | v1.2 |
-| **Transfer learning across profiles** | Mutations that worked for one domain (biography) transferred to another (organization) | v1.3 |
+| **Thompson Sampling for split ratio** | Adaptive exploration rate based on uncertainty about candidate quality — replaces fixed 50/50 split | v1.2 |
+| **Active evaluation** | Auto-select which articles to evaluate next using uncertainty sampling on F1 estimate — reduces evaluation cost by 40–60% | v1.2 |
+| **Cross-model tuning** | Auto-select between Ollama models based on quality/cost/latency Pareto front | v1.2 |
 | **Ensemble extraction with voting** | Route the same fragment to 2-3 profiles, merge outputs via majority vote | v1.3 |
 | **Curriculum learning** | Order corpus ingestion from easy → hard articles based on estimated extraction difficulty | v1.4 |
-| **Active evaluation** | Auto-select which articles to evaluate next (uncertainty sampling on F1 estimate) | v1.4 |
 | **RL-based prompt optimization** | Replace OPRO with PPO/DPO over prompt space (requires many more evaluations) | v2.0 |
 | **Federated tuning** | Share mutation results across riverbank instances (privacy-preserving) | v2.0 |
 
 ---
 
-## 16. References
+## 18. References
 
 1. Khattab, O. et al. "DSPy: Compiling Declarative Language Model Calls into
    Self-Improving Pipelines." arXiv:2310.03714 (2023). ICLR 2024.
@@ -1056,7 +1143,7 @@ The auto-tuning system is successful when:
 
 ---
 
-## 17. Summary
+## 19. Summary
 
 riverbank already contains 80% of the machinery needed for auto-tuning:
 evaluation scoring, gap analysis, prompt patch generation, few-shot expansion,
