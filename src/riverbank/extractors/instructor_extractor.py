@@ -59,6 +59,7 @@ For each claim, provide:
 - Only extract claims directly supported by the text.
 - Do NOT fabricate evidence — the excerpt MUST appear verbatim in the source.
 - Always return a JSON array, even if empty: []
+- NEVER use pronouns (She, He, They, It, Who, Her, His, etc.) as entity identifiers — always use the full name of the entity.
 """
 
 _PERMISSIVE_TIER_GUIDANCE = """\

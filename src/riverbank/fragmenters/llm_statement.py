@@ -51,6 +51,9 @@ atomic, self-contained factual statements. Each statement should:
 - Express a single fact, claim, or assertion
 - Be understandable without needing to read surrounding statements
 - Be verbatim or lightly paraphrased from the source text
+- Replace all pronouns (she, he, they, it, who, her, his, etc.) with the \
+full name of the entity they refer to — never leave a pronoun as the subject \
+or object of a statement
 
 Return a JSON object with a single key "statements" containing an array of \
 statement strings. Do not include empty or duplicate statements.\

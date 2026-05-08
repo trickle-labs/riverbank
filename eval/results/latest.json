@@ -1,0 +1,23 @@
+{
+  "run_metadata": {
+    "date": "2026-05-08T09:32:39.224384+00:00",
+    "riverbank_version": "0.15.1",
+    "mode": "single_article",
+    "article": "Marie Curie",
+    "profile": "examples/profiles/wikidata-eval-v1-llm-essential.yaml"
+  },
+  "article_result": {
+    "article_title": "Marie Curie",
+    "wikidata_qid": "Q7186",
+    "domain": "unknown",
+    "riverbank_triples": 12,
+    "wikidata_statements": 174,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "true_positives": 0,
+    "false_positives": 12,
+    "false_negatives": 174,
+    "novel_discoveries": 12
+  }
+}
