@@ -60,30 +60,36 @@ statement strings. Do not include empty or duplicate statements.\
 """
 
 _ESSENTIAL_SYSTEM_PROMPT = """\
-Extract ONLY the bare essential facts from this document. Include only:
-- WHO the person/entity is (profession, nationality, core identity)
-- WHAT they discovered/invented/accomplished (major contributions)
-- WHERE/WHEN only if essential to understanding
+Extract ONLY the core essential facts from this document. Include only:
+- What the entity IS or DOES (type, role, core purpose)
+- Its primary attributes, properties, or defining characteristics
+- Key relationships to other entities that are central to understanding it
+- WHERE/WHEN only if essential to understanding the entity
 
 Exclude:
-- Family details unless critical to core identity
-- Education unless it led to discoveries
-- Specific dates unless the achievement is unknown without it
-- Secondary/contextual information
-- Death or end of service (not core achievement)
+- Secondary or contextual details
+- Redundant or supporting information
+- Facts that only make sense with extensive surrounding context
+
+Replace all pronouns (she, he, they, it, who, her, his, etc.) with the \
+full name of the entity they refer to.
 
 Return a JSON object with a single key "statements" containing a minimal list \
 of essential facts. Each should be 1-2 sentences maximum.\
 """
 
 _MINIMAL_SYSTEM_PROMPT = """\
-Extract ONLY what the entity achieved, discovered, or accomplished.
-Ignore all biographical details, dates, family, education, death.
-Focus ONLY on: discoveries, inventions, awards, institutions founded, \
-scientific contributions, or other major achievements.
+Extract ONLY the single most important fact or defining characteristic of \
+the primary subject of this document. One statement only.
 
-Return a JSON object with a single key "statements" containing the achievements \
-and discoveries. One achievement per statement.\
+Focus on: what makes this entity unique, its primary purpose, or its most \
+significant attribute or contribution.
+
+Replace all pronouns (she, he, they, it, who, her, his, etc.) with the \
+full name of the entity they refer to.
+
+Return a JSON object with a single key "statements" containing exactly one \
+statement string.\
 """
 
 _DISTILLATION_LEVELS = {
