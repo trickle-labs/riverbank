@@ -228,6 +228,10 @@ class IngestPipeline:
             # v0.16.0
             "entity_resolution_calls": 0,
             "entity_resolution_triples": 0,
+            # Extraction funnel tracing
+            "triples_extracted": 0,
+            "triples_citation_rejected": 0,
+            "triples_invalid": 0,
         }
         with tracer.start_as_current_span("ingest_pipeline.run") as span:
             for run_mode in sequence:
@@ -296,6 +300,10 @@ class IngestPipeline:
             # v0.16.0
             "entity_resolution_calls": 0,
             "entity_resolution_triples": 0,
+            # Extraction funnel tracing
+            "triples_extracted": 0,
+            "triples_citation_rejected": 0,
+            "triples_invalid": 0,
             # Corpus size for yield metrics
             "corpus_bytes": 0,
         }
@@ -1201,8 +1209,11 @@ def _process_extraction_result(
         ontology_filt = OntologyFilter(allowed_predicates, allowed_classes)
 
         all_triples = list(result.triples)
-        # Accumulate capped stat from extractor diagnostics
+        # Accumulate extraction funnel stats from extractor diagnostics
         stats["triples_capped"] += result.diagnostics.get("triples_capped", 0)
+        stats["triples_extracted"] += result.diagnostics.get("triples_extracted", len(all_triples))
+        stats["triples_citation_rejected"] += result.diagnostics.get("triples_citation_rejected", 0)
+        stats["triples_invalid"] += result.diagnostics.get("triples_invalid", 0)
 
         # Pre-write structural filtering
         passed_triples, rejected_count = ontology_filt.filter(all_triples)
@@ -1216,8 +1227,12 @@ def _process_extraction_result(
         tentative_triples: list[Any] = []
         for triple in passed_triples:
             conf = float(getattr(triple, "confidence", 0.0))
+            subj = getattr(triple, "subject", "?")
+            pred = getattr(triple, "predicate", "?")
+            obj = getattr(triple, "object_value", "?")
             if conf >= 0.75:
                 trusted_triples.append(triple)
+                logger.debug("→ trusted   (conf=%.2f): %s %s %s", conf, subj, pred, obj)
             elif conf >= 0.35:
                 # Route to tentative graph
                 tentative_triples.append(
@@ -1230,8 +1245,10 @@ def _process_extraction_result(
                         named_graph=profile.tentative_graph,
                     )
                 )
+                logger.debug("→ tentative (conf=%.2f): %s %s %s", conf, subj, pred, obj)
             else:
                 stats["triples_discarded"] += 1
+                logger.debug("→ discarded (conf=%.2f): %s %s %s", conf, subj, pred, obj)
 
         # Write trusted triples
         if trusted_triples:
@@ -1250,6 +1267,15 @@ def _process_extraction_result(
             stats["triples_written"] += written_tent
             stats["triples_tentative"] += written_tent
             record_artifact_dep(conn, tentative_triples, frag_iri, profile)
+
+        logger.info(
+            "Fragment %s: %d passed ontology → %d trusted, %d tentative, %d discarded",
+            frag_iri.rsplit("#", 1)[-1],
+            len(passed_triples),
+            len(trusted_triples),
+            len(tentative_triples),
+            stats["triples_discarded"],
+        )
 
         # v0.16.0: Collect subjects for entity resolution pass
         frag_subjects.update(

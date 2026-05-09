@@ -346,12 +346,45 @@ def ingest(
     table.add_row("Fragments skipped (hash)", str(stats["fragments_skipped_hash"]))
     gate_skipped = stats["fragments_skipped"] - stats["fragments_skipped_hash"]
     table.add_row("Fragments skipped (gate)", str(gate_skipped))
-    table.add_row("Triples written", str(stats["triples_written"]))
+
+    # Triple extraction funnel
+    extracted = stats.get("triples_extracted", 0)
+    citation_rejected = stats.get("triples_citation_rejected", 0)
+    invalid = stats.get("triples_invalid", 0)
+    capped = stats.get("triples_capped", 0)
+    ontology_rejected = stats.get("triples_rejected_ontology", 0)
+    discarded = stats.get("triples_discarded", 0)
+    tentative = stats.get("triples_tentative", 0)
+    trusted = stats.get("triples_trusted", 0)
+
+    if extracted > 0:
+        table.add_row("", "")  # spacer
+        table.add_row("[bold]Triple extraction funnel[/bold]", "")
+        table.add_row("  Extracted by LLM", str(extracted))
+        if capped:
+            table.add_row("  Capped (max_triples limit)", f"[yellow]-{capped}[/yellow]")
+        if citation_rejected:
+            table.add_row("  Rejected (excerpt similarity)", f"[red]-{citation_rejected}[/red]")
+        if invalid:
+            table.add_row("  Rejected (validation error)", f"[red]-{invalid}[/red]")
+        if ontology_rejected:
+            table.add_row("  Rejected (ontology filter)", f"[yellow]-{ontology_rejected}[/yellow]")
+        if discarded:
+            table.add_row("  Discarded (confidence < 0.35)", f"[dim]-{discarded}[/dim]")
+        table.add_row("", "")  # spacer
+        table.add_row("  → Tentative (0.35–0.75)", f"[cyan]{tentative}[/cyan]")
+        table.add_row("  → Trusted (≥ 0.75)", f"[green]{trusted}[/green]")
+        table.add_row("  → Written total", f"[bold green]{stats['triples_written']}[/bold green]")
+    else:
+        table.add_row("Triples written", str(stats["triples_written"]))
+
     # Triples per kilobyte of corpus
     corpus_kb = stats.get("corpus_bytes", 0) / 1024
     if corpus_kb > 0:
         triples_per_kb = stats["triples_written"] / corpus_kb
         table.add_row("Triples per kB", f"{triples_per_kb:.2f}")
+
+    table.add_row("", "")  # spacer
     table.add_row("LLM calls", str(stats["llm_calls"]))
     table.add_row("Prompt tokens", str(stats["prompt_tokens"]))
     table.add_row("Completion tokens", str(stats["completion_tokens"]))

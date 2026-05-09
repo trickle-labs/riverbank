@@ -735,7 +735,16 @@ class InstructorExtractor:
                         "excerpt": "", "page_number": None,
                     }}
                 normalized.append(item)
-            response = [_TripleIn.model_validate(item) for item in normalized]
+            response = []
+            for item in normalized:
+                try:
+                    response.append(_TripleIn.model_validate(item))
+                except Exception as _val_exc:  # noqa: BLE001
+                    logger.debug(
+                        "Skipping item that failed _TripleIn validation: %s — %s",
+                        {k: str(v)[:60] for k, v in item.items() if k in ("subject", "predicate", "object_value")},
+                        _val_exc,
+                    )
         else:
             response, completion = client.chat.completions.create_with_completion(
                 model=model_name,
@@ -762,6 +771,9 @@ class InstructorExtractor:
             )
 
         # --- validate and filter triples ---
+        triples_extracted = len(response)
+        triples_citation_rejected = 0
+        triples_invalid = 0
         validated: list[ExtractedTriple] = []
         for t in response:
             subj, pred, obj, conf, ev_in = _unpack(t)
@@ -779,14 +791,29 @@ class InstructorExtractor:
             # in the source text, tolerating minor LLM reformatting (decimal
             # spacing, stripped markdown, em-dash variants) while still catching
             # hallucinated excerpts that share no real overlap with the source.
-            if excerpt and _fuzz.partial_ratio(excerpt, text) < _CITATION_SIMILARITY_THRESHOLD:
-                logger.warning(
-                    "Rejecting triple — excerpt similarity %.0f%% < %d%% threshold: %r",
-                    _fuzz.partial_ratio(excerpt, text),
-                    _CITATION_SIMILARITY_THRESHOLD,
-                    excerpt[:80],
+            if excerpt:
+                sim = _fuzz.partial_ratio(excerpt, text)
+                if sim < _CITATION_SIMILARITY_THRESHOLD:
+                    triples_citation_rejected += 1
+                    logger.warning(
+                        "Rejecting triple — excerpt similarity %.0f%% < %d%%: "
+                        "%s %s %s | excerpt: %r",
+                        sim,
+                        _CITATION_SIMILARITY_THRESHOLD,
+                        subj,
+                        pred,
+                        obj,
+                        excerpt[:80],
+                    )
+                    continue
+                logger.debug(
+                    "Citation OK %.0f%%: %s %s %s | excerpt: %r",
+                    sim,
+                    subj,
+                    pred,
+                    obj,
+                    excerpt[:60],
                 )
-                continue
             try:
                 evidence = EvidenceSpan(
                     source_iri=source_iri,
@@ -804,18 +831,39 @@ class InstructorExtractor:
                         evidence=evidence,
                     )
                 )
+                logger.debug(
+                    "Triple accepted (conf=%.2f): %s %s %s",
+                    conf,
+                    subj,
+                    pred,
+                    obj,
+                )
             except Exception as exc:  # noqa: BLE001
-                logger.warning("Skipping invalid triple: %s", exc)
+                triples_invalid += 1
+                logger.warning("Skipping invalid triple (%s %s %s): %s", subj, pred, obj, exc)
 
         usage = completion.usage if completion else None
         prompt_tokens = usage.prompt_tokens if usage else 0
         completion_tokens = usage.completion_tokens if usage else 0
 
+        span.set_attribute("extraction.triples_extracted", triples_extracted)
+        span.set_attribute("extraction.triples_citation_rejected", triples_citation_rejected)
+        span.set_attribute("extraction.triples_invalid", triples_invalid)
         span.set_attribute("extraction.triple_count", len(validated))
         span.set_attribute("extraction.prompt_tokens", prompt_tokens)
         span.set_attribute("extraction.completion_tokens", completion_tokens)
         span.set_attribute("extraction.model", model_name)
         span.set_attribute("extraction.triples_capped", triples_capped)
+
+        logger.info(
+            "Extraction complete: %d extracted → %d passed citation "
+            "(%d citation-rejected, %d capped, %d invalid)",
+            triples_extracted,
+            len(validated),
+            triples_citation_rejected,
+            triples_capped,
+            triples_invalid,
+        )
 
         return ExtractionResult(
             triples=validated,
@@ -825,6 +873,9 @@ class InstructorExtractor:
                 "model": model_name,
                 "llm_calls": 1,
                 "triples_capped": triples_capped,
+                "triples_extracted": triples_extracted,
+                "triples_citation_rejected": triples_citation_rejected,
+                "triples_invalid": triples_invalid,
             },
         )
 
