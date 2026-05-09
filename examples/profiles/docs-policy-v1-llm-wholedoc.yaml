@@ -62,7 +62,7 @@ editorial_policy:
   min_fragment_length: 50
   max_fragment_length: 500000  # Very high to keep entire document as one fragment
   min_heading_depth: 0
-  confidence_threshold: 0.7
+  confidence_threshold: 0.0     # PERMISSIVE: accept all confidence levels (no editorial gate)
   allowed_languages:
     - en
 
