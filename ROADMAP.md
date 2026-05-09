@@ -106,7 +106,7 @@
 | v0.16.1 | Hypothesis generation (scoped) — threshold sweep automation (citation similarity, confidence routing thresholds); few-shot injection from recall-gap patterns; `TriedPatchesRegistry`; `MutationEffectivenessRegistry`; `riverbank tuning propose`; OPRO-style prompt mutation deferred to v0.18.0 pending parallel trial infrastructure | Planned | Medium |
 | v0.16.2 | Lightweight A/B + fragmentation — simplified profile comparison (rolling average F1 over N fragments, no SPRT); entity IRI fragmentation rate metric (same-entity IRI variant ratio per document); `riverbank tuning compare` for manual side-by-side; promotion on rolling-average significance | Planned | Medium |
 | v0.17.0 | Full A/B testing harness — `CandidateRouter` (consistent-hash cohort assignment), `SignificanceTester` (SPRT sequential testing), `_riverbank.tuning_experiments` and `tuning_cohorts` catalog tables, `ExperimentPostmortem` auto-generation, promotion and demotion logic, pg-tide event emission on state transitions | Planned | Large |
-| v0.17.1 | Measurement Tier 1 full pipeline — `MeasurementStrategy` with complete three-tier ground truth pipeline (curated JSONL, Wikidata, noisy-OR bootstrap); human spot-sampling via Label Studio; measurement miscalibration detection; per-tier confidence labels on all promotion audit records; `riverbank tuning status` | Planned | Large |
+| v0.17.1 | Measurement Tier 1 full pipeline — `MeasurementStrategy` with complete three-tier ground truth pipeline (curated JSONL, Wikidata, noisy-OR bootstrap); human spot-sampling via Label Studio; measurement miscalibration detection; per-tier confidence labels on all promotion audit records; `riverbank tuning status`; note: JSONL schema and first corpus file (`eval/ground-truth/marie-curie.jsonl`, 45 triples) already decided and committed in v0.15.1 — v0.17.1 delivers the *runner* (SPARQL-match F1 evaluator) not the schema | Planned | Large |
 | v0.17.2 | Orchestration and scheduling — `TuningOrchestrator` closed loop (**only after v0.17.0 has demonstrated at least one successful automated improvement cycle end-to-end**); `PlateauDetector` with restart strategy; `TuningScheduler` (APScheduler); full `auto_tuning:` profile YAML schema; `riverbank tuning run-once`; safety guardrails (precision floor, cost ceiling, freeze-on-regression, generation-depth limit, mutation-conflict prevention) | Planned | Large |
 | v0.18.0 | Tuning observability and OPRO — Perses dashboard panel; `riverbank tuning history` lineage tree; `riverbank tuning pareto` quality×cost frontier; `riverbank tuning rollback` / `freeze` / `unfreeze`; new profile onboarding path (`riverbank tuning init`); OPRO-style prompt mutation (now backed by proper parallel trial infrastructure from v0.17.0); auto-tuning how-to docs | Planned | Large |
 | v0.18.1 | Learning from history — `MutationEffectivenessRegistry` with time-decayed half-life; cross-profile transfer suggestions; `ProposalCalibrator` for hypothesis accuracy self-improvement; multi-property triage with clustering and batch mutation; `riverbank tuning insights` populated from full learning history | Planned | Medium |
@@ -188,8 +188,16 @@ the observation layer that all subsequent adaptive work depends on. See
   (1) F1 regression >5% vs. 7-day baseline — critical, triggers freeze;
   (2) precision below configured floor — high, tighten routing thresholds;
   (3) zero recall on tracked predicates — high, inject targeted examples;
-  (4) cost/triple increased >20% vs. baseline — medium, reduce safety cap;
+  (4) cost-per-written-triple increased >20% vs. baseline — medium, reduce safety cap;
+      note: cost must be normalised by `triples_written` (not total LLM cost), because
+      `extraction_target` intentionally raises `num_predict` and thus raw cost; a
+      higher cost accompanied by proportionally more triples is not a regression;
   (5) confidence miscalibration (ρ < 0.3) — medium, adjust routing thresholds;
+      note: the citation-similarity penalty (`conf_final = conf_llm × sim/100`)
+      shifts the confidence distribution downward for all triples with imperfect
+      excerpts; calibration must compare predicted vs. observed accuracy using
+      `conf_final` (post-penalty), and treat the penalty as a calibration feature
+      rather than noise — do not attempt to undo it before computing ρ;
   (6) SHACL score declining — low, review shape constraints;
   (7) novel-discovery rate >40% — low, review predicate alignment table;
   (8) entity IRI fragmentation rate elevated — medium, tune knowledge-prefix adapter;
@@ -254,11 +262,17 @@ same failed approach repeatedly.
   and estimated lift; validates returned YAML against `CompilerProfile` schema
   before accepting; coordinated mutation detection prevents simultaneously
   proposing changes to parameters with known interaction effects
-- [ ] `ThresholdSweepBackend`: deterministic adjacent-step grid search over 7
+- [ ] `ThresholdSweepBackend`: deterministic adjacent-step grid search over 9
   numeric parameters (`trusted_threshold`, `tentative_threshold`, `safety_cap`,
   `max_graph_context_tokens`, `top_entities`, `few_shot.max_examples`,
-  `preprocessing.max_entities`); selects direction based on the diagnosis
-  recommendation; consults `TriedPatchesRegistry` to skip directions already tried
+  `preprocessing.max_entities`, `extraction_strategy.citation_floor`,
+  `extraction_strategy.extraction_target.min_triples`); the last two are new
+  since v0.15.1 — `citation_floor` controls the hard-reject floor for absent
+  excerpts (default 40), and `min_triples` directly controls triple yield
+  (the primary signal for DiagnosticsEngine Rule 9); note: `citation_similarity_threshold`
+  has been removed — replaced by the soft confidence-penalty model; selects
+  direction based on the diagnosis recommendation; consults `TriedPatchesRegistry`
+  to skip directions already tried
 - [ ] `EvalDrivenFewShotMutator`: targets the top-3 lowest-recall predicates
   (any corpus, not Wikidata-specific); injects built-in extraction examples from
   `RecallGapAnalyzer._BUILTIN_EXAMPLES` as targeted few-shot additions
