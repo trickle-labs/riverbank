@@ -18,10 +18,10 @@ logger = logging.getLogger(__name__)
 # the same length in the longer string, so it tolerates minor LLM reformatting
 # (decimal spacing artefacts, stripped markdown, em-dash variants) while still
 # rejecting outright fabrications.
-# Set to 78: documents with Markdown table/bullet syntax score 79–81% on valid
+# Set to 75: documents with Markdown table/bullet syntax score 75–81% on valid
 # facts because partial_ratio must align bullet markers ("| * ") that the LLM
-# omits in excerpts.  78 rescues these while still blocking hallucinations.
-_CITATION_SIMILARITY_THRESHOLD: int = 78
+# omits in excerpts.  75 rescues borderline cases while still blocking hallucinations.
+_CITATION_SIMILARITY_THRESHOLD: int = 75
 
 
 _DEFAULT_PROMPT = """\
