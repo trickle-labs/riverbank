@@ -13,15 +13,12 @@ from riverbank.prov import EvidenceSpan, ExtractedTriple
 
 logger = logging.getLogger(__name__)
 
-# Minimum rapidfuzz partial_ratio score (0–100) for an excerpt to be considered
-# grounded in the source text.  partial_ratio finds the best matching window of
-# the same length in the longer string, so it tolerates minor LLM reformatting
-# (decimal spacing artefacts, stripped markdown, em-dash variants) while still
-# rejecting outright fabrications.
-# Set to 75: documents with Markdown table/bullet syntax score 75–81% on valid
-# facts because partial_ratio must align bullet markers ("| * ") that the LLM
-# omits in excerpts.  75 rescues borderline cases while still blocking hallucinations.
-_CITATION_SIMILARITY_THRESHOLD: int = 75
+# Hard floor for excerpt similarity below which a triple is always discarded.
+# This only catches truly absent evidence (score < 40 means the excerpt shares
+# almost no text with the source — almost certainly hallucinated or wrong fragment).
+# Above this floor, low similarity penalises confidence instead of discarding.
+# Configurable per-profile via extraction_strategy.citation_floor (0–100).
+_CITATION_SIMILARITY_FLOOR: int = 40
 
 
 _DEFAULT_PROMPT = """\
@@ -960,11 +957,19 @@ class InstructorExtractor:
             # Small function words (in, of, the, a, an, and, de, van, …) are ignored.
             if obj and ":" not in obj and not obj.startswith("<"):
                 obj = _maybe_entity_iri(obj)
-            # Citation grounding: reject fabricated excerpts.
+            # Citation grounding: verify the excerpt appears in the source text.
             # rapidfuzz.partial_ratio finds the best-matching same-length window
-            # in the source text, tolerating minor LLM reformatting (decimal
-            # spacing, stripped markdown, em-dash variants) while still catching
-            # hallucinated excerpts that share no real overlap with the source.
+            # in the source, tolerating minor LLM reformatting (stripped markdown,
+            # em-dash variants, decimal spacing).
+            #
+            # Two-tier approach (configurable via extraction_strategy):
+            #   citation_floor  (default 40): hard reject — excerpt is absent/fabricated
+            #   Above floor: soft penalty — reduce confidence proportionally so
+            #     low-citation triples route to tentative graph, not discarded.
+            #     This lets users filter at query time rather than losing data.
+            citation_floor: int = int(
+                extraction_strategy.get("citation_floor", _CITATION_SIMILARITY_FLOOR)
+            )
             if not excerpt or not excerpt.strip():
                 # LLM omitted the excerpt entirely — cannot ground this triple.
                 triples_citation_rejected += 1
@@ -974,29 +979,39 @@ class InstructorExtractor:
                 )
                 continue
             sim = _fuzz.partial_ratio(excerpt, text)
-            # round() so the comparison matches what %.0f displays: a score
-            # of 77.6 displays as "78%" and should compare as 78, not 77.6.
-            if round(sim) < _CITATION_SIMILARITY_THRESHOLD:
+            sim_rounded = round(sim)
+            if sim_rounded < citation_floor:
                 triples_citation_rejected += 1
                 logger.warning(
-                    "Rejecting triple — excerpt similarity %.0f%% < %d%%: "
+                    "Rejecting triple — excerpt below floor %d%% < %d%%: "
                     "%s %s %s | excerpt: %r",
-                    sim,
-                    _CITATION_SIMILARITY_THRESHOLD,
+                    sim_rounded,
+                    citation_floor,
                     subj,
                     pred,
                     obj,
                     excerpt[:80],
                 )
                 continue
-            logger.debug(
-                "Citation OK %.0f%%: %s %s %s | excerpt: %r",
-                sim,
-                subj,
-                pred,
-                obj,
-                excerpt[:60],
-            )
+            # Above the floor: apply a confidence penalty for weak citation.
+            # A 100% match → no penalty.  A 40% match → multiply confidence by 0.40.
+            # This routes borderline-grounded triples to the tentative graph
+            # where they remain queryable but flagged for review.
+            if sim_rounded < 100:
+                penalty = sim / 100.0
+                original_conf = conf
+                conf = conf * penalty
+                if sim_rounded < 75:
+                    logger.info(
+                        "Citation weak %.0f%% — penalising confidence %.2f→%.2f: "
+                        "%s %s %s | excerpt: %r",
+                        sim, original_conf, conf, subj, pred, obj, excerpt[:60],
+                    )
+                else:
+                    logger.debug(
+                        "Citation OK %.0f%%: %s %s %s | excerpt: %r",
+                        sim, subj, pred, obj, excerpt[:60],
+                    )
             try:
                 # Coerce degenerate offsets: the LLM sometimes returns char_end=0
                 # (or char_end <= char_start) when it doesn't know the position.
@@ -1219,14 +1234,20 @@ class InstructorExtractor:
             if subj and ":" not in subj and not subj.startswith("<"):
                 subj = f"ex:{subj}"
 
-            # Citation grounding check
+            # Citation grounding check — same two-tier logic as single-extraction path:
+            # hard floor (default 40) discards absent evidence; above floor, penalise conf.
             excerpt = triple.evidence.get("excerpt", "")
-            if excerpt and round(_fuzz.partial_ratio(excerpt, text)) < _CITATION_SIMILARITY_THRESHOLD:
-                logger.warning(
-                    "Batch extraction: rejecting triple — similarity too low: %r",
-                    excerpt[:80],
-                )
-                continue
+            _batch_floor = int(extraction_strategy.get("citation_floor", _CITATION_SIMILARITY_FLOOR))
+            if excerpt:
+                _sim = _fuzz.partial_ratio(excerpt, text)
+                if round(_sim) < _batch_floor:
+                    logger.warning(
+                        "Batch extraction: rejecting triple — similarity %d%% below floor %d%%: %r",
+                        round(_sim), _batch_floor, excerpt[:80],
+                    )
+                    continue
+                if round(_sim) < 100:
+                    conf = conf * (_sim / 100.0)
 
             try:
                 cs = triple.evidence.get("char_start", 0)
