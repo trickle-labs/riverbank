@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, ClassVar, Optional
 
 from rapidfuzz import fuzz as _fuzz
@@ -135,6 +136,13 @@ def _maybe_entity_iri(obj: str) -> str:
     if obj[0].isdigit() or ":" in obj:
         return obj
 
+    # Strip trailing disambiguation parentheticals before any further checks.
+    # "curie (unit)" → "curie", "Nobel Prize in Physics (1903)" → "Nobel Prize in Physics"
+    stripped = re.sub(r"\s*\([^)]+\)\s*$", "", obj).strip()
+    if not stripped:
+        return obj
+    obj = stripped
+
     # --- snake_case branch ---
     if "_" in obj and " " not in obj:
         components = obj.split("_")
@@ -144,7 +152,15 @@ def _maybe_entity_iri(obj: str) -> str:
         return obj
 
     # --- Title Case phrase branch ---
+    # Single-word, purely-alphabetic objects: capitalise first letter so that
+    # concept names the LLM lowercased ("radioactivity", "curie") are promoted
+    # to IRIs. Multi-word strings are left unchanged — the Title Case check
+    # below already requires each content word to be capitalised.
     words = obj.split()
+    if len(words) == 1 and obj.isalpha():
+        obj = obj[0].upper() + obj[1:]
+        words = [obj]
+
     if not words:
         return obj
     # Every word must be capitalised (first letter upper) OR be a stop-word
