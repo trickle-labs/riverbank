@@ -13,12 +13,15 @@ from riverbank.prov import EvidenceSpan, ExtractedTriple
 
 logger = logging.getLogger(__name__)
 
-# Hard floor for excerpt similarity below which a triple is always discarded.
-# This only catches truly absent evidence (score < 40 means the excerpt shares
-# almost no text with the source — almost certainly hallucinated or wrong fragment).
-# Above this floor, low similarity penalises confidence instead of discarding.
-# Configurable per-profile via extraction_strategy.citation_floor (0–100).
-_CITATION_SIMILARITY_FLOOR: int = 40
+# Minimum rapidfuzz partial_ratio score (0–100) for an excerpt to be considered
+# grounded in the source text.  partial_ratio finds the best matching window of
+# the same length in the longer string, so it tolerates minor LLM reformatting
+# (decimal spacing artefacts, stripped markdown, em-dash variants) while still
+# rejecting outright fabrications.
+# Set to 75: documents with Markdown table/bullet syntax score 75–81% on valid
+# facts because partial_ratio must align bullet markers ("| * ") that the LLM
+# omits in excerpts.  75 rescues borderline cases while still blocking hallucinations.
+_CITATION_SIMILARITY_THRESHOLD: int = 75
 
 
 _DEFAULT_PROMPT = """\
@@ -147,19 +150,6 @@ def _maybe_entity_iri(obj: str) -> str:
         return obj
     # Reject obvious scalars: starts with digit, contains colon (dates/times)
     if obj[0].isdigit() or ":" in obj:
-        return obj
-
-    # Reject markdown bracket artifacts: "[French Academy of Medicine]"
-    # These are leaked link syntax from the source document and should stay
-    # as plain literals rather than being promoted to IRIs.
-    if obj.startswith("[") and obj.endswith("]"):
-        return obj
-
-    # Reject comma-separated compound values: "Irène Joliot-Curie, Ève Curie"
-    # These are two entities that the LLM merged into one string. We cannot
-    # safely split them here (we don't know the split point), so leave as a
-    # literal — the caller should have produced two separate triples.
-    if "," in obj:
         return obj
 
     # Boolean values: the LLM sometimes outputs True/False as object values for
@@ -960,15 +950,9 @@ class InstructorExtractor:
             # _to_ntriples_term() produces a proper IRI instead of a string literal.
             if pred and ":" not in pred and not pred.startswith("<"):
                 pred = f"ex:{pred}"
-            # Auto-expand bare subjects: apply the same entity-IRI heuristic used
-            # for objects so that lowercase subjects like "radioactivity" get promoted
-            # to ex:Radioactivity instead of ex:radioactivity (wrong capitalisation)
-            # or blindly prepended with ex: without the Title-Case/snake_case check.
-            # Fall back to bare ex: prefix only if _maybe_entity_iri returns unchanged
-            # (i.e. it looks like a scalar, not an entity name).
+            # Auto-expand bare subjects (same logic as predicates above).
             if subj and ":" not in subj and not subj.startswith("<"):
-                expanded = _maybe_entity_iri(subj)
-                subj = expanded if expanded != subj else f"ex:{subj}"
+                subj = f"ex:{subj}"
             # Auto-expand bare object values that look like named entities to IRIs.
             # The LLM is instructed to use ex:, but falls back to bare strings.
             # Heuristic: a proper noun phrase is one where every significant word is
@@ -976,35 +960,36 @@ class InstructorExtractor:
             # Small function words (in, of, the, a, an, and, de, van, …) are ignored.
             if obj and ":" not in obj and not obj.startswith("<"):
                 obj = _maybe_entity_iri(obj)
-            # Citation grounding: verify the excerpt appears in the source text.
+            # Citation grounding: reject fabricated excerpts.
             # rapidfuzz.partial_ratio finds the best-matching same-length window
-            # in the source, tolerating minor LLM reformatting (stripped markdown,
-            # em-dash variants, decimal spacing).
-            #
-            # Two-tier approach (configurable via extraction_strategy):
-            #   citation_floor  (default 40): hard reject — excerpt is absent/fabricated
-            #   Above floor: soft penalty — reduce confidence proportionally so
-            #     low-citation triples route to tentative graph, not discarded.
-            #     This lets users filter at query time rather than losing data.
-            citation_floor: int = int(
-                extraction_strategy.get("citation_floor", _CITATION_SIMILARITY_FLOOR)
-            )
+            # in the source text, tolerating minor LLM reformatting (decimal
+            # spacing, stripped markdown, em-dash variants) while still catching
+            # hallucinated excerpts that share no real overlap with the source.
+            citation_floor: int = extraction_strategy.get("citation_floor", 40)
             if not excerpt or not excerpt.strip():
                 # LLM omitted the excerpt entirely — cannot ground this triple.
-                triples_citation_rejected += 1
-                logger.warning(
-                    "Rejecting triple — no excerpt provided: %s %s %s",
-                    subj, pred, obj,
-                )
-                continue
+                # But if citation_floor is 0, allow it through anyway (with soft penalty applied later).
+                if citation_floor <= 0:
+                    logger.debug(
+                        "Citation grounding disabled (citation_floor=%d): accepting triple without excerpt: %s %s %s",
+                        citation_floor, subj, pred, obj,
+                    )
+                else:
+                    triples_citation_rejected += 1
+                    logger.warning(
+                        "Rejecting triple — no excerpt provided: %s %s %s",
+                        subj, pred, obj,
+                    )
+                    continue
             sim = _fuzz.partial_ratio(excerpt, text)
-            sim_rounded = round(sim)
-            if sim_rounded < citation_floor:
+            # round() so the comparison matches what %.0f displays: a score
+            # of 77.6 displays as "78%" and should compare as 78, not 77.6.
+            if round(sim) < citation_floor:
                 triples_citation_rejected += 1
                 logger.warning(
-                    "Rejecting triple — excerpt below floor %d%% < %d%%: "
+                    "Rejecting triple — excerpt similarity %.0f%% < %d%%: "
                     "%s %s %s | excerpt: %r",
-                    sim_rounded,
+                    sim,
                     citation_floor,
                     subj,
                     pred,
@@ -1012,25 +997,14 @@ class InstructorExtractor:
                     excerpt[:80],
                 )
                 continue
-            # Above the floor: apply a confidence penalty for weak citation.
-            # A 100% match → no penalty.  A 40% match → multiply confidence by 0.40.
-            # This routes borderline-grounded triples to the tentative graph
-            # where they remain queryable but flagged for review.
-            if sim_rounded < 100:
-                penalty = sim / 100.0
-                original_conf = conf
-                conf = conf * penalty
-                if sim_rounded < 75:
-                    logger.info(
-                        "Citation weak %.0f%% — penalising confidence %.2f→%.2f: "
-                        "%s %s %s | excerpt: %r",
-                        sim, original_conf, conf, subj, pred, obj, excerpt[:60],
-                    )
-                else:
-                    logger.debug(
-                        "Citation OK %.0f%%: %s %s %s | excerpt: %r",
-                        sim, subj, pred, obj, excerpt[:60],
-                    )
+            logger.debug(
+                "Citation OK %.0f%%: %s %s %s | excerpt: %r",
+                sim,
+                subj,
+                pred,
+                obj,
+                excerpt[:60],
+            )
             try:
                 # Coerce degenerate offsets: the LLM sometimes returns char_end=0
                 # (or char_end <= char_start) when it doesn't know the position.
@@ -1253,20 +1227,14 @@ class InstructorExtractor:
             if subj and ":" not in subj and not subj.startswith("<"):
                 subj = f"ex:{subj}"
 
-            # Citation grounding check — same two-tier logic as single-extraction path:
-            # hard floor (default 40) discards absent evidence; above floor, penalise conf.
+            # Citation grounding check
             excerpt = triple.evidence.get("excerpt", "")
-            _batch_floor = int(extraction_strategy.get("citation_floor", _CITATION_SIMILARITY_FLOOR))
-            if excerpt:
-                _sim = _fuzz.partial_ratio(excerpt, text)
-                if round(_sim) < _batch_floor:
-                    logger.warning(
-                        "Batch extraction: rejecting triple — similarity %d%% below floor %d%%: %r",
-                        round(_sim), _batch_floor, excerpt[:80],
-                    )
-                    continue
-                if round(_sim) < 100:
-                    conf = conf * (_sim / 100.0)
+            if excerpt and round(_fuzz.partial_ratio(excerpt, text)) < _CITATION_SIMILARITY_THRESHOLD:
+                logger.warning(
+                    "Batch extraction: rejecting triple — similarity too low: %r",
+                    excerpt[:80],
+                )
+                continue
 
             try:
                 cs = triple.evidence.get("char_start", 0)

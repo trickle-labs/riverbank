@@ -140,6 +140,17 @@ class DocumentPreprocessor:
         )
         backend: str = preprocessing_cfg.get("backend", "nlp")
         max_entities: int = preprocessing_cfg.get("max_entities", 50)
+        # max_tokens_for_preprocessing caps how much text is sent to preprocessing
+        # (both NLP and LLM backends). Approximate chars from tokens at ~4 chars/token.
+        max_tokens_for_preprocessing: int = preprocessing_cfg.get("max_tokens_for_preprocessing", 0)
+        if max_tokens_for_preprocessing > 0:
+            max_chars = max_tokens_for_preprocessing * 4
+            if len(raw_text) > max_chars:
+                logger.debug(
+                    "Truncating raw_text from %d to %d chars for preprocessing (max_tokens_for_preprocessing=%d)",
+                    len(raw_text), max_chars, max_tokens_for_preprocessing,
+                )
+                raw_text = raw_text[:max_chars]
 
         summary = ""
         entity_catalog: list[EntityCatalogEntry] = []

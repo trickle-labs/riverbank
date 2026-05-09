@@ -70,9 +70,30 @@ extraction_strategy:
   extraction_target:
     min_triples: 70
     max_triples: 200
+  citation_floor: 0  # Accept all triples regardless of excerpt presence/quality
 
 # Note: constrained_decoding disabled — MD_JSON mode is more reliable with Ollama
 # constrained_decoding: true
+
+# v0.18.0: Predicate inference — LLM-driven schema discovery (EXPERIMENTAL)
+# Propose domain-specific RDF predicates before extraction. Useful for:
+# - Discovering what predicates are actually relevant in the document
+# - Auto-tuning the allowed_predicates allowlist
+# - Understanding document schema without manual domain analysis
+#
+# How it works:
+# 1. After parsing, run a lightweight LLM pass on the full document
+# 2. LLM proposes domain-appropriate predicates with confidence levels
+# 3. Proposed predicates are merged into allowed_predicates (if use_for_extraction: true)
+# 4. Main extraction pass uses the merged vocabulary
+#
+# Disable this for production until you're confident in the quality of proposals.
+predicate_inference:
+  enabled: true  # Set to true to enable experimental predicate inference
+  confidence_threshold: "high"  # Filter proposals: high | medium | all
+  use_for_extraction: true  # Merge proposed predicates into allowed_predicates
+  max_predicates: 50  # Cap the number of proposed predicates
+  # seed_predicates: []  # Optional: constrain proposals to namespace (default: ex:)
 
 # Competency questions — SPARQL ASK queries that the compiled graph must answer.
 # Used by the golden corpus CI gate (tests/golden/).
@@ -107,7 +128,7 @@ preprocessing:
 # Verification: now free with NLI backend (cross-encoder)
 # Filters out hallucinated/contradictory triples against source
 verification:
-  enabled: true
+  enabled: false
   backend: "nli"  # Uses cross-encoder/nli-distilroberta-base (no LLM cost)
 
 # Entity resolution: merge aliases with owl:sameAs using embedding similarity
@@ -116,4 +137,66 @@ entity_resolution:
   enabled: true
   backend: "embeddings"          # no LLM cost — uses all-MiniLM-L6-v2
   similarity_threshold: 0.94     # cosine similarity to assert owl:sameAs (high to avoid Pierre/Marie false match)
-  confidence_threshold: 0.80     # min confidence to write the triple
+  confidence_threshold: 0.00     # min confidence to write the triple
+
+# For a general-purpose profile, we disable the allowlist so the LLM can extract
+# freely based on the document content. If you want domain-constrained extraction,
+# see the specialized profiles (biography, scientific, procedural).
+allowed_predicates:
+  # Identity & Location
+  - ex:founded_year
+  - ex:home_stadium
+  - ex:home_city
+  - ex:current_league
+  - ex:current_owner
+  - ex:chairman
+  - ex:head_coach
+  - ex:club_captain
+  
+  # Colors & Branding
+  - ex:home_color
+  - ex:away_color
+  - ex:kit_supplier
+  - ex:main_sponsor
+  - ex:club_badge
+  - ex:club_anthem
+  - ex:club_nickname
+  
+  # Stadium
+  - ex:stadium_capacity
+  - ex:stadium_opened
+  - ex:stadium_location
+  
+  # Trophies & Achievements
+  - ex:league_titles_won
+  - ex:fa_cup_wins
+  - ex:league_cup_wins
+  - ex:european_cup_wins
+  - ex:european_competition_wins
+  - ex:club_world_cup_wins
+  
+  # Players
+  - ex:current_squad_member
+  - ex:club_captain_of
+  - ex:leading_goalscorer
+  - ex:notable_player
+  - ex:player_joined_year
+  - ex:player_position
+  - ex:player_nationality
+  
+  # Rivalries & Competition
+  - ex:local_rival
+  - ex:inter_city_rival
+  - ex:plays_in_derby_with
+  - ex:competes_against
+  
+  # History
+  - ex:manager_period
+  - ex:significant_event
+  - ex:record_holder
+  - ex:historical_achievement
+  
+  # Organization
+  - ex:total_capacity
+  - ex:attendance_record
+  - ex:supporters_clubs

@@ -102,6 +102,8 @@ class CompilerProfile:
     shacl_validation: dict = field(default_factory=dict)
     # v0.14.0: OWL 2 RL forward-chaining
     owl_rl: dict = field(default_factory=dict)
+    # v0.18.0: Predicate inference — LLM-driven schema discovery from documents
+    predicate_inference: dict = field(default_factory=dict)
     # id is set after the profile is registered in the catalog DB
     id: Optional[int] = None
 
@@ -467,6 +469,48 @@ class IngestPipeline:
             except Exception as _coref_exc:  # noqa: BLE001
                 logger.debug("Coreference resolution skipped: %s", _coref_exc)
 
+        # v0.18.0: Predicate inference — propose schema before extraction
+        predicate_inference_cfg: dict = getattr(profile, "predicate_inference", {})
+        if predicate_inference_cfg.get("enabled", False) and not dry_run:
+            try:
+                from riverbank.inference.schema_proposer import SchemaProposer  # noqa: PLC0415
+                proposer = SchemaProposer(settings=self._settings)
+                inference_result = proposer.propose(doc.raw_text, profile)
+                proposed_predicates = inference_result.get("allowed_predicates", [])
+                use_for_extraction = predicate_inference_cfg.get("use_for_extraction", False)
+
+                if proposed_predicates and use_for_extraction:
+                    # Merge proposed predicates into profile's allowed_predicates
+                    existing = set(getattr(profile, "allowed_predicates", []))
+                    proposed = set(proposed_predicates)
+                    merged = sorted(existing | proposed)
+                    profile.allowed_predicates = merged
+                    logger.info(
+                        "Predicate inference: merged %d proposed predicates "
+                        "(existing: %d, new: %d, total: %d)",
+                        len(proposed_predicates),
+                        len(existing),
+                        len(proposed - existing),
+                        len(merged),
+                    )
+                    if progress_callback:
+                        progress_callback(
+                            "predicate_inference_done",
+                            {
+                                "proposed_count": len(proposed_predicates),
+                                "merged_count": len(merged),
+                                "inference_diagnostics": inference_result.get("diagnostics", {}),
+                            },
+                        )
+                else:
+                    logger.debug(
+                        "Predicate inference: proposed %d predicates (use_for_extraction=%s)",
+                        len(proposed_predicates),
+                        use_for_extraction,
+                    )
+            except Exception as _infer_exc:  # noqa: BLE001
+                logger.warning("Predicate inference failed, continuing without it: %s", _infer_exc)
+
         fragments = list(fragmenter.fragment(doc))
         existing_hashes = self._get_existing_hashes(conn, source.iri)
         tracer = otel_trace.get_tracer(__name__)
@@ -563,6 +607,12 @@ class IngestPipeline:
         extraction_strategy: dict = getattr(profile, "extraction_strategy", {})
         batch_size: int = extraction_strategy.get("batch_size", 0)
         use_batching: bool = False  # Disabled in v0.15.1
+        if batch_size > 0:
+            logger.warning(
+                "extraction_strategy.batch_size=%d is set but batch extraction is disabled in v0.15.1 — "
+                "setting has no effect; all fragments are processed individually.",
+                batch_size,
+            )
 
         # Pre-filter fragments to determine which ones need extraction
         fragments_to_process: list[tuple[Any, str, Any]] = []  # (frag, frag_iri, frag_profile)
