@@ -58,8 +58,8 @@ editorial_policy:
   allowed_languages:
     - en
 
-# Fragmenter: direct — treats entire document as a single fragment
-fragmenter: direct
+# Fragmenter: noop (aliased to direct in v0.15.1+) — treats entire document as single fragment
+fragmenter: noop
 direct_extraction:
   max_doc_chars: 500000  # match max_fragment_length above
 
