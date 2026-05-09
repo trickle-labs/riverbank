@@ -60,6 +60,7 @@ For each claim, provide:
 - Do NOT fabricate evidence — the excerpt MUST appear verbatim in the source.
 - Always return a JSON array, even if empty: []
 - SAFETY: If a subject or object_value is a pronoun (She, He, They, It, Who, Her, His, etc.), SKIP that triple entirely.
+- EXCERPT FORMAT: Write plain text in the excerpt field. If the source text contains markdown links like [text](url "title"), write just the plain text (e.g. "text") — do NOT copy the markdown syntax into the excerpt.
 """
 
 _PERMISSIVE_TIER_GUIDANCE = """\
@@ -185,6 +186,153 @@ def _build_functional_predicate_hints(predicate_constraints: dict) -> str:
 def _estimate_tokens(text: str) -> int:
     """Fast token estimate: byte length / 4 (safe for both tiktoken and Ollama)."""
     return max(1, len(text.encode("utf-8")) // 4)
+
+
+# Valid single-character JSON escape sequences (after the backslash)
+_VALID_JSON_ESCAPES = frozenset('"\\' + r'\/bfnrt')
+
+
+def _fix_json_escapes(s: str) -> str:
+    """Remove or neutralise invalid JSON escape sequences such as \\( or \\'.
+
+    Models like gemma4 embed markdown links (e.g. ``[text](./Foo_(bar) "Foo
+    \\(bar\\)")``) inside excerpt strings and escape the parentheses as ``\\(``,
+    which is not a legal JSON escape.  This function strips the backslash from
+    any ``\\X`` where X is not a recognised JSON escape character, converting it
+    to just ``X``.  Valid sequences (``\\n``, ``\\"``, ``\\\\``, ``\\uXXXX``,
+    …) are left untouched.
+    """
+    result: list[str] = []
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if ch == "\\" and i + 1 < len(s):
+            nxt = s[i + 1]
+            if nxt in _VALID_JSON_ESCAPES:
+                result.append(ch)
+                result.append(nxt)
+                i += 2
+                # Consume the four hex digits of \\uXXXX so we don't
+                # accidentally strip a backslash from inside them.
+                if nxt == "u":
+                    result.append(s[i : i + 4])
+                    i += 4
+            else:
+                # Invalid escape — drop the backslash, keep the character.
+                result.append(nxt)
+                i += 2
+        else:
+            result.append(ch)
+            i += 1
+    return "".join(result)
+
+
+def _extract_json_from_content(content: str) -> list[Any]:
+    """Extract and parse a list of triples from an LLM response string.
+
+    Handles two common failure modes from local models:
+
+    1. **Markdown-wrapped JSON** — response contains ````json … ```` fences.
+    2. **Object-wrapped array** — the model wraps the array in an object such as
+       ``{"tasks": [...]}`` or ``{"triples": [...]}`` instead of returning a
+       bare array.
+
+    After unwrapping, passes the raw JSON string through :func:`_fix_json_escapes`
+    before calling ``json.loads`` so that models that emit ``\\(`` or ``\\'``
+    do not cause an ``Invalid JSON`` validation error.
+    """
+    import json as _json  # noqa: PLC0415
+    import re  # noqa: PLC0415
+
+    text = (content or "").strip()
+
+    # 1. Strip markdown code fences if present.
+    md = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+    if md:
+        text = md.group(1).strip()
+
+    # 2. Fix invalid escape sequences before parsing.
+    text = _fix_json_escapes(text)
+
+    # 3. Parse — if it fails, try stripping markdown link syntax from string
+    # values.  Models that include [text](url "title") in excerpts produce
+    # unescaped double-quotes that break JSON parsing.  We normalise all
+    # markdown links inside JSON string values to just their display text.
+    def _strip_md_links(raw: str) -> str:
+        """Replace [display](url "title") → display inside JSON strings.
+
+        The URL in a markdown link can itself contain parentheses (e.g.
+        ``./Curie_(Paris)``).  The inner pattern handles one level of nesting.
+
+        IMPORTANT: The display text pattern ``[^"\\]\\n]*`` excludes quotes and
+        newlines.  This prevents the regex from accidentally treating the opening
+        ``[`` of the JSON array itself as the start of a markdown link (which
+        would greedily consume the entire JSON structure up to the first ``]``).
+        """
+        return re.sub(
+            r'\[([^"\]\n]*)\]\((?:[^()]|\([^()]*\))*\)',
+            r'\1',
+            raw,
+        )
+
+    parse_error: Exception | None = None
+    for attempt_text in (text, _strip_md_links(text)):
+        try:
+            # Use raw_decode so that trailing content after the root value
+            # (e.g. a leftover markdown fence ```) is silently ignored instead
+            # of raising "Extra data".
+            parsed, _ = _json.JSONDecoder().raw_decode(attempt_text)
+            break
+        except Exception as exc:  # noqa: BLE001
+            parse_error = exc
+            parsed = None
+
+    if parsed is None:
+        # Both JSON parsing attempts failed.  Fall back to field-by-field regex
+        # extraction that ignores the evidence field entirely.  This handles
+        # evidence strings containing markdown links with unescaped quotes that
+        # even _strip_md_links can't fix (e.g. nested/malformed link structures).
+        # Evidence is set to a blank object; char_start/char_end remain 0.
+        field_pat = re.compile(
+            r'"subject"\s*:\s*"([^"]+)"\s*,'
+            r'\s*"predicate"\s*:\s*"([^"]+)"\s*,'
+            r'\s*"object_value"\s*:\s*"([^"]+)"\s*,'
+            r'\s*"confidence"\s*:\s*([0-9.]+)',
+            re.DOTALL,
+        )
+        parsed = [
+            {
+                "subject": m.group(1),
+                "predicate": m.group(2),
+                "object_value": m.group(3),
+                "confidence": float(m.group(4)),
+                "evidence": {"char_start": 0, "char_end": 0, "excerpt": "", "page_number": None},
+            }
+            for m in field_pat.finditer(text)
+        ]
+        if not parsed:
+            raise ValueError(
+                f"Could not parse LLM JSON response: {parse_error}"
+            ) from parse_error
+        logger.debug(
+            "instructor_extractor: JSON parse failed, fell back to field-by-field "
+            "extraction (%d triples recovered)",
+            len(parsed),
+        )
+
+    # 4. Unwrap object envelope if the model wrapped the array.
+    if isinstance(parsed, dict):
+        for key in ("tasks", "triples", "items", "data", "results", "extractions"):
+            if key in parsed and isinstance(parsed[key], list):
+                parsed = parsed[key]
+                break
+
+    if not isinstance(parsed, list):
+        raise ValueError(
+            f"Expected a JSON array of triples, got {type(parsed).__name__}"
+        )
+
+    return parsed
 
 
 def _apply_token_budget(
@@ -525,16 +673,80 @@ class InstructorExtractor:
             f"{text}"
         )
 
-        response, completion = client.chat.completions.create_with_completion(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": prompt_text},
-                {"role": "user", "content": user_message},
-            ],
-            response_model=list[_TripleIn],
-            **extra_body_kwargs,
-            **mode_kwargs,
-        )
+        # For Ollama/VLLM with MD_JSON mode: bypass instructor's JSON parser and
+        # handle extraction ourselves.  This lets us fix two systematic failure
+        # modes that cause every retry attempt to fail:
+        #   1. Models wrapping the array in {"tasks": [...]} or similar objects.
+        #   2. Invalid JSON escape sequences such as \( inside excerpt strings.
+        # instructor retries make both problems worse (prompt grows 2-4x per try).
+        use_manual_parse = provider in ("ollama", "vllm") and not constrained_decoding
+        if use_manual_parse:
+            from openai import OpenAI as _OpenAI  # noqa: PLC0415
+            raw_client = _OpenAI(base_url=api_base, api_key=api_key)
+            completion = raw_client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": prompt_text},
+                    {"role": "user", "content": user_message},
+                ],
+                **extra_body_kwargs,
+            )
+            raw_content = completion.choices[0].message.content or ""
+            logger.debug(
+                "instructor_extractor: raw completion (%d chars), parsing manually",
+                len(raw_content),
+            )
+            # Dump raw content for debugging when RIVERBANK_DEBUG_LLM is set
+            import os as _os  # noqa: PLC0415
+            if _os.environ.get("RIVERBANK_DEBUG_LLM"):
+                debug_path = _os.environ["RIVERBANK_DEBUG_LLM"]
+                with open(debug_path, "w", encoding="utf-8") as _f:
+                    _f.write(raw_content)
+                logger.info("instructor_extractor: raw LLM output written to %s", debug_path)
+            raw_items = _extract_json_from_content(raw_content)
+            # Normalize evidence field: models vary in their output format:
+            # - Some return evidence as a plain string (coerce to excerpt object)
+            # - Some use short keys like "start"/"end" instead of "char_start"/"char_end"
+            # - Some omit the excerpt field entirely
+            normalized: list[Any] = []
+            for item in raw_items:
+                if not isinstance(item, dict):
+                    continue
+                ev = item.get("evidence")
+                if isinstance(ev, str):
+                    item = {**item, "evidence": {
+                        "char_start": 0,
+                        "char_end": len(ev),
+                        "excerpt": ev,
+                        "page_number": None,
+                    }}
+                elif isinstance(ev, dict):
+                    # Remap short field names to canonical names
+                    if "start" in ev and "char_start" not in ev:
+                        ev = {**ev, "char_start": ev.pop("start")}
+                    if "end" in ev and "char_end" not in ev:
+                        ev = {**ev, "char_end": ev.pop("end")}
+                    if "excerpt" not in ev:
+                        ev = {**ev, "excerpt": ""}
+                    item = {**item, "evidence": ev}
+                elif ev is None:
+                    item = {**item, "evidence": {
+                        "char_start": 0, "char_end": 0,
+                        "excerpt": "", "page_number": None,
+                    }}
+                normalized.append(item)
+            response = [_TripleIn.model_validate(item) for item in normalized]
+        else:
+            response, completion = client.chat.completions.create_with_completion(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": prompt_text},
+                    {"role": "user", "content": user_message},
+                ],
+                response_model=list[_TripleIn],
+                **extra_body_kwargs,
+                **mode_kwargs,
+            )
 
         # v0.12.0: safety cap — keep top-N by confidence, log warning if exceeded
         max_triples: int = extraction_strategy.get("max_triples_per_fragment", 0)
