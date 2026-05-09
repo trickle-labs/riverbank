@@ -786,6 +786,13 @@ class InstructorExtractor:
             # Auto-expand bare subjects (same logic as predicates above).
             if subj and ":" not in subj and not subj.startswith("<"):
                 subj = f"ex:{subj}"
+            # Auto-expand bare object values (entities should be IRIs, not string literals).
+            # If the LLM outputs "Polonium" instead of "ex:Polonium", convert it.
+            # Heuristic: if it's a capitalized word without spaces, treat as entity IRI.
+            if obj and ":" not in obj and not obj.startswith("<"):
+                # Check if it looks like an entity name (starts with capital, no spaces, reasonable length)
+                if obj and obj[0].isupper() and " " not in obj and len(obj) < 100:
+                    obj = f"ex:{obj}"
             # Citation grounding: reject fabricated excerpts.
             # rapidfuzz.partial_ratio finds the best-matching same-length window
             # in the source text, tolerating minor LLM reformatting (decimal
