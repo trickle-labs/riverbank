@@ -69,6 +69,13 @@ editorial_policy:
 
 fragmenter: noop
 
+extraction_strategy:
+  # Biographical documents are dense with named facts: dates, places, people,
+  # awards, relationships, discoveries. Aim for exhaustive coverage.
+  extraction_target:
+    min_triples: 60
+    max_triples: 150
+
 # Preprocessing: NLP backend (sumy + spaCy)
 preprocessing:
   enabled: true

@@ -75,6 +75,14 @@ editorial_policy:
 
 fragmenter: noop
 
+extraction_strategy:
+  # Procedural documents: steps, prerequisites, tools, inputs, outputs,
+  # warnings, expected outcomes. Moderately dense — avoid extracting
+  # boilerplate step numbering as separate triples.
+  extraction_target:
+    min_triples: 40
+    max_triples: 120
+
 # Preprocessing: NLP backend (sumy + spaCy)
 preprocessing:
   enabled: true

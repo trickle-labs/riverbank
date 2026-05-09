@@ -73,6 +73,14 @@ editorial_policy:
 
 fragmenter: noop
 
+extraction_strategy:
+  # Scientific documents: high-precision, fewer but very specific triples
+  # (methods, results, datasets, citations, hypotheses, findings).
+  # Fewer than biographical because precision matters more than volume.
+  extraction_target:
+    min_triples: 30
+    max_triples: 100
+
 # Preprocessing: NLP backend (sumy + spaCy)
 preprocessing:
   enabled: true
