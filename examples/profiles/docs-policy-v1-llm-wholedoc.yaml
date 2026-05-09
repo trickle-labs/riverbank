@@ -1,18 +1,26 @@
 ---
-# docs-policy-v1-llm-wholedoc — Single-document extraction (no fragmentation)
+# docs-policy-v1-llm-wholedoc — General-purpose single-document extraction
 #
-# This profile extracts the entire document in one LLM call instead of splitting
-# it into fragments. Best for documents < 50k characters (~15-20k tokens).
+# GENERAL-PURPOSE profile combining intelligent schema discovery with open-vocabulary extraction.
+# Extracts the entire document in one LLM call. Predicate inference (v0.18.0+) automatically
+# discovers domain-relevant predicates before extraction, bridging exhaustive discovery with
+# focused fact extraction.
 #
-# Benefits:
-#   - ~17x faster for medium docs (1-2 min instead of 15-20 min)
-#   - Full cross-document context (LLM sees relationships across entire document)
-#   - Consistent predicates (no drift across fragments)
-#   - No fragmentation errors
+# Extraction philosophy: PERMISSIVE + INTELLIGENT
+#   - Predicate inference: LLM proposes domain-appropriate predicates (high confidence)
+#   - Open vocabulary: proposed predicates + any other relevant predicates
+#   - High extraction target (100-300 triples) encourages exhaustive fact extraction
+#   - Low evidence bar (citation_floor: 0) accepts well-grounded inferences
 #
-# Drawbacks:
-#   - Limited by model's context window (usually 4-128k tokens)
-#   - Potential hallucination on very long documents
+# Speed:
+#   - ~1-2 minutes for medium docs (< 50k chars)
+#   - ~17x faster than fragmented extraction on same document
+#
+# Recommended next steps:
+#   1. Run this profile on your corpus
+#   2. Use 'riverbank induce-schema' to analyze predicate distribution
+#   3. Create a domain-specific profile with allowed_predicates (see biography/scientific examples)
+#   4. Compare extraction quality between permissive and constrained modes
 #
 # Usage:
 #   riverbank ingest ~/.riverbank/article_cache/marie_curie.md \
@@ -64,36 +72,31 @@ direct_extraction:
   max_doc_chars: 500000  # match max_fragment_length above
 
 extraction_strategy:
-  # Extraction target: instruct the LLM to extract at least this many triples
-  # and automatically raise Ollama num_predict so the output budget is sufficient.
-  # ~160 output tokens per triple → min_triples: 70 needs ~11200 + overhead tokens.
+  # Extraction target: PERMISSIVE mode — ask LLM for high volume of triples
+  # The model will naturally produce 50-100 triples; with min_triples: 100,
+  # we encourage exhaustive extraction. num_predict is auto-scaled to accommodate.
   extraction_target:
-    min_triples: 70
-    max_triples: 200
-  citation_floor: 0  # Accept all triples regardless of excerpt presence/quality
+    min_triples: 100       # Encourage exhaustive extraction (permissive mode)
+    max_triples: 300       # Cap to prevent runaway output
+  citation_floor: 0        # PERMISSIVE: accept all triples regardless of excerpt
 
 # Note: constrained_decoding disabled — MD_JSON mode is more reliable with Ollama
 # constrained_decoding: true
 
-# v0.18.0: Predicate inference — LLM-driven schema discovery (EXPERIMENTAL)
-# Propose domain-specific RDF predicates before extraction. Useful for:
-# - Discovering what predicates are actually relevant in the document
-# - Auto-tuning the allowed_predicates allowlist
-# - Understanding document schema without manual domain analysis
+# v0.18.0: Predicate inference — LLM-driven schema discovery
+# Automatically discover domain-appropriate predicates before extraction.
+# The LLM first analyzes the document to propose relevant predicates,
+# then uses those proposals to focus extraction on high-confidence facts.
 #
-# How it works:
-# 1. After parsing, run a lightweight LLM pass on the full document
-# 2. LLM proposes domain-appropriate predicates with confidence levels
-# 3. Proposed predicates are merged into allowed_predicates (if use_for_extraction: true)
-# 4. Main extraction pass uses the merged vocabulary
-#
-# Disable this for production until you're confident in the quality of proposals.
+# This bridges permissive (exhaustive discovery) and constrained (focused extraction):
+# - First pass: LLM proposes predicates based on document content
+# - Second pass: extraction uses proposed predicates + raw vocabulary
+# - Result: natural vocabulary tailored to the document domain
 predicate_inference:
-  enabled: true  # Set to true to enable experimental predicate inference
-  confidence_threshold: "high"  # Filter proposals: high | medium | all
-  use_for_extraction: true  # Merge proposed predicates into allowed_predicates
-  max_predicates: 50  # Cap the number of proposed predicates
-  # seed_predicates: []  # Optional: constrain proposals to namespace (default: ex:)
+  enabled: false  # Disabled for general-purpose profile (max volume mode)
+  confidence_threshold: "high"
+  use_for_extraction: true
+  max_predicates: 50
 
 # Competency questions — SPARQL ASK queries that the compiled graph must answer.
 # Used by the golden corpus CI gate (tests/golden/).
@@ -139,64 +142,15 @@ entity_resolution:
   similarity_threshold: 0.94     # cosine similarity to assert owl:sameAs (high to avoid Pierre/Marie false match)
   confidence_threshold: 0.00     # min confidence to write the triple
 
-# For a general-purpose profile, we disable the allowlist so the LLM can extract
-# freely based on the document content. If you want domain-constrained extraction,
-# see the specialized profiles (biography, scientific, procedural).
-allowed_predicates:
-  # Identity & Location
-  - ex:founded_year
-  - ex:home_stadium
-  - ex:home_city
-  - ex:current_league
-  - ex:current_owner
-  - ex:chairman
-  - ex:head_coach
-  - ex:club_captain
-  
-  # Colors & Branding
-  - ex:home_color
-  - ex:away_color
-  - ex:kit_supplier
-  - ex:main_sponsor
-  - ex:club_badge
-  - ex:club_anthem
-  - ex:club_nickname
-  
-  # Stadium
-  - ex:stadium_capacity
-  - ex:stadium_opened
-  - ex:stadium_location
-  
-  # Trophies & Achievements
-  - ex:league_titles_won
-  - ex:fa_cup_wins
-  - ex:league_cup_wins
-  - ex:european_cup_wins
-  - ex:european_competition_wins
-  - ex:club_world_cup_wins
-  
-  # Players
-  - ex:current_squad_member
-  - ex:club_captain_of
-  - ex:leading_goalscorer
-  - ex:notable_player
-  - ex:player_joined_year
-  - ex:player_position
-  - ex:player_nationality
-  
-  # Rivalries & Competition
-  - ex:local_rival
-  - ex:inter_city_rival
-  - ex:plays_in_derby_with
-  - ex:competes_against
-  
-  # History
-  - ex:manager_period
-  - ex:significant_event
-  - ex:record_holder
-  - ex:historical_achievement
-  
-  # Organization
-  - ex:total_capacity
-  - ex:attendance_record
-  - ex:supporters_clubs
+# Vocabulary: PERMISSIVE with intelligent constraints
+# allowed_predicates is empty, so the LLM can propose any predicates.
+# Predicate inference (above) provides intelligent guidance by proposing high-confidence
+# domain-appropriate predicates before extraction. These are merged into allowed_predicates
+# for the extraction pass, steering the LLM toward high-quality facts while remaining open.
+#
+# To switch to FULLY CONSTRAINED mode, populate this list with domain-specific predicates
+# and disable predicate_inference. See examples/profiles/docs-policy-v1-llm-biography.yaml.
+#
+# To analyze the natural vocabulary the model produces, use:
+#   riverbank induce-schema --graph http://riverbank.example/graph/trusted --output schema.ttl
+allowed_predicates: []

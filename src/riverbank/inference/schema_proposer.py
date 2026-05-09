@@ -165,11 +165,31 @@ Focus on relationships and attributes, not narrative or background.
                 # Strip markdown code fences if present
                 import re  # noqa: PLC0415
                 content_stripped = content.strip()
-                if content_stripped.startswith("```"):
-                    # Handle markdown code blocks: ```yaml ... ``` or just ``` ... ```
-                    match = re.search(r"```(?:yaml|yml)?\s*\n?([\s\S]*?)\n?```", content_stripped)
+                
+                # Try multiple patterns for markdown fences
+                patterns = [
+                    r"```(?:yaml|yml)?\s*\n([\s\S]*?)\n```",  # With newlines
+                    r"```(?:yaml|yml)?\s*([\s\S]*?)\s*```",    # Without newlines
+                    r"```([\s\S]*?)```",                        # Any fence
+                ]
+                
+                match_found = False
+                for pattern in patterns:
+                    match = re.search(pattern, content_stripped)
                     if match:
                         content_stripped = match.group(1).strip()
+                        match_found = True
+                        break
+                
+                # If no regex match, try manual fallback: strip leading/trailing backticks
+                if not match_found and content_stripped.startswith("```"):
+                    # Manually strip code fences as last resort
+                    lines = content_stripped.split("\n")
+                    if lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].strip() == "```":
+                        lines = lines[:-1]
+                    content_stripped = "\n".join(lines).strip()
                 
                 parsed = yaml.safe_load(content_stripped)
             except yaml.YAMLError as yaml_err:
