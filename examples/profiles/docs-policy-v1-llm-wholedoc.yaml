@@ -95,7 +95,7 @@ extraction_strategy:
 predicate_inference:
   enabled: true
   confidence_threshold: "high"
-  use_for_extraction: true
+  use_for_extraction: false  # Report predicates but don't filter — maximize volume
   max_predicates: 50
 
 # Competency questions — SPARQL ASK queries that the compiled graph must answer.
