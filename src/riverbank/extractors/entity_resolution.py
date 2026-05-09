@@ -171,7 +171,12 @@ class EntityResolutionPass:
 
         def _iri_to_label(iri: str) -> str:
             """Convert an IRI local name to a human-readable embedding input."""
-            local = iri.split(":")[-1] if ":" in iri else iri
+            # Strip full URI: take only the fragment after the last / or #
+            local = iri
+            if iri.startswith("http://") or iri.startswith("https://"):
+                local = re.split(r"[/#]", iri)[-1]
+            elif ":" in iri:
+                local = iri.split(":", 1)[1]
             # Split CamelCase: "MarieCurie" → "Marie Curie"
             label = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", local)
             return label.replace("_", " ").replace("-", " ").strip().lower() or iri
@@ -187,20 +192,54 @@ class EntityResolutionPass:
             logger.warning("EntityResolutionPass: embedding failed: %s", exc)
             return [], 0, 0
 
-        # Pairwise cosine similarity (L2-normalised → dot product == cosine)
+        try:
+            from rapidfuzz import fuzz as _rfuzz  # noqa: PLC0415
+            _have_rapidfuzz = True
+        except ImportError:
+            _have_rapidfuzz = False
+
+        # Pairwise similarity: cosine (semantic) OR hybrid (cosine + edit distance).
+        # Two entities are treated as aliases when EITHER:
+        #   (a) cosine >= similarity_threshold  (tight semantic match), OR
+        #   (b) cosine >= 0.70 AND RapidFuzz token_sort_ratio >= 88
+        #       (catches name variants like Marie/Maria that MiniLM splits as
+        #        different words but spell similarly, while excluding pairs like
+        #        Marie/Pierre that share a surname but differ in the first name).
+        _HYBRID_EMBED_MIN = 0.70
+        _HYBRID_EDIT_MIN = 88  # token_sort_ratio, 0–100
+
         sim_matrix: Any = embeddings @ embeddings.T
         named_graph = getattr(profile, "named_graph", "<trusted>")
         triples: list[ExtractedTriple] = []
 
         for i in range(len(subjects)):
             for j in range(i + 1, len(subjects)):
-                sim = float(sim_matrix[i, j])
-                if sim < similarity_threshold or subjects[i] == subjects[j]:
+                if subjects[i] == subjects[j]:
                     continue
-                excerpt = (
-                    f"embedding similarity {sim:.3f}: "
-                    f"{subjects[i]} \u2261 {subjects[j]}"
-                )[:200]
+                sim = float(sim_matrix[i, j])
+                # Determine match via cosine or hybrid
+                if sim >= similarity_threshold:
+                    confidence = sim
+                    method = f"cosine={sim:.3f}"
+                elif (
+                    _have_rapidfuzz
+                    and sim >= _HYBRID_EMBED_MIN
+                ):
+                    edit_score = _rfuzz.token_sort_ratio(labels[i], labels[j])
+                    if edit_score < _HYBRID_EDIT_MIN:
+                        continue
+                    confidence = (sim + edit_score / 100) / 2
+                    method = f"cosine={sim:.3f} edit={edit_score}"
+                else:
+                    continue
+
+                logger.info(
+                    "EntityResolutionPass: alias detected [%s] %s ≡ %s",
+                    method,
+                    subjects[i],
+                    subjects[j],
+                )
+                excerpt = f"{method}: {subjects[i]} \u2261 {subjects[j]}"[:200]
                 try:
                     evidence = EvidenceSpan(
                         source_iri=source_iri,
@@ -217,7 +256,7 @@ class EntityResolutionPass:
                                 subject=subj,
                                 predicate="owl:sameAs",
                                 object_value=obj,
-                                confidence=sim,
+                                confidence=confidence,
                                 evidence=evidence,
                                 named_graph=named_graph,
                             )

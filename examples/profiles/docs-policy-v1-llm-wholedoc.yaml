@@ -101,3 +101,11 @@ preprocessing:
 verification:
   enabled: true
   backend: "nli"  # Uses cross-encoder/nli-distilroberta-base (no LLM cost)
+
+# Entity resolution: merge aliases with owl:sameAs using embedding similarity
+# e.g. ex:Marie_Curie ≡ ex:Maria_Salomea_Skłodowska-Curie
+entity_resolution:
+  enabled: true
+  backend: "embeddings"          # no LLM cost — uses all-MiniLM-L6-v2
+  similarity_threshold: 0.94     # cosine similarity to assert owl:sameAs (high to avoid Pierre/Marie false match)
+  confidence_threshold: 0.80     # min confidence to write the triple

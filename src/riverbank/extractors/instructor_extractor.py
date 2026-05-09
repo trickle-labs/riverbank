@@ -113,17 +113,37 @@ _STOPWORDS = frozenset({
 def _maybe_entity_iri(obj: str) -> str:
     """Return ``ex:Obj`` when *obj* looks like a proper-noun entity, else *obj* unchanged.
 
-    A string is treated as a named entity (→ IRI) when:
-    - It is not empty and is within a reasonable length (< 120 chars)
-    - Every word is either capitalised or a known stop-word
-    - It does not look like a scalar value (pure digits, date-like strings,
-      contains a colon such as ISO times, starts with a digit)
+    Two surface forms are recognised:
+
+    1. **Title Case phrases** — every word is capitalised or a stop-word:
+       ``"Pierre Curie"`` → ``ex:Pierre Curie``  (spaces normalised by graph writer)
+       ``"Nobel Prize in Physics"`` → ``ex:Nobel Prize in Physics``
+
+    2. **snake_case tokens** — underscores used as word separators, with at least
+       one capitalised component word:
+       ``"woman_to_win_a_Nobel_Prize"`` → ``ex:woman_to_win_a_Nobel_Prize``
+       ``"first_person_to_win_Nobel_Prize_twice"`` → same treatment
+       Pure lower-case snake strings like ``"mobile_radiography_units"`` stay as
+       literals because no component is capitalised.
+
+    Scalars are always rejected: strings starting with a digit, ISO-like strings
+    containing a colon (``"10:30"``), or strings longer than 120 characters.
     """
     if not obj or len(obj) > 120:
         return obj
-    # Reject obvious scalars: starts with digit, looks like a date, contains colon
+    # Reject obvious scalars: starts with digit, contains colon (dates/times)
     if obj[0].isdigit() or ":" in obj:
         return obj
+
+    # --- snake_case branch ---
+    if "_" in obj and " " not in obj:
+        components = obj.split("_")
+        # At least one component must be capitalised to qualify as an entity
+        if any(c and c[0].isupper() for c in components):
+            return f"ex:{obj}"
+        return obj
+
+    # --- Title Case phrase branch ---
     words = obj.split()
     if not words:
         return obj
