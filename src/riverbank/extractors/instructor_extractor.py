@@ -149,6 +149,19 @@ def _maybe_entity_iri(obj: str) -> str:
     if obj[0].isdigit() or ":" in obj:
         return obj
 
+    # Reject markdown bracket artifacts: "[French Academy of Medicine]"
+    # These are leaked link syntax from the source document and should stay
+    # as plain literals rather than being promoted to IRIs.
+    if obj.startswith("[") and obj.endswith("]"):
+        return obj
+
+    # Reject comma-separated compound values: "Irène Joliot-Curie, Ève Curie"
+    # These are two entities that the LLM merged into one string. We cannot
+    # safely split them here (we don't know the split point), so leave as a
+    # literal — the caller should have produced two separate triples.
+    if "," in obj:
+        return obj
+
     # Boolean values: the LLM sometimes outputs True/False as object values for
     # flag-style predicates (e.g. was_first_woman_to_win_nobel_prize → True).
     # Emit as a typed xsd:boolean literal rather than the IRI ex:True.
@@ -947,9 +960,15 @@ class InstructorExtractor:
             # _to_ntriples_term() produces a proper IRI instead of a string literal.
             if pred and ":" not in pred and not pred.startswith("<"):
                 pred = f"ex:{pred}"
-            # Auto-expand bare subjects (same logic as predicates above).
+            # Auto-expand bare subjects: apply the same entity-IRI heuristic used
+            # for objects so that lowercase subjects like "radioactivity" get promoted
+            # to ex:Radioactivity instead of ex:radioactivity (wrong capitalisation)
+            # or blindly prepended with ex: without the Title-Case/snake_case check.
+            # Fall back to bare ex: prefix only if _maybe_entity_iri returns unchanged
+            # (i.e. it looks like a scalar, not an entity name).
             if subj and ":" not in subj and not subj.startswith("<"):
-                subj = f"ex:{subj}"
+                expanded = _maybe_entity_iri(subj)
+                subj = expanded if expanded != subj else f"ex:{subj}"
             # Auto-expand bare object values that look like named entities to IRIs.
             # The LLM is instructed to use ex:, but falls back to bare strings.
             # Heuristic: a proper noun phrase is one where every significant word is
