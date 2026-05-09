@@ -252,6 +252,12 @@ def _build_extraction_target_prompt(base_prompt: str, extraction_strategy: dict)
         "Every named entity, date, award, relationship, discovery, and biographical fact "
         "is a candidate triple."
     )
+    parts.append(
+        "CRITICAL — DO NOT SKIP EVIDENCE: Every single triple MUST include a non-empty "
+        "excerpt field copied verbatim from the source text. "
+        "A triple without an excerpt will be DISCARDED. "
+        "Volume without evidence is worthless — provide both."
+    )
     block = "\n".join(parts)
     return f"{block}\n\n{base_prompt}"
 
