@@ -136,6 +136,12 @@ def _maybe_entity_iri(obj: str) -> str:
     if obj[0].isdigit() or ":" in obj:
         return obj
 
+    # Boolean values: the LLM sometimes outputs True/False as object values for
+    # flag-style predicates (e.g. was_first_woman_to_win_nobel_prize → True).
+    # Emit as a typed xsd:boolean literal rather than the IRI ex:True.
+    if obj.lower() in {"true", "false"}:
+        return f'"{obj.lower()}"^^xsd:boolean'
+
     # Strip trailing disambiguation parentheticals before any further checks.
     # "curie (unit)" → "curie", "Nobel Prize in Physics (1903)" → "Nobel Prize in Physics"
     stripped = re.sub(r"\s*\([^)]+\)\s*$", "", obj).strip()

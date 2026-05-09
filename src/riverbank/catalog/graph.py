@@ -56,6 +56,15 @@ def _to_ntriples_term(term: str) -> str:
     # Full http/https URI without brackets
     if term.startswith("http://") or term.startswith("https://"):
         return f"<{term}>"
+    # Already a typed literal (e.g. "true"^^xsd:boolean) — expand datatype prefix
+    if term.startswith('"') and "^^" in term:
+        value_part, dtype_part = term.rsplit("^^", 1)
+        if ":" in dtype_part and not dtype_part.startswith("<"):
+            prefix, local = dtype_part.split(":", 1)
+            ns = _PREFIXES.get(prefix)
+            if ns:
+                dtype_part = f"<{ns}{local}>"
+        return f"{value_part}^^{dtype_part}"
     # literal: prefix → plain string literal
     if term.startswith("literal:"):
         value = term[len("literal:"):]
