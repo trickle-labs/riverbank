@@ -17,9 +17,11 @@ logger = logging.getLogger(__name__)
 # grounded in the source text.  partial_ratio finds the best matching window of
 # the same length in the longer string, so it tolerates minor LLM reformatting
 # (decimal spacing artefacts, stripped markdown, em-dash variants) while still
-# rejecting outright fabrications.  82 gives ~1 character tolerance per 6 chars,
-# which handles paraphrased but accurate evidence without accepting hallucinations.
-_CITATION_SIMILARITY_THRESHOLD: int = 82
+# rejecting outright fabrications.
+# Set to 78: documents with Markdown table/bullet syntax score 79–81% on valid
+# facts because partial_ratio must align bullet markers ("| * ") that the LLM
+# omits in excerpts.  78 rescues these while still blocking hallucinations.
+_CITATION_SIMILARITY_THRESHOLD: int = 78
 
 
 _DEFAULT_PROMPT = """\
@@ -66,6 +68,13 @@ For each claim, provide:
 - Always return a JSON array, even if empty: []
 - SAFETY: If a subject or object_value is a pronoun (She, He, They, It, Who, Her, His, etc.), SKIP that triple entirely.
 - EXCERPT FORMAT: Write plain text in the excerpt field. If the source text contains markdown links like [text](url "title"), write just the plain text (e.g. "text") — do NOT copy the markdown syntax into the excerpt.
+- OBJECT RULES: The object_value must be the TARGET of the relationship, never a relationship name itself.
+  BAD:  subject=ex:Marie_Curie, predicate=ex:relationship, object_value="married_to"   ← object is a predicate name
+  GOOD: subject=ex:Marie_Curie, predicate=ex:married, object_value=ex:Pierre_Curie
+- ENTITY CAPITALISATION: Always write entity names with proper capitalisation in the ex: prefix.
+  BAD:  ex:mobile_radiography_units, ex:radium_metal, ex:radioactivity
+  GOOD: ex:Mobile_Radiography_Units, ex:Radium_Metal, ex:Radioactivity
+  Rule: if a concept is a named thing (not a plain description), capitalise each content word.
 """
 
 _PERMISSIVE_TIER_GUIDANCE = """\
@@ -105,9 +114,16 @@ _CQ_OBJECTIVES_PREFIX = "EXTRACTION OBJECTIVES (derived from competency question
 
 # Small "function words" that don't disqualify a phrase from being a proper-noun
 # entity even when they appear in lower-case inside a multi-word name.
+# Includes common English prepositions/articles AND generic nouns that routinely
+# follow a proper name ("Curie unit", "Nobel Prize", "Radium Institute").
 _STOPWORDS = frozenset({
     "a", "an", "and", "at", "by", "de", "del", "der", "des", "du", "in",
     "of", "on", "or", "the", "to", "van", "von", "for", "with",
+    # generic nouns commonly trailing a proper-noun head
+    "unit", "units", "metal", "element", "compound", "substance",
+    "institute", "institution", "centre", "center", "service",
+    "award", "medal", "prize", "fund", "foundation", "society",
+    "process", "method", "technique", "theory", "effect",
 })
 
 
@@ -879,7 +895,9 @@ class InstructorExtractor:
             # hallucinated excerpts that share no real overlap with the source.
             if excerpt:
                 sim = _fuzz.partial_ratio(excerpt, text)
-                if sim < _CITATION_SIMILARITY_THRESHOLD:
+                # round() so the comparison matches what %.0f displays: a score
+                # of 77.6 displays as "78%" and should compare as 78, not 77.6.
+                if round(sim) < _CITATION_SIMILARITY_THRESHOLD:
                     triples_citation_rejected += 1
                     logger.warning(
                         "Rejecting triple — excerpt similarity %.0f%% < %d%%: "
