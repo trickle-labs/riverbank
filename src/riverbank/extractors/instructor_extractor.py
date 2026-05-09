@@ -51,7 +51,11 @@ For each claim, provide:
 2. **predicate**: ALWAYS use the ex: prefix — write ex:relatedTo NOT relatedTo
    (e.g. ex:relatedTo, ex:hasProperty, ex:partOf, ex:definedIn)
 3. **object_value**: prefixed IRI for named entities; plain literal for everything else
-   (e.g. "1.0", "active", "metric tonnes")
+   - Named entity (person, place, org, concept, award) → use ex: prefix with underscores
+     e.g. ex:Pierre_Curie, ex:University_of_Paris, ex:Nobel_Prize_in_Physics, ex:Polonium
+   - Scalar value, description, date, measure → plain string
+     e.g. "1934-07-04", "physicist", "66 years old"
+   - RULE: if you would capitalise it as a proper noun, use ex:. If it is a value or description, use a plain string.
 4. **confidence**: float 0.0–1.0 reflecting how clearly the text supports the claim
 5. **evidence**: exact character offsets (char_start, char_end) and verbatim excerpt
 
@@ -97,6 +101,39 @@ _CQ_OBJECTIVES_PREFIX = "EXTRACTION OBJECTIVES (derived from competency question
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+# Small "function words" that don't disqualify a phrase from being a proper-noun
+# entity even when they appear in lower-case inside a multi-word name.
+_STOPWORDS = frozenset({
+    "a", "an", "and", "at", "by", "de", "del", "der", "des", "du", "in",
+    "of", "on", "or", "the", "to", "van", "von", "for", "with",
+})
+
+
+def _maybe_entity_iri(obj: str) -> str:
+    """Return ``ex:Obj`` when *obj* looks like a proper-noun entity, else *obj* unchanged.
+
+    A string is treated as a named entity (→ IRI) when:
+    - It is not empty and is within a reasonable length (< 120 chars)
+    - Every word is either capitalised or a known stop-word
+    - It does not look like a scalar value (pure digits, date-like strings,
+      contains a colon such as ISO times, starts with a digit)
+    """
+    if not obj or len(obj) > 120:
+        return obj
+    # Reject obvious scalars: starts with digit, looks like a date, contains colon
+    if obj[0].isdigit() or ":" in obj:
+        return obj
+    words = obj.split()
+    if not words:
+        return obj
+    # Every word must be capitalised (first letter upper) OR be a stop-word
+    if not all(w[0].isupper() or w.lower() in _STOPWORDS for w in words if w):
+        return obj
+    # At least one content word must be capitalised
+    if not any(w[0].isupper() for w in words if w.lower() not in _STOPWORDS):
+        return obj
+    return f"ex:{obj}"
 
 
 def _build_extraction_focus_prompt(base_prompt: str, extraction_focus: str) -> str:
@@ -786,13 +823,13 @@ class InstructorExtractor:
             # Auto-expand bare subjects (same logic as predicates above).
             if subj and ":" not in subj and not subj.startswith("<"):
                 subj = f"ex:{subj}"
-            # Auto-expand bare object values (entities should be IRIs, not string literals).
-            # If the LLM outputs "Polonium" instead of "ex:Polonium", convert it.
-            # Heuristic: if it's a capitalized word without spaces, treat as entity IRI.
+            # Auto-expand bare object values that look like named entities to IRIs.
+            # The LLM is instructed to use ex:, but falls back to bare strings.
+            # Heuristic: a proper noun phrase is one where every significant word is
+            # capitalised — e.g. "Pierre Curie", "Nobel Prize in Physics", "Polonium".
+            # Small function words (in, of, the, a, an, and, de, van, …) are ignored.
             if obj and ":" not in obj and not obj.startswith("<"):
-                # Check if it looks like an entity name (starts with capital, no spaces, reasonable length)
-                if obj and obj[0].isupper() and " " not in obj and len(obj) < 100:
-                    obj = f"ex:{obj}"
+                obj = _maybe_entity_iri(obj)
             # Citation grounding: reject fabricated excerpts.
             # rapidfuzz.partial_ratio finds the best-matching same-length window
             # in the source text, tolerating minor LLM reformatting (decimal
