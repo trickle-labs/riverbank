@@ -88,15 +88,28 @@
 
 ### Adaptive Auto-Tuning (v0.16.x – v0.18.x)
 
+> **Resequenced 2026-05-09:** The original plan placed measurement (Tier 1 curated
+> ground truth) in v0.18.0, after the full diagnostics, A/B, and orchestration
+> stack. This creates a fundamental problem — the `DiagnosticsEngine` rules for F1,
+> precision, and recall are uncomputable without ground truth, so the entire stack
+> would run blind on Tier 2/3 proxies for three releases. The resequencing pulls
+> Tier 1 ground truth creation into v0.16.0 as a prerequisite (see
+> `eval/ground-truth/`), delivers a simpler A/B mechanism in v0.16.2 before the
+> full SPRT harness, scopes v0.16.1 to threshold sweeps only (deferring OPRO prompt
+> mutation until parallel trial infrastructure exists in v0.17.0), and defers
+> orchestration until at least one successful automated improvement cycle is
+> validated end-to-end.
+
 | Version | Description | Status | Size |
 |---|---|---|---|
-| v0.16.0 | Tuning diagnostics — `DiagnosticsEngine` with 10 priority-ordered rules, corpus drift detection (embedding centroid + JSD), sliding-window metric aggregation with cold-start bootstrap, `_riverbank.tuning_diagnostics` catalog table, `riverbank tuning diagnose` command, Prometheus gauges for F1 and cost-per-triple | Planned | Large |
-| v0.16.1 | Hypothesis generation — `HypothesisGenerator` with five mutation backends (OPRO-style prompt patches, adjacent-step threshold sweeps, evaluation-driven few-shot injection, knowledge-prefix tuning, preprocessing strategy changes), `TriedPatchesRegistry`, `MutationEffectivenessRegistry`, `MutationRegistry` lineage tracking, `riverbank tuning propose` command | Planned | Large |
-| v0.17.0 | A/B testing harness — `CandidateRouter` (consistent-hash cohort assignment), `SignificanceTester` (SPRT sequential testing replacing fixed-sample test), `_riverbank.tuning_experiments` and `tuning_cohorts` catalog tables, `ExperimentPostmortem` auto-generation, promotion and demotion logic, pg-tide event emission on state transitions | Planned | Large |
-| v0.17.1 | Orchestration and scheduling — `TuningOrchestrator` closed loop, `PlateauDetector` with restart strategy, `TuningScheduler` (APScheduler), full `auto_tuning:` profile YAML schema, `riverbank tuning run-once` command, post-promotion recompilation policy, `riverbank tuning stale-sources`, safety guardrails (precision floor, cost ceiling, freeze-on-regression, generation-depth limit, mutation-conflict prevention) | Planned | Large |
-| v0.17.2 | Tuning observability and polish — Perses dashboard panel, `riverbank tuning history` lineage tree, `riverbank tuning pareto` quality×cost frontier, `riverbank tuning insights`, `riverbank tuning rollback` / `freeze` / `unfreeze`, convergence and maintenance mode, new profile onboarding path (`riverbank tuning init`), Langfuse experiment datasets, auto-tuning concepts and how-to documentation | Planned | Large |
-| v0.18.0 | Measurement architecture — `MeasurementStrategy` with full three-tier ground truth pipeline (curated JSONL, Wikidata, noisy-OR bootstrap), human spot-sampling via Label Studio, corpus drift detection integrated into diagnosis, measurement miscalibration detection, per-tier confidence labels on all promotion audit records, `riverbank tuning status` command | Planned | Large |
-| v0.18.1 | Learning from history — `ExperimentPostmortem` analysis, `MutationEffectivenessRegistry` with time-decayed half-life, cross-profile transfer suggestions, `ProposalCalibrator` for hypothesis accuracy self-improvement, multi-property triage with clustering and batch mutation, `riverbank tuning insights` populated from full learning history | Planned | Large |
+| v0.16.0 | Tuning diagnostics — **prerequisite: curated JSONL Tier 1 ground truth** for at least one corpus (`eval/ground-truth/`); `DiagnosticsEngine` with 10 priority-ordered rules operating on Tier 2/3 signals (rejection rate, SHACL, CQ coverage, entity IRI fragmentation) by default; F1/precision/recall rules activate automatically when `evaluation.ground_truth` is configured; corpus drift detection (embedding centroid + JSD); `_riverbank.tuning_diagnostics` catalog table; `riverbank tuning diagnose` | Planned | Large |
+| v0.16.1 | Hypothesis generation (scoped) — threshold sweep automation (citation similarity, confidence routing thresholds); few-shot injection from recall-gap patterns; `TriedPatchesRegistry`; `MutationEffectivenessRegistry`; `riverbank tuning propose`; OPRO-style prompt mutation deferred to v0.18.0 pending parallel trial infrastructure | Planned | Medium |
+| v0.16.2 | Lightweight A/B + fragmentation — simplified profile comparison (rolling average F1 over N fragments, no SPRT); entity IRI fragmentation rate metric (same-entity IRI variant ratio per document); `riverbank tuning compare` for manual side-by-side; promotion on rolling-average significance | Planned | Medium |
+| v0.17.0 | Full A/B testing harness — `CandidateRouter` (consistent-hash cohort assignment), `SignificanceTester` (SPRT sequential testing), `_riverbank.tuning_experiments` and `tuning_cohorts` catalog tables, `ExperimentPostmortem` auto-generation, promotion and demotion logic, pg-tide event emission on state transitions | Planned | Large |
+| v0.17.1 | Measurement Tier 1 full pipeline — `MeasurementStrategy` with complete three-tier ground truth pipeline (curated JSONL, Wikidata, noisy-OR bootstrap); human spot-sampling via Label Studio; measurement miscalibration detection; per-tier confidence labels on all promotion audit records; `riverbank tuning status` | Planned | Large |
+| v0.17.2 | Orchestration and scheduling — `TuningOrchestrator` closed loop (**only after v0.17.0 has demonstrated at least one successful automated improvement cycle end-to-end**); `PlateauDetector` with restart strategy; `TuningScheduler` (APScheduler); full `auto_tuning:` profile YAML schema; `riverbank tuning run-once`; safety guardrails (precision floor, cost ceiling, freeze-on-regression, generation-depth limit, mutation-conflict prevention) | Planned | Large |
+| v0.18.0 | Tuning observability and OPRO — Perses dashboard panel; `riverbank tuning history` lineage tree; `riverbank tuning pareto` quality×cost frontier; `riverbank tuning rollback` / `freeze` / `unfreeze`; new profile onboarding path (`riverbank tuning init`); OPRO-style prompt mutation (now backed by proper parallel trial infrastructure from v0.17.0); auto-tuning how-to docs | Planned | Large |
+| v0.18.1 | Learning from history — `MutationEffectivenessRegistry` with time-decayed half-life; cross-profile transfer suggestions; `ProposalCalibrator` for hypothesis accuracy self-improvement; multi-property triage with clustering and batch mutation; `riverbank tuning insights` populated from full learning history | Planned | Medium |
 
 ---
 

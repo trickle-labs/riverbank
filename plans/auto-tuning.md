@@ -1,10 +1,23 @@
 # riverbank — Adaptive Auto-Tuning
 
-> **Date:** 2026-05-08 · **Revised:** 2026-05-08 (v3)
+> **Date:** 2026-05-08 · **Revised:** 2026-05-09 (v4)
 > **Status:** Strategy document and implementation plan  
 > **Project:** [riverbank](https://github.com/trickle-labs/riverbank)  
 > **Prerequisites:** v0.15.1 (evaluation framework + improvement loops must be stable)  
 > **Target:** v0.16.0 or v1.1.0 (post-stability release)
+
+> **Resequencing note (2026-05-09):** The implementation phasing in the ROADMAP was
+> revised to pull Tier 1 curated ground truth creation earlier — into v0.16.0 as an
+> explicit prerequisite — rather than deferring it to v0.18.0. Without Tier 1 data,
+> the `DiagnosticsEngine` rules for F1/precision/recall are uncomputable and the
+> entire stack operates blind on Tier 2/3 proxies for three releases. Initial Tier 1
+> ground truth for the Marie Curie test corpus is at `eval/ground-truth/marie-curie.jsonl`
+> (45 verified triples, 3 subjects, covering all high-importance predicates).
+> v0.16.1 is scoped down to threshold sweeps only; OPRO prompt mutation moves to
+> v0.18.0 when proper parallel trial infrastructure exists. v0.16.2 introduces a
+> lightweight rolling-average A/B mechanism before the full SPRT harness in v0.17.0.
+> Orchestration (v0.17.2) is gated on at least one successful automated improvement
+> cycle end-to-end. See ROADMAP.md for the updated release table.
 
 ---
 
