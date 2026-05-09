@@ -63,6 +63,14 @@ fragmenter: noop
 direct_extraction:
   max_doc_chars: 500000  # match max_fragment_length above
 
+extraction_strategy:
+  # Extraction target: instruct the LLM to extract at least this many triples
+  # and automatically raise Ollama num_predict so the output budget is sufficient.
+  # ~160 output tokens per triple → min_triples: 70 needs ~11200 + overhead tokens.
+  extraction_target:
+    min_triples: 70
+    max_triples: 200
+
 # Note: constrained_decoding disabled — MD_JSON mode is more reliable with Ollama
 # constrained_decoding: true
 

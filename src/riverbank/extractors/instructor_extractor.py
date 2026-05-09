@@ -210,6 +210,52 @@ def _build_permissive_prompt(base_prompt: str, extraction_strategy: dict) -> str
     return base_prompt
 
 
+def _build_extraction_target_prompt(base_prompt: str, extraction_strategy: dict) -> str:
+    """Inject a quantitative extraction target into the prompt.
+
+    When ``extraction_strategy.extraction_target`` is configured, a directive
+    is prepended to tell the LLM how many triples it should aim for.  Without
+    this, most LLMs stop after ~10-20 "representative" examples instead of
+    scanning every sentence exhaustively.
+
+    Config example (profile YAML)::
+
+        extraction_strategy:
+          extraction_target:
+            min_triples: 50
+            max_triples: 150  # optional cap (also sets max_triples_per_fragment)
+    """
+    target: dict = extraction_strategy.get("extraction_target", {})
+    if not target:
+        return base_prompt
+    min_t: int = int(target.get("min_triples", 0))
+    max_t: int = int(target.get("max_triples", 0))
+    if min_t <= 0 and max_t <= 0:
+        return base_prompt
+    parts = ["EXTRACTION VOLUME REQUIREMENT:"]
+    if min_t > 0 and max_t > 0:
+        parts.append(
+            f"You MUST extract between {min_t} and {max_t} triples. "
+            "Scan every sentence, every clause, every listed fact. "
+            "Do NOT stop early — keep extracting until you reach the minimum."
+        )
+    elif min_t > 0:
+        parts.append(
+            f"You MUST extract at least {min_t} triples. "
+            "Scan every sentence, every clause, every listed fact. "
+            "Do NOT stop early — keep extracting until you reach the minimum."
+        )
+    else:
+        parts.append(f"Extract no more than {max_t} triples, choosing the highest-confidence ones.")
+    parts.append(
+        "This is a dense, information-rich document. "
+        "Every named entity, date, award, relationship, discovery, and biographical fact "
+        "is a candidate triple."
+    )
+    block = "\n".join(parts)
+    return f"{block}\n\n{base_prompt}"
+
+
 def _build_cq_objectives(competency_questions: list[str]) -> str:
     """Transform CQs into EXTRACTION OBJECTIVES block."""
     if not competency_questions:
@@ -609,6 +655,9 @@ class InstructorExtractor:
         # v0.12.0: permissive mode — inject tiered confidence guidance
         prompt_text = _build_permissive_prompt(prompt_text, extraction_strategy)
 
+        # v0.16.0: extraction target — inject quantitative triple-count directive
+        prompt_text = _build_extraction_target_prompt(prompt_text, extraction_strategy)
+
         # v0.17.0: extraction focus — precision vs recall trade-off
         extraction_focus: str = getattr(profile, "extraction_focus", "comprehensive")
         prompt_text = _build_extraction_focus_prompt(prompt_text, extraction_focus)
@@ -732,8 +781,23 @@ class InstructorExtractor:
             mode_kwargs = {}
 
         # Build extra_body for Ollama (keep-alive + optional JSON schema format)
+        # v0.16.0: bump num_predict when an extraction_target is set — default
+        # Ollama num_predict (2048) caps output to ~15 triples; for a min_triples
+        # target of 50 we need ~8000 tokens, for 150 we need ~24000.
         if provider == "ollama":
-            ollama_extra: dict = {"keep_alive": "5m"}
+            _et = extraction_strategy.get("extraction_target", {})
+            _min_t = int(_et.get("min_triples", 0))
+            _max_t = int(_et.get("max_triples", 0))
+            _target_t = _max_t if _max_t > 0 else _min_t
+            # ~160 output tokens per triple (subject+predicate+object+confidence+evidence JSON)
+            _tokens_per_triple = 160
+            _num_predict = max(4096, _target_t * _tokens_per_triple + 512) if _target_t > 0 else 4096
+            ollama_extra: dict = {"keep_alive": "5m", "num_predict": _num_predict}
+            if _target_t > 0:
+                logger.debug(
+                    "instructor_extractor: num_predict set to %d for extraction_target min=%d max=%d",
+                    _num_predict, _min_t, _max_t,
+                )
             if constrained_decoding:
                 # Build JSON Schema for the list-of-triples response type.
                 # Ollama >= 0.5 accepts a JSON Schema object in the `format` field.
@@ -853,7 +917,9 @@ class InstructorExtractor:
             )
 
         # v0.12.0: safety cap — keep top-N by confidence, log warning if exceeded
-        max_triples: int = extraction_strategy.get("max_triples_per_fragment", 0)
+        # v0.16.0: also honour extraction_target.max_triples as the cap
+        _et_max = extraction_strategy.get("extraction_target", {}).get("max_triples", 0)
+        max_triples: int = extraction_strategy.get("max_triples_per_fragment", 0) or int(_et_max)
         triples_capped = 0
         if max_triples > 0 and len(response) > max_triples:
             triples_capped = len(response) - max_triples
