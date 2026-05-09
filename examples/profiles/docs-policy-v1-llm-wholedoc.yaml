@@ -63,10 +63,8 @@ fragmenter: direct
 direct_extraction:
   max_doc_chars: 500000  # match max_fragment_length above
 
-# Constrained decoding: force Ollama to produce valid JSON matching the schema.
-# Without this, gemma4 wraps output in {"tasks":[...]} and fails to escape
-# quotes inside excerpts (e.g. markdown links like [text](url "title")).
-constrained_decoding: true
+# Note: constrained_decoding disabled — MD_JSON mode is more reliable with Ollama
+# constrained_decoding: true
 
 # Competency questions — SPARQL ASK queries that the compiled graph must answer.
 # Used by the golden corpus CI gate (tests/golden/).
