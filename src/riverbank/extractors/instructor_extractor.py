@@ -22,17 +22,10 @@ _CITATION_SIMILARITY_THRESHOLD: int = 82
 
 
 _DEFAULT_PROMPT = """\
-# INSTRUCTION: OUTPUT ONLY VALID JSON ARRAY WITH PROPERLY ESCAPED STRINGS
+# INSTRUCTION: OUTPUT ONLY VALID JSON ARRAY
 You are a knowledge graph compiler. Extract factual claims from the technical document as RDF triples.
 
 **OUTPUT FORMAT:** Respond with ONLY a valid JSON array. Do NOT include any explanatory text before or after the JSON. The JSON must be parseable by Python json.loads().
-
-CRITICAL: All JSON strings, especially the "excerpt" field, must use proper JSON escaping:
-- Backslash: \\
-- Quote: \"
-- Newline: \\n
-- Tab: \\t
-If the text contains markdown links like [text](url "title"), you MUST escape the inner quotes as \\" (backslash followed by double-quote).
 
 ## JSON Schema (Example)
 ```json
@@ -45,7 +38,7 @@ If the text contains markdown links like [text](url "title"), you MUST escape th
     "evidence": {
       "char_start": 0,
       "char_end": 42,
-      "excerpt": "Subject is [related](./related \\"relation\\") to Object",
+      "excerpt": "Subject Entity is related to Object Entity",
       "page_number": null
     }
   }
@@ -189,46 +182,7 @@ def _build_functional_predicate_hints(predicate_constraints: dict) -> str:
     )
 
 
-def _unwrap_json_response(text: str) -> str:
-    """Unwrap JSON responses that gemma4 wraps in extra structure.
-    
-    Gemma4 with MD_JSON mode sometimes returns {"tasks": [...]} or
-    {"$defs": {...}, "tasks": [...]} instead of a bare array. This function
-    extracts the bare array from those wrappings.
-    """
-    import json as _json  # noqa: PLC0415
-    import re  # noqa: PLC0415
-    
-    text = text.strip()
-    if not text:
-        return "[]"
-    
-    # If it's already a bare array, return as-is
-    if text.startswith("[") and text.endswith("]"):
-        return text
-    
-    # Try to parse and extract the array
-    try:
-        parsed = _json.loads(text)
-        # If it has a "tasks" key with a list, extract that list
-        if isinstance(parsed, dict) and "tasks" in parsed and isinstance(parsed["tasks"], list):
-            return _json.dumps(parsed["tasks"])
-        # If it's already a list, return it
-        if isinstance(parsed, list):
-            return _json.dumps(parsed)
-    except Exception:  # noqa: BLE001
-        pass
-    
-    # Last resort: try to extract a JSON array from anywhere in the text
-    match = re.search(r'\[\s*\{.*?\}\s*\]', text, re.DOTALL)
-    if match:
-        return match.group(0)
-    
-    return text
-
-
-
-
+def _estimate_tokens(text: str) -> int:
     """Fast token estimate: byte length / 4 (safe for both tiktoken and Ollama)."""
     return max(1, len(text.encode("utf-8")) // 4)
 
