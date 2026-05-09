@@ -282,7 +282,10 @@ def _build_ontology_constraint(allowed_predicates: list[str], allowed_classes: l
         pred_list = ", ".join(allowed_predicates)
         parts.append(
             f"ONTOLOGY CONSTRAINT — use ONLY these predicates: {pred_list}\n"
-            "If a relationship does not fit any of the above predicates, SKIP IT."
+            "If a relationship does not fit any of the above predicates, SKIP IT.\n"
+            "EVIDENCE REQUIRED: For every triple you DO extract, you MUST still provide "
+            "exact character offsets (char_start, char_end) and a verbatim excerpt from the text. "
+            "Do NOT leave the excerpt field empty."
         )
     if allowed_classes:
         class_list = ", ".join(allowed_classes)
@@ -974,6 +977,11 @@ class InstructorExtractor:
                         "Citation grounding disabled (citation_floor=%d): accepting triple without excerpt: %s %s %s",
                         citation_floor, subj, pred, obj,
                     )
+                    # EvidenceSpan requires a non-empty excerpt; use a synthetic
+                    # marker so the permissive-mode triple can be stored.
+                    excerpt = "[ungrounded]"
+                    cs = 0
+                    ce = len(excerpt)
                 else:
                     triples_citation_rejected += 1
                     logger.warning(

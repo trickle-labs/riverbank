@@ -93,7 +93,7 @@ extraction_strategy:
 # - Second pass: extraction uses proposed predicates + raw vocabulary
 # - Result: natural vocabulary tailored to the document domain
 predicate_inference:
-  enabled: false  # Disabled for general-purpose profile (max volume mode)
+  enabled: true
   confidence_threshold: "high"
   use_for_extraction: true
   max_predicates: 50
