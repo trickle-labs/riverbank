@@ -5,6 +5,7 @@ How-to guides are task-oriented. They answer "how do I do X?" and stop when X is
 | Guide | Task |
 |-------|------|
 | [Write a compiler profile](write-a-compiler-profile.md) | Design and register a profile for your corpus |
+| [Tune extraction quality](tune-extraction-quality.md) | Adjust volume, vocabulary, evidence grounding, SHACL validation, and all other quality levers |
 | [Add a custom extractor](add-a-custom-extractor.md) | Ship a first-party extractor via entry points |
 | [Add a custom parser](add-a-custom-parser.md) | Support a new document format |
 | [Connect a new source](connect-a-new-source.md) | Pull documents from an API or message queue |

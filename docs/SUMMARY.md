@@ -10,11 +10,13 @@
     - [Overview](tutorials/index.md)
     - [Compile a policy corpus](tutorials/compile-a-policy-corpus.md)
     - [Compile a runbook corpus](tutorials/compile-a-runbook-corpus.md)
+    - [How ingest works — deep dive](tutorials/ingestion-deep-dive.md)
     - [Multi-tenant setup](tutorials/multi-tenant-setup.md)
     - [Render a MkDocs site](tutorials/render-a-mkdocs-site.md)
 - How-to guides
     - [Overview](how-to/index.md)
     - [Write a compiler profile](how-to/write-a-compiler-profile.md)
+    - [Tune extraction quality](how-to/tune-extraction-quality.md)
     - [Add a custom extractor](how-to/add-a-custom-extractor.md)
     - [Add a custom parser](how-to/add-a-custom-parser.md)
     - [Connect a new source](how-to/connect-a-new-source.md)
