@@ -231,7 +231,7 @@ class IngestPipeline:
         }
         with tracer.start_as_current_span("ingest_pipeline.run") as span:
             for run_mode in sequence:
-                stats = self._run_inner(corpus_path, profile, dry_run, span, run_mode, progress_callback)
+                stats = self._run_inner(corpus_path, profile, dry_run, span, run_mode, force, progress_callback)
                 for k in combined:
                     combined[k] += stats[k]  # type: ignore[operator]
             span.set_attribute("ingest.fragments_processed", combined["fragments_processed"])
@@ -250,6 +250,7 @@ class IngestPipeline:
         dry_run: bool,
         span: Any,
         mode: str = "full",
+        force: bool = False,
         progress_callback: Callable[[str, dict], None] | None = None,
     ) -> dict:
         from riverbank.connectors.fs import FilesystemConnector  # noqa: PLC0415
@@ -386,6 +387,7 @@ class IngestPipeline:
                             dry_run,
                             stats,
                             mode=mode,
+                            force=force,
                             progress_callback=progress_callback,
                             preprocessor=preprocessor,
                             few_shot_injector=few_shot_injector,
@@ -413,6 +415,7 @@ class IngestPipeline:
         dry_run: bool,
         stats: dict,
         mode: str = "full",
+        force: bool = False,
         progress_callback: Callable[[str, dict], None] | None = None,
         preprocessor: Any = None,
         few_shot_injector: Any = None,
