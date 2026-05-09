@@ -893,32 +893,45 @@ class InstructorExtractor:
             # in the source text, tolerating minor LLM reformatting (decimal
             # spacing, stripped markdown, em-dash variants) while still catching
             # hallucinated excerpts that share no real overlap with the source.
-            if excerpt:
-                sim = _fuzz.partial_ratio(excerpt, text)
-                # round() so the comparison matches what %.0f displays: a score
-                # of 77.6 displays as "78%" and should compare as 78, not 77.6.
-                if round(sim) < _CITATION_SIMILARITY_THRESHOLD:
-                    triples_citation_rejected += 1
-                    logger.warning(
-                        "Rejecting triple — excerpt similarity %.0f%% < %d%%: "
-                        "%s %s %s | excerpt: %r",
-                        sim,
-                        _CITATION_SIMILARITY_THRESHOLD,
-                        subj,
-                        pred,
-                        obj,
-                        excerpt[:80],
-                    )
-                    continue
-                logger.debug(
-                    "Citation OK %.0f%%: %s %s %s | excerpt: %r",
+            if not excerpt or not excerpt.strip():
+                # LLM omitted the excerpt entirely — cannot ground this triple.
+                triples_citation_rejected += 1
+                logger.warning(
+                    "Rejecting triple — no excerpt provided: %s %s %s",
+                    subj, pred, obj,
+                )
+                continue
+            sim = _fuzz.partial_ratio(excerpt, text)
+            # round() so the comparison matches what %.0f displays: a score
+            # of 77.6 displays as "78%" and should compare as 78, not 77.6.
+            if round(sim) < _CITATION_SIMILARITY_THRESHOLD:
+                triples_citation_rejected += 1
+                logger.warning(
+                    "Rejecting triple — excerpt similarity %.0f%% < %d%%: "
+                    "%s %s %s | excerpt: %r",
                     sim,
+                    _CITATION_SIMILARITY_THRESHOLD,
                     subj,
                     pred,
                     obj,
-                    excerpt[:60],
+                    excerpt[:80],
                 )
+                continue
+            logger.debug(
+                "Citation OK %.0f%%: %s %s %s | excerpt: %r",
+                sim,
+                subj,
+                pred,
+                obj,
+                excerpt[:60],
+            )
             try:
+                # Coerce degenerate offsets: the LLM sometimes returns char_end=0
+                # (or char_end <= char_start) when it doesn't know the position.
+                # Use excerpt length as a best-effort span rather than discarding
+                # an otherwise valid triple solely for missing position metadata.
+                if ce <= cs:
+                    ce = cs + max(1, len(excerpt))
                 evidence = EvidenceSpan(
                     source_iri=source_iri,
                     char_start=cs,
@@ -1136,7 +1149,7 @@ class InstructorExtractor:
 
             # Citation grounding check
             excerpt = triple.evidence.get("excerpt", "")
-            if excerpt and _fuzz.partial_ratio(excerpt, text) < _CITATION_SIMILARITY_THRESHOLD:
+            if excerpt and round(_fuzz.partial_ratio(excerpt, text)) < _CITATION_SIMILARITY_THRESHOLD:
                 logger.warning(
                     "Batch extraction: rejecting triple — similarity too low: %r",
                     excerpt[:80],
@@ -1144,10 +1157,14 @@ class InstructorExtractor:
                 continue
 
             try:
+                cs = triple.evidence.get("char_start", 0)
+                ce = triple.evidence.get("char_end", 0)
+                if ce <= cs:
+                    ce = cs + max(1, len(excerpt))
                 evidence = EvidenceSpan(
                     source_iri=source_iri,
-                    char_start=triple.evidence.get("char_start", 0),
-                    char_end=triple.evidence.get("char_end", 0),
+                    char_start=cs,
+                    char_end=ce,
                     excerpt=excerpt,
                     page_number=triple.evidence.get("page_number"),
                 )
