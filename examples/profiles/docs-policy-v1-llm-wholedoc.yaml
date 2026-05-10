@@ -47,7 +47,7 @@ prompt_text: |
   For each claim provide:
   - subject: prefixed IRI (e.g. ex:Marie_Curie)
   - predicate: prefixed IRI (e.g. ex:discovered, ex:collaborated_with)
-  - object_value: prefixed IRI or literal
+  - object_value: prefixed IRI or literal string
   - confidence: float 0.0–1.0
   - evidence: exact character offsets and a verbatim excerpt
 
@@ -57,6 +57,9 @@ prompt_text: |
   - Ignore "See also", "References", "External links", "Notes" sections
   - Only extract claims directly supported by the text
   - Do NOT fabricate evidence
+  - Do NOT wrap entity names or values in square brackets (e.g. "[Arne Slot]")
+  - Object values must be clean strings: use ex:Entity_Name for entity IRIs, plain text for literals
+  - No markdown formatting, no brackets, no special wrapping in object values
 
 editorial_policy:
   min_fragment_length: 50
