@@ -30,8 +30,6 @@ import json
 import logging
 from typing import Any, Optional
 
-import yaml
-
 logger = logging.getLogger(__name__)
 
 
@@ -39,36 +37,41 @@ class SchemaProposer:
     """Propose RDF predicates and classes for a document using an LLM."""
 
     _INFERENCE_PROMPT = """\
-You are an RDF schema designer. Analyze this document and propose domain-specific
-RDF predicates and classes for extracting facts as triples.
+You are an RDF schema designer. Output ONLY valid JSON with NO explanation.
+
+TASK: Analyze this document and propose 3-5 domain-specific RDF predicates.
+
+JSON OUTPUT RULES:
+- Use DOUBLE QUOTES for all strings
+- NO single quotes, NO trailing commas
+- NO newlines inside strings (replace with single space)
+- NO unescaped backslashes in strings
+- NO special characters except ., :, -, _
+- Output ONLY the JSON object, nothing else
+
+RESPONSE (valid JSON only):
+
+{
+  "predicates": [
+    {
+      "name": "ex:founded",
+      "category": "Temporal",
+      "domain": "Organization",
+      "range": "Literal",
+      "confidence": "high",
+      "rationale": "Document mentions when organization was founded."
+    }
+  ]
+}
 
 CONSTRAINTS:
-- Propose 20–50 predicates (reusable across similar documents, not one-off facts)
-- Use prefixed IRIs: ex:predicate_name (lowercase, underscores, descriptive)
-- Avoid generic predicates: ex:hasProperty, ex:relatedTo, ex:hasValue
-- Avoid document-specific predicates: ex:mentioned_in_section_2
-- Each predicate should appear in 2+ triples in this document
-- Group predicates by semantic category (Identity, Temporal, Relationship, etc.)
+- Propose only predicates that appear 2+ times in the document
+- Use lowercase names: ex:predicate_name
+- For category use: Temporal, Relationship, Attribute, Achievement, or Role
+- For confidence use: high, medium, or exploratory (lowercase)
+- For rationale: max 60 characters, one sentence, NO quotes or newlines
 
-RESPONSE FORMAT:
-Output valid YAML with this structure:
-
-predicates:
-  - name: ex:predicate_name
-    category: Identity|Temporal|Attribute|Relationship|Achievement|Role
-    domain: subject type (e.g., Person, Organization, Event)
-    range: object type (e.g., Literal, Date, IRI)
-    confidence: high|medium|exploratory
-    rationale: brief explanation (1-2 sentences)
-
-ANALYSIS STEPS:
-1. Identify primary entity types (person, org, event, thing, etc.)
-2. List key attributes and relationships
-3. Group by semantic category
-4. Propose predicates with rationale
-5. Flag exploratory predicates (lower confidence)
-
-Focus on relationships and attributes, not narrative or background.
+ACTION: Output ONLY JSON starting with { and ending with }.
 """
 
     def __init__(self, settings: Any = None) -> None:
@@ -160,17 +163,18 @@ Focus on relationships and attributes, not narrative or background.
 
             logger.debug("Predicate inference response: %s", content[:500])
 
-            # Parse YAML from the response
+            # Parse JSON from the response with aggressive error recovery
+            parsed = {}
             try:
                 # Strip markdown code fences if present
                 import re  # noqa: PLC0415
                 content_stripped = content.strip()
                 
-                # Try multiple patterns for markdown fences
+                # Try multiple patterns for markdown fences (json, code, or no fence)
                 patterns = [
-                    r"```(?:yaml|yml)?\s*\n([\s\S]*?)\n```",  # With newlines
-                    r"```(?:yaml|yml)?\s*([\s\S]*?)\s*```",    # Without newlines
-                    r"```([\s\S]*?)```",                        # Any fence
+                    r"```(?:json)?\s*\n([\s\S]*?)\n```",  # With newlines
+                    r"```(?:json)?\s*([\s\S]*?)\s*```",    # Without newlines
+                    r"```([\s\S]*?)```",                    # Any fence
                 ]
                 
                 match_found = False
@@ -191,11 +195,54 @@ Focus on relationships and attributes, not narrative or background.
                         lines = lines[:-1]
                     content_stripped = "\n".join(lines).strip()
                 
-                parsed = yaml.safe_load(content_stripped)
-            except yaml.YAMLError as yaml_err:
-                logger.warning(
-                    "Failed to parse predicate inference YAML response: %s",
-                    yaml_err,
+                # First attempt: direct JSON parse
+                try:
+                    parsed = json.loads(content_stripped)
+                except json.JSONDecodeError as e1:
+                    # Second attempt: extract JSON object and repair common issues
+                    json_match = re.search(r"\{[\s\S]*\}", content_stripped)
+                    if json_match:
+                        json_str = json_match.group(0)
+                        try:
+                            # Try parsing the extracted JSON
+                            parsed = json.loads(json_str)
+                        except json.JSONDecodeError:
+                            # Third attempt: replace unescaped newlines with spaces
+                            json_str = re.sub(r'([^\\])\n', r'\1 ', json_str)
+                            try:
+                                parsed = json.loads(json_str)
+                            except json.JSONDecodeError as e2:
+                                # Fourth attempt: try to salvage predicates using regex
+                                logger.debug(
+                                    "JSON parse failed twice: %s, %s. Attempting regex extraction.",
+                                    e1, e2
+                                )
+                                # Extract individual predicate objects using regex
+                                pred_pattern = r'"name"\s*:\s*"([^"]*)"[^}]*?"confidence"\s*:\s*"(high|medium|exploratory)"'
+                                matches = re.findall(pred_pattern, content_stripped, re.DOTALL)
+                                if matches:
+                                    parsed = {
+                                        "predicates": [
+                                            {
+                                                "name": name,
+                                                "confidence": conf,
+                                            }
+                                            for name, conf in matches
+                                        ]
+                                    }
+                                    logger.info(
+                                        "Salvaged %d predicates from malformed JSON via regex",
+                                        len(matches),
+                                    )
+                                else:
+                                    raise
+                    else:
+                        raise
+                        
+            except (json.JSONDecodeError, ValueError) as json_err:
+                logger.debug(
+                    "Failed to parse predicate inference response: %s (predicate inference is optional, ingest continues)",
+                    json_err,
                 )
                 parsed = {}
 
