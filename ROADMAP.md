@@ -86,7 +86,7 @@
 | v0.15.0 | Wikidata evaluation framework — `riverbank evaluate-wikidata` command (single article or full dataset), 1,000-article benchmark dataset (7 domains), property alignment table, entity resolution pipeline, calibration curves, per-domain and per-property breakdowns | **Done** | Large |
 | v0.15.1 | Extraction improvement loop — per-property recall gap analysis, extraction prompt tuning from failure modes, 200+ novel-discovery annotations, published evaluation methodology | **Done** | Medium |
 | v0.15.2 | Document distillation step — optional pre-fragmentation content-selection step with six configurable strategies (`boilerplate_removal`, `aggressive`, `moderate`, `conservative`, `section_aware`, `budget_optimized`); on-disk cache keyed by content hash + strategy; `boilerplate_removal` is deterministic (zero LLM cost); all strategies preserve the original content hash for downstream deduplication; new run stats: `distillation_calls`, `distillation_cache_hits`, `distillation_bytes_removed`, `distillation_strategy_used` | **Done** | Medium |
-| v0.15.3 | Vocabulary normalisation pass — post-extraction pass converting categorical string literals to IRI resources (`"Head coach"` → `roles:HeadCoach`), collapsing fragmented predicate clusters to canonical form (`ex:is_forward` / `ex:is_goalkeeper` → `ex:position` + `positions:*`), decomposing fact-stuffed predicate names into structured triples, and optionally rewriting entity URIs to canonical form after `owl:sameAs` resolution; deterministic and LLM-guided backends; new stats: `vocab_literals_promoted`, `vocab_predicates_collapsed`, `vocab_facts_decomposed` | Planned | Medium |
+| v0.15.3 | Vocabulary normalisation pass — post-extraction pass (domain-agnostic) converting repeated categorical string literals to IRI resources (`"Director"` → `vocab:Director`, `"Approved"` → `vocab:Approved`), collapsing fragmented predicate clusters to canonical form (`ex:is_director` / `ex:is_ceo` / `ex:is_chair` → `ex:holds_role` + `vocab:*`), decomposing fact-stuffed predicate names into structured triples with qualifier predicates, and optionally rewriting entity URIs to canonical form after `owl:sameAs` resolution; deterministic and LLM-guided backends; new stats: `vocab_literals_promoted`, `vocab_predicates_collapsed`, `vocab_facts_decomposed`, `vocab_uris_rewritten` | Planned | Medium |
 
 ### Adaptive Auto-Tuning (v0.16.x – v0.17.x)
 
@@ -356,70 +356,127 @@ on the second ingest run. All strategies are covered by unit tests with a mock L
 
 Goal: add a post-extraction pass that converts **categorical string literals to
 first-class IRI resources** and collapses the ad-hoc predicate vocabulary the LLM
-produces into a tighter, semantically consistent schema.
+produces into a tighter, semantically consistent schema. The pass is fully generic —
+it operates on the triple buffer and has no knowledge of the subject domain.
 
 **Motivation:** Open-vocabulary extraction (v0.15.2 and earlier) produces output
-where the same concept appears in multiple forms:
+where the same concept appears in multiple forms across any corpus:
 
-- Staff roles as string literals: `"Head coach"`, `"Lead physical performance coach"` — should be IRIs: `roles:HeadCoach`
-- Player positions as short-code IRIs: `ex:GK`, `ex:FW`, `ex:MF`, `ex:DF` — should be `positions:Goalkeeper` etc.
-- Entity URI variations: `Liverpool_Football_Club` / `Liverpool_FC` / `Liverpool_team` / `Liverpool` all refer to the same club (entity resolution merges these with `owl:sameAs`, but the subject URIs remain fragmented)
-- Predicate sprawl: `ex:is`, `ex:is_forward`, `ex:is_goalkeeper`, `ex:is_defender` — should be a single `ex:position` predicate pointing to a controlled vocabulary IRI
-- Fact-embedded predicates: `ex:won_FA_Cup_first_time`, `ex:won_top_flight_title_2019` — encode the fact in the predicate name rather than as a structured triple
+- **Categorical literals** — bounded-category strings used as object values instead
+  of IRIs: `"Head coach"`, `"Director"`, `"Approved"`, `"Published"`, `"Mammal"`.
+  These can't be queried by type or joined across documents without string matching.
+- **Opaque short-code IRIs** — terse codes used as objects: `ex:GK`, `ex:FW`,
+  `ex:USD`, `ex:Q3`. Semantically equivalent to literals but harder to read.
+- **Predicate sprawl** — the LLM generates one predicate per surface form instead
+  of one canonical predicate with a typed object: `ex:is_director`,
+  `ex:is_ceo`, `ex:is_chair` instead of `ex:holds_role roles:Director` etc.
+- **Fact-stuffed predicate names** — the specific fact is encoded in the predicate
+  name rather than as a structured triple: `ex:won_award_2019`, `ex:joined_board_q3`
+  instead of `ex:won_award` with `ex:year "2019"`.
+- **Entity URI fragmentation** — surface-form variations produce distinct URIs for
+  the same entity (`ex:Marie_Curie` / `ex:Marie_Sklodowska_Curie` / `ex:M_Curie`).
+  Entity resolution writes `owl:sameAs` links but leaves the subject URIs unfused.
 
-These issues are **expected** for unstructured permissive extraction but limit
-downstream usability: you can't reliably query "all coaches", count role types, or
-join across corpora.
+These issues are **expected** for permissive extraction but limit downstream
+usability: you can't aggregate by role, count category members, or join across
+corpora without domain-specific post-processing code.
 
 ---
 
 **Planned normalisations:**
 
-**1. Categorical literal → IRI (role normalisation)**
+**1. Categorical literal → IRI**
 
-Detect string-valued objects that appear across multiple triples and represent a
-bounded category (roles, positions, status codes, nationalities). Convert to IRI:
+Detect string-valued objects that represent a bounded category: the same literal
+appears as an object in ≥ N triples (configurable threshold). Generate an IRI and
+rewrite all occurrences:
 
 ```
-ex:Arne_Slot  ex:is  "Head coach"
-→  ex:Arne_Slot  ex:holds_role  roles:HeadCoach
+# Any domain — roles
+ex:Alice      ex:is        "Director"
+ex:Bob        ex:is        "Chief Executive Officer"
+→  ex:Alice   ex:holds_role  vocab:Director
+→  ex:Bob     ex:holds_role  vocab:ChiefExecutiveOfficer
+
+# Any domain — status values
+ex:Proposal_A  ex:status  "Approved"
+ex:Proposal_B  ex:status  "Approved"
+→  ex:Proposal_A  ex:status  vocab:Approved
+
+# Any domain — taxonomic classification
+ex:Tiger  ex:classification  "Mammal"
+→  ex:Tiger  ex:classification  vocab:Mammal
 ```
 
-Detection heuristic: same object literal appears in ≥ 2 triples with the same predicate.
+Detection heuristic: same object literal appears in ≥ 2 triples sharing the same
+predicate. The generated IRI is `<vocabulary_namespace>` +
+`CamelCase(literal_value)`.
 
 **2. Predicate vocabulary collapse**
 
-Detect predicate clusters with shared semantic root and collapse to canonical form:
+Detect predicate clusters with a shared semantic root — either by edit-distance on
+the local name or by LLM classification — and collapse to a canonical predicate with
+a typed object:
 
 ```
-ex:is_forward, ex:is_goalkeeper, ex:is_defender, ex:is_midfielder
-→  ex:position  (with IRI object: positions:Forward, positions:Goalkeeper, …)
+# Any domain — roles encoded as predicates
+ex:is_director, ex:is_ceo, ex:is_chair, ex:is_manager
+→  ex:holds_role  (with IRI object: vocab:Director, vocab:CEO, …)
 
-ex:won_FA_Cup_first_time, ex:won_league_titles_era, ex:won_european_cups
-→  ex:won_title  (with structured object triple or qualifier)
+# Any domain — award/achievement predicates
+ex:won_award_2019, ex:received_prize_2021, ex:honoured_with_medal
+→  ex:received_award  (with ex:year qualifier)
+
+# Any domain — membership/affiliation predicates
+ex:joined_board_q3, ex:became_member_2020
+→  ex:member_of  (with ex:date qualifier)
 ```
 
-Collapse rules are either:
-- **Deterministic** — regex/edit-distance on predicate name patterns
-- **LLM-guided** — single call asks "which of these predicates are synonyms?"
-  using the induced schema from `riverbank induce-schema`
+Collapse backends:
+- **Deterministic** — regex on predicate local name + edit-distance clustering
+- **LLM-guided** — single prompt: "group these predicates by semantic equivalence"
+  on the induced schema from `riverbank induce-schema`
 
 **3. Fact-stuffed predicate decomposition**
 
-Detect predicates where the fact is embedded in the predicate name rather than
-structured as a proper triple:
+Detect predicates where a qualifier (year, date, amount, rank) is embedded in the
+predicate name. Decompose to a canonical predicate + qualifier triple:
 
 ```
-ex:won_FA_Cup_first_time  →  ex:won_title  ex:FA_Cup  (with ex:year "1965")
-ex:acquired_club_on       →  ex:acquired   (with ex:date, ex:price as qualifiers)
+# Date/year embedded in predicate
+ex:acquired_company_in_2022
+→  ex:acquired  (with ex:year "2022")
+
+ex:appointed_ceo_on_15_march
+→  ex:appointed  (with ex:date "15 March")
+
+# Ordinal/rank embedded in predicate
+ex:won_third_championship
+→  ex:won_championship  (with ex:ordinal "3")
 ```
+
+Decomposition is deterministic: regex matches known qualifier patterns
+(`_in_YYYY`, `_on_DATE`, `_first_`, `_second_`, `_NNth_`) and strips them,
+emitting the qualifier as a separate triple.
 
 **4. Entity URI canonicalisation (complement to entity resolution)**
 
 After entity resolution writes `owl:sameAs` links, optionally rewrite all
-non-canonical subject URIs to the canonical one. This supplements the existing
-embedding-similarity `owl:sameAs` pass (v0.15.1) with a predicate-rewrite step
-so queries don't need to follow `owl:sameAs` chains.
+non-canonical subject URIs to the single canonical URI chosen by the resolution
+pass. This supplements the existing embedding-similarity `owl:sameAs` pass so
+downstream SPARQL queries don't need to follow `owl:sameAs` chains:
+
+```
+# owl:sameAs chain written by entity_resolution
+ex:Marie_Curie      owl:sameAs  ex:Maria_Sklodowska_Curie
+ex:Maria_Sklodowska_Curie  owl:sameAs  ex:M_Curie
+
+# vocabulary_normalisation rewrites all triples to canonical form
+ex:M_Curie  ex:discovered  ex:Polonium
+ex:Maria_Sklodowska_Curie  ex:born_in  "Warsaw"
+→  ex:Marie_Curie  ex:discovered  ex:Polonium
+→  ex:Marie_Curie  ex:born_in  "Warsaw"
+```
 
 ---
 
@@ -428,11 +485,12 @@ so queries don't need to follow `owl:sameAs` chains.
 ```yaml
 vocabulary_normalisation:
   enabled: true
-  categorical_threshold: 2      # min occurrences to consider a literal categorical
-  collapse_predicates: true     # merge predicate clusters to canonical forms
+  categorical_threshold: 2          # min occurrences to consider a literal categorical
+  collapse_predicates: true         # merge predicate clusters to canonical forms
   predicate_collapse_backend: "deterministic"  # deterministic | llm
-  rewrite_canonical_uris: false # requires entity_resolution.enabled: true
-  vocabulary_namespace: "http://riverbank.example/vocab/"  # IRI base for generated roles
+  decompose_stuffed_predicates: true # strip embedded qualifiers from predicate names
+  rewrite_canonical_uris: false     # requires entity_resolution.enabled: true
+  vocabulary_namespace: "http://riverbank.example/vocab/"  # IRI base for generated terms
 ```
 
 **Pipeline position:**
@@ -449,19 +507,22 @@ so no database round-trip is needed.
 **Implementation plan:**
 
 - `src/riverbank/vocabulary/__init__.py` — `VocabularyNormalisationPass`
-- `CategoricalDetector` — counts literal values per predicate; flags categorical candidates
-- `PredicateCollapser` — deterministic edit-distance collapse + optional LLM collapse
-- `FactDecomposer` — detects fact-stuffed predicate names, decomposes to structured triples
-- Stats: `vocab_literals_promoted`, `vocab_predicates_collapsed`, `vocab_facts_decomposed`
+- `CategoricalDetector` — counts literal values per predicate; flags categorical candidates above threshold
+- `PredicateCollapser` — edit-distance clustering + optional LLM grouping; emits canonical predicate map
+- `FactDecomposer` — regex-based detection of embedded qualifiers; decomposes to structured triples
+- `URICanonicaliser` — rewrites non-canonical subject URIs using the `owl:sameAs` graph written by entity resolution
+- Stats: `vocab_literals_promoted`, `vocab_predicates_collapsed`, `vocab_facts_decomposed`, `vocab_uris_rewritten`
 
 ---
 
-**Exit criterion:** ingesting the Liverpool F.C. Wikipedia article with `strategy: moderate`
-and `vocabulary_normalisation.enabled: true` produces:
-- All staff roles as `roles:*` IRIs, not string literals
-- All player positions as `positions:*` IRIs via a single `ex:position` predicate
-- No predicate name encodes the specific fact (e.g. `ex:won_FA_Cup_first_time` → decomposed)
-- All 4 normalisations covered by unit tests with deterministic and mock-LLM backends
+**Exit criterion:** three unit-test corpora covering different domains (organisational,
+scientific, biographical) are processed with `vocabulary_normalisation.enabled: true`
+and each produces:
+- Repeated categorical literals replaced by `vocab:*` IRIs (threshold ≥ 2)
+- Predicate clusters collapsed to canonical form under both deterministic and mock-LLM backends
+- Embedded qualifiers stripped from predicate names and emitted as separate triples
+- Entity URI canonicalisation rewrites all non-canonical subject URIs when enabled
+- All 4 normalisations covered by unit tests with no domain-specific hardcoding
 
 ---
 
