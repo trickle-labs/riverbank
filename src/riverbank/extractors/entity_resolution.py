@@ -284,11 +284,9 @@ class EntityResolutionPass:
     ) -> tuple[list[ExtractedTriple], int, int]:
         """Call the LLM for a single batch of entity IRIs."""
         try:
-            import instructor  # noqa: PLC0415
-            from openai import OpenAI  # noqa: PLC0415
             from pydantic import BaseModel, Field as PydField  # noqa: PLC0415
         except ImportError:
-            logger.debug("EntityResolutionPass: instructor/openai/pydantic not available")
+            logger.debug("EntityResolutionPass: pydantic not available")
             return [], 0, 0
 
         class _EquivalencePair(BaseModel):
