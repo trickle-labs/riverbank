@@ -14,10 +14,17 @@ to constrain the main extraction pass.
 
     predicate_inference:
       enabled: true
-      confidence_threshold: "high"  # Filter by confidence: high|medium|all
+      confidence_threshold: "medium"  # Confidence levels: all|high|medium|low
       seed_predicates: []  # Optional: constrain to namespace
       use_for_extraction: true  # Merge proposed predicates into allowed_predicates
       max_predicates: 50
+
+Confidence thresholds (per LLM proposal confidence levels: high, medium, exploratory)::
+
+    "all"     → Accept all proposals (high + medium + exploratory)
+    "high"    → Accept only high confidence proposals (strictest)
+    "medium"  → Accept high and medium confidence (recommended)
+    "low"     → Accept all proposals: high + medium + exploratory (same as "all")
 
 CLI (future)::
 
@@ -263,14 +270,23 @@ ACTION: Output ONLY JSON starting with { and ending with }.
                         if isinstance(pred_item, dict):
                             name = pred_item.get("name", "")
                             conf = pred_item.get("confidence", "medium")
-                            # Filter by confidence
-                            if confidence_threshold == "all" or (
-                                confidence_threshold == "high" and conf == "high"
-                            ) or (
-                                confidence_threshold in ("high", "medium")
-                                and conf in ("high", "medium")
-                            ):
+                            # Filter by confidence threshold
+                            if confidence_threshold == "all":
+                                # Accept all confidence levels
                                 predicates.append(name)
+                            elif confidence_threshold == "high":
+                                # Accept only high confidence
+                                if conf == "high":
+                                    predicates.append(name)
+                            elif confidence_threshold == "medium":
+                                # Accept high and medium confidence
+                                if conf in ("high", "medium"):
+                                    predicates.append(name)
+                            elif confidence_threshold == "low":
+                                # Accept high, medium, and exploratory (all levels)
+                                if conf in ("high", "medium", "exploratory"):
+                                    predicates.append(name)
+                            if name in predicates:
                                 logger.debug("Proposed predicate: %s (confidence=%s)", name, conf)
 
             # Optional: extract classes if present in response
