@@ -385,13 +385,61 @@ def ingest(
         table.add_row("Triples per kB", f"{triples_per_kb:.2f}")
 
     table.add_row("", "")  # spacer
-    table.add_row("LLM calls", str(stats["llm_calls"]))
-    table.add_row("Prompt tokens", str(stats["prompt_tokens"]))
-    table.add_row("Completion tokens", str(stats["completion_tokens"]))
+    
+    # Main extraction pass
+    table.add_row("[bold]Extraction (LLM)[/bold]", "")
+    table.add_row("  LLM calls", str(stats["llm_calls"]))
+    table.add_row("  Prompt tokens", str(stats["prompt_tokens"]))
+    table.add_row("  Completion tokens", str(stats["completion_tokens"]))
+    
+    # Distillation (pre-extraction content selection)
+    if stats.get("distillation_runs", 0) > 0:
+        table.add_row("[bold]Distillation (pre-extraction)[/bold]", "")
+        table.add_row("  Distillation runs", str(stats["distillation_runs"]))
+        if stats.get("distillation_cache_hits", 0) > 0:
+            table.add_row("  Cache hits", str(stats["distillation_cache_hits"]))
+        if stats.get("distillation_bytes_removed", 0) > 0:
+            kb = stats["distillation_bytes_removed"] / 1024
+            table.add_row("  Bytes removed", f"{kb:.1f} kB")
+    
+    # Preprocessing (NLP-based summarization and NER)
     if stats.get("preprocessing_calls", 0) > 0:
-        table.add_row("Preprocessing calls", str(stats["preprocessing_calls"]))
-        table.add_row("Preprocessing prompt tokens", str(stats.get("preprocessing_prompt_tokens", 0)))
-        table.add_row("Preprocessing completion tokens", str(stats.get("preprocessing_completion_tokens", 0)))
+        table.add_row("[bold]Preprocessing (NLP)[/bold]", "")
+        table.add_row("  Preprocessing calls", str(stats["preprocessing_calls"]))
+        table.add_row("  Preprocessing prompt tokens", str(stats.get("preprocessing_prompt_tokens", 0)))
+        table.add_row("  Preprocessing completion tokens", str(stats.get("preprocessing_completion_tokens", 0)))
+    
+    # Predicate inference (schema discovery)
+    if stats.get("predicate_inference_calls", 0) > 0:
+        table.add_row("[bold]Predicate inference (schema discovery)[/bold]", "")
+        table.add_row("  Predicate inference calls", str(stats["predicate_inference_calls"]))
+        if stats.get("predicate_inference_proposed", 0) > 0:
+            table.add_row("  Predicates proposed", str(stats["predicate_inference_proposed"]))
+    
+    # Entity resolution (alias detection and owl:sameAs)
+    if stats.get("entity_resolution_calls", 0) > 0:
+        table.add_row("[bold]Entity resolution (alias detection)[/bold]", "")
+        table.add_row("  Entity resolution calls", str(stats["entity_resolution_calls"]))
+        if stats.get("entity_resolution_triples", 0) > 0:
+            table.add_row("  owl:sameAs triples written", str(stats["entity_resolution_triples"]))
+    
+    # Vocabulary normalisation (post-extraction pass)
+    _vocab_total = sum(stats.get(k, 0) for k in (
+        "vocab_literals_promoted", "vocab_predicates_collapsed",
+        "vocab_facts_decomposed", "vocab_uris_rewritten"
+    ))
+    if _vocab_total > 0:
+        table.add_row("[bold]Vocabulary normalisation (post-extraction)[/bold]", "")
+        if stats.get("vocab_literals_promoted", 0) > 0:
+            table.add_row("  Literals promoted to IRIs", str(stats["vocab_literals_promoted"]))
+        if stats.get("vocab_predicates_collapsed", 0) > 0:
+            table.add_row("  Predicates collapsed", str(stats["vocab_predicates_collapsed"]))
+        if stats.get("vocab_facts_decomposed", 0) > 0:
+            table.add_row("  Stuffed facts decomposed", str(stats["vocab_facts_decomposed"]))
+        if stats.get("vocab_uris_rewritten", 0) > 0:
+            table.add_row("  URIs rewritten (aliases)", str(stats["vocab_uris_rewritten"]))
+    
+    table.add_row("", "")  # spacer
     table.add_row("Estimated cost (USD)", f"{stats['cost_usd']:.6f}")
     table.add_row("Errors", str(stats["errors"]))
 

@@ -239,6 +239,7 @@ class IngestPipeline:
             "triples_citation_rejected": 0,
             "triples_invalid": 0,
             # v0.15.2: document distillation
+            "distillation_runs": 0,
             "distillation_calls": 0,
             "distillation_cache_hits": 0,
             "distillation_prompt_tokens": 0,
@@ -250,6 +251,9 @@ class IngestPipeline:
             "vocab_predicates_collapsed": 0,
             "vocab_facts_decomposed": 0,
             "vocab_uris_rewritten": 0,
+            # v0.18.0: predicate inference
+            "predicate_inference_calls": 0,
+            "predicate_inference_proposed": 0,
         }
         with tracer.start_as_current_span("ingest_pipeline.run") as span:
             for run_mode in sequence:
@@ -328,6 +332,7 @@ class IngestPipeline:
             "triples_citation_rejected": 0,
             "triples_invalid": 0,
             # v0.15.2: document distillation
+            "distillation_runs": 0,
             "distillation_calls": 0,
             "distillation_cache_hits": 0,
             "distillation_prompt_tokens": 0,
@@ -339,6 +344,9 @@ class IngestPipeline:
             "vocab_predicates_collapsed": 0,
             "vocab_facts_decomposed": 0,
             "vocab_uris_rewritten": 0,
+            # v0.18.0: predicate inference
+            "predicate_inference_calls": 0,
+            "predicate_inference_proposed": 0,
             # Corpus size for yield metrics
             "corpus_bytes": 0,
         }
@@ -503,6 +511,7 @@ class IngestPipeline:
                             mime_type=source.mime_type,
                         )
                         doc = parser.parse(_distilled_source)
+                    stats["distillation_runs"] += 1
                     stats["distillation_calls"] += _distill_result.llm_calls
                     stats["distillation_cache_hits"] += 1 if _distill_result.cache_hit else 0
                     stats["distillation_prompt_tokens"] += _distill_result.prompt_tokens
@@ -569,6 +578,8 @@ class IngestPipeline:
                 proposed_predicates = inference_result.get("allowed_predicates", [])
                 use_for_extraction = predicate_inference_cfg.get("use_for_extraction", False)
 
+                stats["predicate_inference_calls"] += 1
+                stats["predicate_inference_proposed"] += len(proposed_predicates)
                 if proposed_predicates and use_for_extraction:
                     # Merge proposed predicates into profile's allowed_predicates
                     existing = set(getattr(profile, "allowed_predicates", []))
