@@ -53,7 +53,7 @@ prompt_text: |
 
   IMPORTANT:
   - Do NOT extract Wikipedia metadata, infoboxes, categories, or templates
-  - Only extract factual claims about entities, events, relationships, discoveries
+  - Only extract factual claims about entities, events, relationships, discoveriews
   - Ignore "See also", "References", "External links", "Notes" sections
   - Only extract claims directly supported by the text
   - Do NOT fabricate evidence
@@ -124,6 +124,10 @@ competency_questions:
         ?s ?p ?o .
       }
 
+distillation:
+  enabled: true
+  strategy: moderate
+  
 # Preprocessing: now free with NLP backend (sumy + spaCy NER)
 # Injects domain summary + entity catalog to guide extraction
 preprocessing:

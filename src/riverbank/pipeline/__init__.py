@@ -93,6 +93,8 @@ class CompilerProfile:
     direct_extraction: dict = field(default_factory=dict)
     # v0.15.2: Document distillation — optional pre-fragmentation content-selection step
     distillation: dict = field(default_factory=dict)
+    # v0.15.3: Vocabulary normalisation — post-extraction categorical/predicate normalisation
+    vocabulary_normalisation: dict = field(default_factory=dict)
     # v0.16.0: Entity resolution — post-extraction owl:sameAs alias merging
     entity_resolution: dict = field(default_factory=dict)
     # v0.17.0: Extraction focus — precision vs recall trade-off at extraction layer
@@ -243,6 +245,11 @@ class IngestPipeline:
             "distillation_completion_tokens": 0,
             "distillation_bytes_removed": 0,
             "distillation_strategy_used": "",
+            # v0.15.3: vocabulary normalisation
+            "vocab_literals_promoted": 0,
+            "vocab_predicates_collapsed": 0,
+            "vocab_facts_decomposed": 0,
+            "vocab_uris_rewritten": 0,
         }
         with tracer.start_as_current_span("ingest_pipeline.run") as span:
             for run_mode in sequence:
@@ -327,6 +334,11 @@ class IngestPipeline:
             "distillation_completion_tokens": 0,
             "distillation_bytes_removed": 0,
             "distillation_strategy_used": "",
+            # v0.15.3: vocabulary normalisation
+            "vocab_literals_promoted": 0,
+            "vocab_predicates_collapsed": 0,
+            "vocab_facts_decomposed": 0,
+            "vocab_uris_rewritten": 0,
             # Corpus size for yield metrics
             "corpus_bytes": 0,
         }
@@ -678,6 +690,16 @@ class IngestPipeline:
         entity_resolution_cfg: dict = getattr(profile, "entity_resolution", {})
         source_subjects: set[str] = set()
 
+        # v0.15.3: vocabulary normalisation — deferred write when enabled
+        vocab_norm_cfg: dict = getattr(profile, "vocabulary_normalisation", {})
+        vocab_norm_enabled: bool = (
+            vocab_norm_cfg.get("enabled", False)
+            and not dry_run
+            and mode == "full"
+        )
+        # Triple buffer for deferred write; None = immediate per-fragment write (default)
+        vocab_norm_buffer: list | None = [] if vocab_norm_enabled else None
+
         # v0.17.0: Batch extraction disabled (v0.15.1 limitation)
         # Batch mode not working reliably with Gemma/Ollama due to structured output
         # and multiple tool calls limitations. Use per-fragment mode for now.
@@ -844,7 +866,8 @@ class IngestPipeline:
 
                     # Process triples (same logic as per-fragment extraction)
                     frag_subjects = _process_extraction_result(
-                        conn, result, frag, frag_iri, source, profile, mode, stats, tracer, preprocessing_cfg
+                        conn, result, frag, frag_iri, source, profile, mode, stats, tracer, preprocessing_cfg,
+                        triple_buffer=vocab_norm_buffer,
                     )
                     source_subjects.update(frag_subjects)
         else:
@@ -904,7 +927,8 @@ class IngestPipeline:
 
                 # Process the extraction result
                 frag_subjects = _process_extraction_result(
-                    conn, result, frag, frag_iri, source, profile, mode, stats, tracer, preprocessing_cfg
+                    conn, result, frag, frag_iri, source, profile, mode, stats, tracer, preprocessing_cfg,
+                    triple_buffer=vocab_norm_buffer,
                 )
                 source_subjects.update(frag_subjects)
 
@@ -925,10 +949,17 @@ class IngestPipeline:
                 doc.raw_text, source.iri, list(source_subjects), profile
             )
             if er_triples:
-                written_er = load_triples_with_confidence(conn, er_triples, profile.named_graph)
-                stats["triples_written"] += written_er
-                stats["triples_trusted"] += written_er
-                stats["entity_resolution_triples"] += written_er
+                if vocab_norm_buffer is not None:
+                    # Defer: add entity resolution triples to the buffer so
+                    # URICanonicaliser can use the owl:sameAs links.
+                    vocab_norm_buffer.extend(er_triples)
+                    # Track ER triple count but defer triples_written update
+                    stats["entity_resolution_triples"] += len(er_triples)
+                else:
+                    written_er = load_triples_with_confidence(conn, er_triples, profile.named_graph)
+                    stats["triples_written"] += written_er
+                    stats["triples_trusted"] += written_er
+                    stats["entity_resolution_triples"] += written_er
             stats["entity_resolution_calls"] += 1
             stats["preprocessing_prompt_tokens"] += er_pt
             stats["preprocessing_completion_tokens"] += er_ct
@@ -937,6 +968,71 @@ class IngestPipeline:
                 len(er_triples) if er_triples else 0,
                 source.iri,
             )
+
+        # v0.15.3: Vocabulary normalisation — apply to deferred triple buffer and write
+        if vocab_norm_buffer is not None and vocab_norm_buffer:
+            with tracer.start_as_current_span("ingest_pipeline.vocab_normalise") as vn_span:
+                vn_span.set_attribute("source.iri", source.iri)
+                vn_span.set_attribute("vocab_norm.input_triples", len(vocab_norm_buffer))
+                try:
+                    from riverbank.vocabulary import VocabularyNormalisationPass  # noqa: PLC0415
+
+                    _vn_pass = VocabularyNormalisationPass.from_profile(profile)
+                    vn_result = _vn_pass.run(vocab_norm_buffer)
+
+                    stats["vocab_literals_promoted"] += vn_result.vocab_literals_promoted
+                    stats["vocab_predicates_collapsed"] += vn_result.vocab_predicates_collapsed
+                    stats["vocab_facts_decomposed"] += vn_result.vocab_facts_decomposed
+                    stats["vocab_uris_rewritten"] += vn_result.vocab_uris_rewritten
+                    vn_span.set_attribute("vocab_norm.literals_promoted", vn_result.vocab_literals_promoted)
+                    vn_span.set_attribute("vocab_norm.predicates_collapsed", vn_result.vocab_predicates_collapsed)
+                    vn_span.set_attribute("vocab_norm.facts_decomposed", vn_result.vocab_facts_decomposed)
+                    vn_span.set_attribute("vocab_norm.uris_rewritten", vn_result.vocab_uris_rewritten)
+
+                    # Write normalised triples grouped by named graph
+                    from itertools import groupby  # noqa: PLC0415
+
+                    sorted_triples = sorted(
+                        vn_result.triples, key=lambda t: t.named_graph
+                    )
+                    for named_graph, group in groupby(
+                        sorted_triples, key=lambda t: t.named_graph
+                    ):
+                        batch = list(group)
+                        written = load_triples_with_confidence(conn, batch, named_graph)
+                        stats["triples_written"] += written
+                        if named_graph == profile.tentative_graph:
+                            stats["triples_tentative"] += written
+                        else:
+                            stats["triples_trusted"] += written
+
+                    logger.info(
+                        "Vocabulary normalisation: %d→%d triples for %s "
+                        "(+%d promoted, +%d collapsed, +%d decomposed, +%d rewritten)",
+                        len(vocab_norm_buffer),
+                        len(vn_result.triples),
+                        source.iri,
+                        vn_result.vocab_literals_promoted,
+                        vn_result.vocab_predicates_collapsed,
+                        vn_result.vocab_facts_decomposed,
+                        vn_result.vocab_uris_rewritten,
+                    )
+                except Exception as _vn_exc:  # noqa: BLE001
+                    logger.warning(
+                        "Vocabulary normalisation failed for %s — writing original triples: %s",
+                        source.iri,
+                        _vn_exc,
+                    )
+                    # Fall back: write the un-normalised buffered triples
+                    from itertools import groupby as _gb  # noqa: PLC0415
+
+                    for named_graph, group in _gb(
+                        sorted(vocab_norm_buffer, key=lambda t: t.named_graph),
+                        key=lambda t: t.named_graph,
+                    ):
+                        batch = list(group)
+                        written = load_triples_with_confidence(conn, batch, named_graph)
+                        stats["triples_written"] += written
 
         stats["cost_usd"] += _estimate_cost(
             stats["prompt_tokens"], stats["completion_tokens"], profile
@@ -1297,10 +1393,15 @@ def _process_extraction_result(
     stats: dict,
     tracer: Any,
     preprocessing_cfg: dict,
+    triple_buffer: list | None = None,
 ) -> set[str]:
     """Process extraction result (vocabulary or full pass).
     
     v0.17.0: Extracted to support both per-fragment and batch extraction modes.
+    v0.15.3: Added optional *triple_buffer* — when not ``None``, triples are
+             appended to the buffer instead of written to the database.  The
+             caller is responsible for running vocabulary normalisation on the
+             buffer and flushing it after all fragments are processed.
     Returns: set of subject IRIs for entity resolution pass.
     """
     from riverbank.catalog.graph import (  # noqa: PLC0415
@@ -1377,23 +1478,29 @@ def _process_extraction_result(
                 stats["triples_discarded"] += 1
                 logger.debug("→ discarded (conf=%.2f): %s %s %s", conf, subj, pred, obj)
 
-        # Write trusted triples
+        # Write trusted triples (or buffer for deferred vocab normalisation)
         if trusted_triples:
-            written = load_triples_with_confidence(
-                conn, trusted_triples, profile.named_graph
-            )
-            stats["triples_written"] += written
-            stats["triples_trusted"] += written
-            record_artifact_dep(conn, trusted_triples, frag_iri, profile)
+            if triple_buffer is not None:
+                triple_buffer.extend(trusted_triples)
+            else:
+                written = load_triples_with_confidence(
+                    conn, trusted_triples, profile.named_graph
+                )
+                stats["triples_written"] += written
+                stats["triples_trusted"] += written
+                record_artifact_dep(conn, trusted_triples, frag_iri, profile)
 
-        # Write tentative triples
+        # Write tentative triples (or buffer for deferred vocab normalisation)
         if tentative_triples:
-            written_tent = load_triples_with_confidence(
-                conn, tentative_triples, profile.tentative_graph
-            )
-            stats["triples_written"] += written_tent
-            stats["triples_tentative"] += written_tent
-            record_artifact_dep(conn, tentative_triples, frag_iri, profile)
+            if triple_buffer is not None:
+                triple_buffer.extend(tentative_triples)
+            else:
+                written_tent = load_triples_with_confidence(
+                    conn, tentative_triples, profile.tentative_graph
+                )
+                stats["triples_written"] += written_tent
+                stats["triples_tentative"] += written_tent
+                record_artifact_dep(conn, tentative_triples, frag_iri, profile)
 
         logger.info(
             "Fragment %s: %d passed ontology → %d trusted, %d tentative, %d discarded",
