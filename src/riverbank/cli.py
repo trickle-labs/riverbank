@@ -386,12 +386,6 @@ def ingest(
 
     table.add_row("", "")  # spacer
     
-    # Main extraction pass
-    table.add_row("[bold]Extraction (LLM)[/bold]", "")
-    table.add_row("  LLM calls", str(stats["llm_calls"]))
-    table.add_row("  Prompt tokens", str(stats["prompt_tokens"]))
-    table.add_row("  Completion tokens", str(stats["completion_tokens"]))
-    
     # Distillation (pre-extraction content selection)
     if stats.get("distillation_runs", 0) > 0:
         table.add_row("[bold]Distillation (pre-extraction)[/bold]", "")
@@ -415,6 +409,12 @@ def ingest(
         table.add_row("  Predicate inference calls", str(stats["predicate_inference_calls"]))
         if stats.get("predicate_inference_proposed", 0) > 0:
             table.add_row("  Predicates proposed", str(stats["predicate_inference_proposed"]))
+    
+    # Main extraction pass
+    table.add_row("[bold]Extraction (LLM)[/bold]", "")
+    table.add_row("  LLM calls", str(stats["llm_calls"]))
+    table.add_row("  Prompt tokens", str(stats["prompt_tokens"]))
+    table.add_row("  Completion tokens", str(stats["completion_tokens"]))
     
     # Entity resolution (alias detection and owl:sameAs)
     if stats.get("entity_resolution_calls", 0) > 0:
