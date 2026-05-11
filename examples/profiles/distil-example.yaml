@@ -1,0 +1,85 @@
+# Distillation example profile for riverbank v0.15.2
+#
+# Demonstrates the document distillation pre-fragmentation step.
+# Use this profile when ingesting large Wikipedia articles or long documents
+# where you want to reduce LLM extraction cost by pre-filtering non-extractable
+# content before fragmentation.
+#
+# Usage:
+#   riverbank ingest --corpus path/to/article.md --profile distil-example.yaml
+#
+# The distilled file will be cached in ~/.riverbank/distill_cache/ so subsequent
+# re-ingestion of the same document costs zero additional LLM tokens.
+
+name: "distil-example"
+description: "Document distillation example: moderate strategy for Wikipedia articles"
+
+run_mode_sequence: ["full"]
+
+# Standard extraction settings
+extractor: "instructor"
+model_provider: "ollama"
+model_name: "llama3.2"
+
+fragmenter: "heading"
+
+editorial_policy:
+  min_fragment_length: 50
+  max_fragment_length: 8000
+  confidence_threshold: 0.7
+
+# --- Document distillation (v0.15.2) ---
+#
+# Pipeline position: parse → [distill] → coref → fragment → gate → extract → write
+#
+# The distilled text replaces the original for all downstream stages.
+# The original content_hash is preserved for fragment-level deduplication.
+distillation:
+  enabled: true
+
+  # Strategy: moderate is the recommended default for Wikipedia articles.
+  # It removes boilerplate and low-density elaboration while preserving all
+  # factual sections verbatim for downstream fragmentation.
+  #
+  # Available strategies:
+  #   boilerplate_removal  — deterministic, zero LLM cost
+  #   aggressive           — LLM compresses to core facts only (~5-15 kB)
+  #   moderate             — LLM removes boilerplate, keeps factual sections (~20-50 kB)
+  #   conservative         — LLM removes only navigation/refs/captions (~60-90%)
+  #   section_aware        — two-pass: classify sections then act per type
+  #   budget_optimized     — adaptive: selects strategy to stay within cost budget
+  strategy: moderate
+
+  # Cache directory (created automatically)
+  # cache_dir: ~/.riverbank/distill_cache
+
+  # Optional: use a small fast model for distillation instead of the extraction model
+  # model_provider: ollama
+  # model_name: gemma3:4b
+
+  # Target output size hint for LLM strategies (moderate default: 30 kB)
+  target_size_bytes: 30720
+
+  # --- section_aware options (uncomment to use with strategy: section_aware) ---
+  # section_types:
+  #   factual:      keep       # copy verbatim
+  #   biographical: summarize  # LLM summary (2-3 sentences)
+  #   event:        keep
+  #   reference:    remove     # omit entirely
+  #   navigation:   remove
+  #   caption:      remove
+  #   appendix:     remove
+
+  # --- budget_optimized options (uncomment to use with strategy: budget_optimized) ---
+  # extraction_budget_usd: 1.00  # total extraction budget for this document
+  # min_triple_target: 50        # desired minimum triples from this document
+  # sample_fragments: 3          # fragments to sample before choosing strategy
+
+# Preprocessing: NLP backend (no LLM cost)
+preprocessing:
+  enabled: true
+  backend: "nlp"
+  max_tokens_for_preprocessing: 4000
+
+# Constrained decoding for reliable JSON output
+constrained_decoding: true

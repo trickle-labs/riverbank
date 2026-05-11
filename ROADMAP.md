@@ -85,31 +85,20 @@
 |---|---|---|---|
 | v0.15.0 | Wikidata evaluation framework — `riverbank evaluate-wikidata` command (single article or full dataset), 1,000-article benchmark dataset (7 domains), property alignment table, entity resolution pipeline, calibration curves, per-domain and per-property breakdowns | **Done** | Large |
 | v0.15.1 | Extraction improvement loop — per-property recall gap analysis, extraction prompt tuning from failure modes, 200+ novel-discovery annotations, published evaluation methodology | **Done** | Medium |
+| v0.15.2 | Document distillation step — optional pre-fragmentation content-selection step with six configurable strategies (`boilerplate_removal`, `aggressive`, `moderate`, `conservative`, `section_aware`, `budget_optimized`); on-disk cache keyed by content hash + strategy; `boilerplate_removal` is deterministic (zero LLM cost); all strategies preserve the original content hash for downstream deduplication; new run stats: `distillation_calls`, `distillation_cache_hits`, `distillation_bytes_removed`, `distillation_strategy_used` | **Done** | Medium |
 
-### Adaptive Auto-Tuning (v0.16.x – v0.18.x)
+### Adaptive Auto-Tuning (v0.16.x – v0.17.x)
 
-> **Resequenced 2026-05-09:** The original plan placed measurement (Tier 1 curated
-> ground truth) in v0.18.0, after the full diagnostics, A/B, and orchestration
-> stack. This creates a fundamental problem — the `DiagnosticsEngine` rules for F1,
-> precision, and recall are uncomputable without ground truth, so the entire stack
-> would run blind on Tier 2/3 proxies for three releases. The resequencing pulls
-> Tier 1 ground truth creation into v0.16.0 as a prerequisite (see
-> `eval/ground-truth/`), delivers a simpler A/B mechanism in v0.16.2 before the
-> full SPRT harness, scopes v0.16.1 to threshold sweeps only (deferring OPRO prompt
-> mutation until parallel trial infrastructure exists in v0.17.0), and defers
-> orchestration until at least one successful automated improvement cycle is
-> validated end-to-end.
+> **Design principle:** Each release must deliver standalone, user-visible value.
+> No release depends on a successor to prove its worth. The loop builds up
+> incrementally — observe first, then suggest, then validate, then automate —
+> and each gate requires demonstrated value before the next layer is added.
 
 | Version | Description | Status | Size |
 |---|---|---|---|
-| v0.16.0 | Tuning diagnostics — **prerequisite: curated JSONL Tier 1 ground truth** for at least one corpus (`eval/ground-truth/`); `DiagnosticsEngine` with 10 priority-ordered rules operating on Tier 2/3 signals (rejection rate, SHACL, CQ coverage, entity IRI fragmentation) by default; F1/precision/recall rules activate automatically when `evaluation.ground_truth` is configured; corpus drift detection (embedding centroid + JSD); `_riverbank.tuning_diagnostics` catalog table; `riverbank tuning diagnose` | Planned | Large |
-| v0.16.1 | Hypothesis generation (scoped) — threshold sweep automation (citation similarity, confidence routing thresholds); few-shot injection from recall-gap patterns; `TriedPatchesRegistry`; `MutationEffectivenessRegistry`; `riverbank tuning propose`; OPRO-style prompt mutation deferred to v0.18.0 pending parallel trial infrastructure | Planned | Medium |
-| v0.16.2 | Lightweight A/B + fragmentation — simplified profile comparison (rolling average F1 over N fragments, no SPRT); entity IRI fragmentation rate metric (same-entity IRI variant ratio per document); `riverbank tuning compare` for manual side-by-side; promotion on rolling-average significance | Planned | Medium |
-| v0.17.0 | Full A/B testing harness — `CandidateRouter` (consistent-hash cohort assignment), `SignificanceTester` (SPRT sequential testing), `_riverbank.tuning_experiments` and `tuning_cohorts` catalog tables, `ExperimentPostmortem` auto-generation, promotion and demotion logic, pg-tide event emission on state transitions | Planned | Large |
-| v0.17.1 | Measurement Tier 1 full pipeline — `MeasurementStrategy` with complete three-tier ground truth pipeline (curated JSONL, Wikidata, noisy-OR bootstrap); human spot-sampling via Label Studio; measurement miscalibration detection; per-tier confidence labels on all promotion audit records; `riverbank tuning status`; note: JSONL schema and first corpus file (`eval/ground-truth/marie-curie.jsonl`, 45 triples) already decided and committed in v0.15.1 — v0.17.1 delivers the *runner* (SPARQL-match F1 evaluator) not the schema | Planned | Large |
-| v0.17.2 | Orchestration and scheduling — `TuningOrchestrator` closed loop (**only after v0.17.0 has demonstrated at least one successful automated improvement cycle end-to-end**); `PlateauDetector` with restart strategy; `TuningScheduler` (APScheduler); full `auto_tuning:` profile YAML schema; `riverbank tuning run-once`; safety guardrails (precision floor, cost ceiling, freeze-on-regression, generation-depth limit, mutation-conflict prevention) | Planned | Large |
-| v0.18.0 | Tuning observability and OPRO — Perses dashboard panel; `riverbank tuning history` lineage tree; `riverbank tuning pareto` quality×cost frontier; `riverbank tuning rollback` / `freeze` / `unfreeze`; new profile onboarding path (`riverbank tuning init`); OPRO-style prompt mutation (now backed by proper parallel trial infrastructure from v0.17.0); auto-tuning how-to docs | Planned | Large |
-| v0.18.1 | Learning from history — `MutationEffectivenessRegistry` with time-decayed half-life; cross-profile transfer suggestions; `ProposalCalibrator` for hypothesis accuracy self-improvement; multi-property triage with clustering and batch mutation; `riverbank tuning insights` populated from full learning history | Planned | Medium |
+| v0.16.0 | Tuning diagnostics (scoped MVP) — `_riverbank.tuning_diagnostics` table; SQL sliding-window view over runs; **4 core diagnostic rules** (F1 regression, precision floor, confidence miscalibration, cost-per-triple regression); cold-start bootstrap mode; `riverbank tuning diagnose` CLI; 2 Prometheus gauges | Planned | Small |
+| v0.16.1 | Threshold sweep + manual comparison — `ThresholdSweepBackend` (deterministic grid search over key numeric parameters); `TriedPatchesRegistry`; `riverbank tuning propose`; rolling-average comparison on last 20 documents; `riverbank tuning compare` for manual side-by-side; promotion on operator approval | Planned | Small |
+| v0.17.0 | Automated rolling-average promotion — `CandidateRouter` (routes 10% of live traffic to candidate); automatic promotion when rolling-average improvement ≥2% over 30 documents; demotion on cost-ceiling breach; `_riverbank.tuning_experiments` table; audit trail; `riverbank tuning experiments` / `approve` / `reject` CLI; **prerequisite: at least one manual v0.16.1 cycle produced a measurable improvement** | Planned | Medium |
 
 ---
 
@@ -166,462 +155,329 @@ v0.15.0 baseline on at least two of: precision, recall, novel discovery rate.
 
 ---
 
-### v0.16.0 — Tuning Diagnostics
+### v0.15.2 — Document Distillation Step
 
-Goal: make all auto-tuning-relevant metrics queryable and trendable, establishing
-the observation layer that all subsequent adaptive work depends on. See
-[plans/auto-tuning.md](plans/auto-tuning.md) for the full design.
+Goal: add an optional, cached pre-fragmentation step that selects and compresses
+the extractable content of a document before fragmentation. Unlike raw compression,
+distillation is a **content selection problem**: the step identifies provably
+non-extractable sections (references, navigation, captions, boilerplate) and removes
+them deterministically, then applies strategy-specific LLM transformation to the
+remainder. The goal is to maximise the number of triples the downstream extractor
+can produce per dollar, not to produce the smallest possible document.
+
+**Motivation:** Large documents (encyclopedia articles, annual reports, long
+technical specifications) waste extraction budget on sections that will never
+produce useful triples — references, changelogs, footnotes, captions. Distillation
+front-loads this filtering in one cheap LLM call and caches the result permanently,
+so subsequent re-ingestion of an unchanged document costs zero additional tokens.
+
+**Pipeline position:**
+
+```
+parse → [distill] → coref → fragment → gate → extract → write
+```
+
+The distilled text replaces the original for all downstream stages. Because
+the original `content_hash` is preserved on the `SourceRecord`, fragment-level
+deduplication (`xxh3_128` hash checks) continues to work correctly.
+
+---
+
+**Strategies:**
+
+Distillation is not a single behaviour — the user chooses a `strategy` that
+controls the trade-off between document size, triple yield, and LLM cost.
+
+| Strategy | What it does | Output size | Use when |
+|---|---|---|---|
+| `boilerplate_removal` | Deterministic: strips reference sections, footnote markers, navigation, captions, image alt text, external-link sections. No LLM call. | ~80–100% of content sections | Document is otherwise well-structured; you just want clean input |
+| `aggressive` | LLM compresses to core facts only. Abstracts and removes elaboration. | ~5–15 kB | Very large documents where only top-level facts are needed; single-fragment extraction |
+| `moderate` | LLM removes only boilerplate and low-density elaboration; preserves all factual sections verbatim for downstream fragmentation. | ~20–50 kB | Long articles where you want many fragments and maximum triple yield |
+| `conservative` | LLM removes only navigation, references, and captions; keeps all prose unchanged. | ~60–90% of original | Documents where every paragraph may contain extractable facts |
+| `section_aware` | Two-pass: first classify each section by type (factual, biographical, event, reference, navigation); then LLM-summarise only low-density sections, copy high-density sections verbatim. | Configurable per section type | Structured long-form documents with heterogeneous section types |
+| `budget_optimized` | Iterative: estimates triples-per-kB from a sample, then chooses target size to stay within `extraction_budget_usd` while hitting `min_triple_target`. Automatically selects from the above strategies per run. | Dynamic | Cost-constrained high-yield scenarios |
+
+The default strategy is `moderate` because it preserves enough content for
+meaningful fragmentation while removing unambiguously non-extractable sections.
+
+---
+
+**Profile YAML (full schema):**
+
+```yaml
+distillation:
+  enabled: true
+  strategy: moderate          # boilerplate_removal | aggressive | moderate |
+                              # conservative | section_aware | budget_optimized
+  cache_dir: ~/.riverbank/distill_cache  # optional; created automatically
+  model_provider: ollama      # optional: dedicated model for distillation
+  model_name: gemma3:4b       # optional: small fast model is fine for distillation
+
+  # Strategy-specific options:
+
+  # For aggressive / moderate / conservative:
+  target_size_bytes: 10240    # hint to the LLM; default 10 kB for aggressive,
+                              # 30 kB for moderate, not used for conservative
+
+  # For section_aware:
+  section_types:
+    factual:     keep         # copy verbatim
+    biographical: summarize   # LLM summary
+    event:        keep
+    reference:    remove      # no LLM call
+    navigation:   remove
+    caption:      remove
+
+  # For budget_optimized:
+  extraction_budget_usd: 1.00     # total extraction budget for this document
+  min_triple_target: 50           # desired minimum triples from this document
+  sample_fragments: 3             # fragments to sample before choosing strategy
+```
+
+---
+
+**Cache strategy:**
+
+- Cache directory: `~/.riverbank/distill_cache/` (configurable)
+- Cache key: `<xxh3_128_content_hash_hex>_<strategy>_<target_size_bytes>.md`
+- A hit returns the cached Markdown — the step is free on re-ingest
+- A miss calls the LLM (if required by the strategy), writes the result, and proceeds
+- `boilerplate_removal` is fully deterministic: no LLM call, still cached so the
+  stripping regex runs only once per document version
+
+---
+
+**Strategy details:**
+
+**`boilerplate_removal`** (deterministic, zero LLM cost):
+
+Applies a pattern-based filter to the raw Markdown before any LLM call:
+- Strips heading sections whose title matches a configurable noise list
+  (default: "References", "Bibliography", "External links", "See also",
+  "Further reading", "Notes", "Footnotes", "Appendix", "Index")
+- Removes inline citation markers (`[[1]]`, `[1]`, `(Smith, 2020)`)
+- Removes image/figure captions (lines matching `^!\\[` or `^Figure`)
+- Removes hyperlink URLs, keeping only the display text
+- Strips horizontal rule `---` separators and table-of-contents blocks
+
+Can be composed with any other strategy by setting `boilerplate_removal: true`
+alongside the primary strategy.
+
+**`section_aware`** (two-pass, partial LLM):
+
+Pass 1: Send the list of section headings (not content) to the LLM and ask it
+to classify each as one of `{factual, biographical, event, reference,
+navigation, caption, appendix}`. One cheap call on the outline only.
+
+Pass 2: For each section, apply the action from `section_types` config:
+- `keep` — copy section verbatim into output
+- `summarize` — call LLM to produce a 2–3 sentence summary
+- `remove` — omit entirely
+
+This approach preserves all high-density factual content unchanged while
+reducing verbosity in biographical or contextual sections.
+
+**`budget_optimized`** (adaptive):
+
+1. Sample `sample_fragments` randomly chosen fragments and run extraction on them
+2. Estimate `triples_per_kB` from sample results
+3. Compute `target_triples / triples_per_kB` = ideal distilled size in kB
+4. If that size is ≥ original size, skip distillation entirely
+5. Otherwise select the strategy whose output size best matches the target:
+   `conservative` → `moderate` → `aggressive`
+6. Run the selected strategy and record which was chosen in the run stats
+
+---
+
+**Implementation (`src/riverbank/distillers/__init__.py`):**
+
+- `DocumentDistiller` — main class; `distill(raw_text, content_hash, profile)` method
+- `DocumentDistiller.from_profile(profile)` — class-method constructor
+- `BoilerplateFilter` — deterministic section/citation/link stripper; used standalone
+  or as a pre-pass for all LLM-based strategies
+- `SectionClassifier` — outline-level LLM call for `section_aware`
+- `BudgetOptimizer` — adaptive strategy selector for `budget_optimized`
+- `DistillationResult` dataclass — `distilled_text`, `cache_hit`, `strategy_used`,
+  `llm_calls`, `prompt_tokens`, `completion_tokens`, `original_bytes`, `distilled_bytes`
+- Uses the raw `openai` client (not `instructor`) so the LLM returns free-form
+  Markdown without structured-output token overhead
+- Falls back to the original text on LLM failure so the pipeline never stalls
+- `model_provider` and `model_name` override allow a small fast model (e.g.
+  `gemma3:4b`) for distillation while keeping a larger model for extraction
+
+---
+
+**Stats added to run output:**
+
+| Key | Meaning |
+|---|---|
+| `distillation_calls` | LLM calls made by distillation (0 on cache hits or `boilerplate_removal`) |
+| `distillation_cache_hits` | Sources served from disk cache |
+| `distillation_prompt_tokens` | Prompt tokens consumed |
+| `distillation_completion_tokens` | Completion tokens produced |
+| `distillation_strategy_used` | Strategy selected (useful for `budget_optimized`) |
+| `distillation_bytes_removed` | `original_bytes − distilled_bytes` across all sources |
+
+**Progress callbacks emitted:**
+
+- `distillation_done` — `{source, cache_hit, strategy_used, original_bytes, distilled_bytes}`
+
+---
+
+**When to use each strategy:**
+
+| Scenario | Recommended strategy |
+|---|---|
+| Wikipedia / encyclopedia article (250 kB+), want core facts only | `aggressive` |
+| Wikipedia article, want many fragments for comprehensive extraction | `moderate` |
+| Annual report or long technical spec with structured sections | `section_aware` |
+| Well-structured document, just remove noise | `boilerplate_removal` |
+| Unknown document type, cost budget given | `budget_optimized` |
+| Short document (< 4 kB) or already clean | Disable distillation |
+
+Do **not** enable for short documents (< 4 kB) or documents already scoped to
+extractable knowledge — the `preprocessing.adaptive_threshold` guard covers the
+analogous case for the preprocessing step.
+
+---
+
+**Exit criterion:** `riverbank ingest --profile distil-example.yaml` on a 250 kB
+Wikipedia article with `strategy: moderate` produces a cached distilled file in
+`~/.riverbank/distill_cache/`, reduces the document to ≤ 60 kB, and runs
+fragmentation + extraction yielding measurably more triples per dollar than the
+same profile without distillation on the same article. `distillation_cache_hits: 1`
+on the second ingest run. All strategies are covered by unit tests with a mock LLM.
+`boilerplate_removal` unit tests use no LLM at all.
+
+---
+
+### v0.16.0 — Tuning Diagnostics (Scoped MVP)
+
+Goal: give operators a reliable, queryable signal that something is wrong with
+extraction quality — and a clear, human-readable diagnosis of what. Deliberately
+scoped to 4 rules so the diagnostic model can be validated against real corpora
+before being expanded. See [plans/auto-tuning.md](plans/auto-tuning.md) for the
+full design.
 
 - [ ] `_riverbank.tuning_diagnostics` table (Alembic migration): one row per
   diagnosis cycle, storing `metrics` JSONB, `gaps` JSONB, `recommendations`
-  JSONB with priority ordering, `measurement_tier` label, and `drift_status`
-- [ ] SQL sliding-window view: aggregate per-run F1, precision, recall,
-  cost-per-triple, SHACL score, rejection rate, and novel-discovery rate from
-  `_riverbank.runs` over a configurable time window
-- [ ] 7-day rolling baseline per profile: used to detect drift in each diagnosis
-  cycle; stored in `tuning_diagnostics` for trend charting
-- [ ] `MeasurementStrategy` — selects the active measurement tier (Tier 1 curated
-  JSONL, Tier 2 structural SHACL+CQ, Tier 3 self-consistency) based on profile
-  configuration and ground truth availability; computes per-tier composite score
-  with configurable weights
-- [ ] `DiagnosticsEngine.diagnose()` with 10 priority-ordered rules:
-  (1) F1 regression >5% vs. 7-day baseline — critical, triggers freeze;
-  (2) precision below configured floor — high, tighten routing thresholds;
-  (3) zero recall on tracked predicates — high, inject targeted examples;
-  (4) cost-per-written-triple increased >20% vs. baseline — medium, reduce safety cap;
-      note: cost must be normalised by `triples_written` (not total LLM cost), because
-      `extraction_target` intentionally raises `num_predict` and thus raw cost; a
-      higher cost accompanied by proportionally more triples is not a regression;
-  (5) confidence miscalibration (ρ < 0.3) — medium, adjust routing thresholds;
-      note: the citation-similarity penalty (`conf_final = conf_llm × sim/100`)
-      shifts the confidence distribution downward for all triples with imperfect
-      excerpts; calibration must compare predicted vs. observed accuracy using
-      `conf_final` (post-penalty), and treat the penalty as a calibration feature
-      rather than noise — do not attempt to undo it before computing ρ;
-  (6) SHACL score declining — low, review shape constraints;
-  (7) novel-discovery rate >40% — low, review predicate alignment table;
-  (8) entity IRI fragmentation rate elevated — medium, tune knowledge-prefix adapter;
-  (9) triple yield per fragment declining — medium, review preprocessing strategy;
-  (10) competency question coverage dropping — high, review CQ-guided extraction
-- [ ] Corpus drift detection: embedding centroid distance (cosine distance between
-  current sliding-window centroid and profile baseline centroid exceeds threshold)
-  and predicate distribution Jensen–Shannon divergence (JSD > 0.15 flags drift);
-  drift routes to domain adaptation path rather than quality tuning
+  JSONB with priority ordering, and `measurement_tier` label
+- [ ] SQL sliding-window view: aggregate `triples_written`, `cost_usd`,
+  `triples_trusted`, `triples_tentative`, `triples_discarded` from
+  `_riverbank.runs` over a configurable window (default 7 days)
+- [ ] 7-day rolling baseline per profile stored in `tuning_diagnostics`; used
+  to compute deltas for each diagnosis cycle
+- [ ] `DiagnosticsEngine.diagnose()` with **4 core rules** (remaining 6 deferred
+  to v0.16.2 once these are validated against real corpora):
+  (1) F1 regression >5% vs. 7-day baseline — critical; requires Tier 1 ground
+      truth (`evaluation.ground_truth`) to activate; falls back to
+      `confidence='bootstrap'` with a warning when absent;
+  (2) Precision below configured floor — high; uses `triples_trusted /
+      (triples_trusted + triples_tentative)` as a proxy when Tier 1 unavailable;
+  (3) Confidence miscalibration (Pearson ρ < 0.3 between confidence bucket
+      midpoints and observed accuracy) — medium; compare using `conf_final`
+      (post citation-similarity penalty), not raw LLM confidence;
+  (4) Cost-per-written-triple increased >20% vs. baseline — medium; normalise by
+      `triples_written`, not total cost, to avoid penalising higher-yield runs
 - [ ] Cold-start bootstrap mode: when `min_history_runs` (default 5) not yet met,
-  skip baseline-requiring rules, mark all recommendations as `confidence='bootstrap'`,
-  queue initial spot-sampling task for corpora without a reference dataset
-- [ ] FP/FN pattern clustering: group false positives and false negatives by
-  predicate pattern; surface top-5 of each type with frequency counts
-- [ ] Confidence calibration check: Pearson ρ between confidence bucket midpoints
-  and observed accuracy; flag miscalibration below threshold
-- [ ] Pre-diagnosis precondition checks: drift check (skip quality rules if corpus
-  drifted), calibration check (predicate alignment coverage < 50%), tried-patches
-  check (suppress mutation types attempted ≥3 times in 30d without promotion)
-- [ ] Full `DiagnosticsReport` JSON stored per cycle (not just aggregates) so
-  future post-mortem analysis can reconstruct the system's state at decision time
-- [ ] `riverbank tuning diagnose --profile <name> [--window <hours>]` CLI command:
-  prints ranked recommendations as JSON and human-readable summary table with
-  active measurement tier and drift status
-- [ ] `riverbank_tuning_f1_current` Prometheus gauge (labels: profile)
-- [ ] `riverbank_tuning_cost_per_triple` Prometheus gauge (labels: profile)
-- [ ] Unit tests for all 10 diagnosis rules with synthetic run data, drift
-  detection with synthetic embedding series, and cold-start bootstrap mode
+  skip baseline-requiring rules and mark all recommendations as
+  `confidence='bootstrap'`
+- [ ] Full `DiagnosticsReport` JSON stored per cycle so post-mortem analysis can
+  reconstruct the system's state at decision time
+- [ ] `riverbank tuning diagnose --profile <name> [--window <hours>]` CLI:
+  prints ranked recommendations as a human-readable table and JSON
+- [ ] `riverbank_tuning_f1_current` and `riverbank_tuning_cost_per_triple`
+  Prometheus gauges (labels: profile)
+- [ ] Unit tests for all 4 rules with synthetic run data and cold-start mode
 
 **Exit criterion:** `riverbank tuning diagnose --profile X` produces a JSON
-report with gaps, ranked recommendations, active measurement tier, and drift
-status. Cold-start mode correctly defers baseline-requiring rules when fewer
-than `min_history_runs` runs have completed.
+report with ranked recommendations and measurement tier. All 4 rules fire
+correctly on synthetic data. Cold-start mode defers baseline rules and labels
+recommendations as `confidence='bootstrap'`.
 
 ---
 
-### v0.16.1 — Hypothesis Generation
+### v0.16.1 — Threshold Sweep and Manual Comparison
 
-Goal: automatically generate well-reasoned profile mutations from diagnostic
-reports, using a combination of LLM-assisted optimization and deterministic
-rule-based strategies. Add registries that prevent the system from trying the
-same failed approach repeatedly.
+Goal: give operators the first actionable output of the diagnostic loop — a
+concrete, well-reasoned candidate profile YAML — and a way to compare it against
+the baseline manually before committing to any change. No automation; the operator
+reviews and approves every mutation. This release proves the
+diagnose → propose → compare workflow is useful before adding statistical
+automation in v0.17.0.
 
 - [ ] `ProfileMutation` dataclass: `mutation_type`, `mutation_yaml`, `rationale`,
-  `estimated_lift`, `calibrated_lift` (bias-corrected), `parent_profile_id`,
-  `generation` counter
-- [ ] `MutationRegistry`: stores and queries mutation lineage; supports
-  parent → child → outcome tree traversal; backed by `_riverbank.mutation_registry`
-  table (Alembic migration)
+  `estimated_lift`, `parent_profile_id`, `generation` counter
 - [ ] `TriedPatchesRegistry` backed by `_riverbank.tried_patches` table: tracks
-  `(profile_id, mutation_type, parameter)` triples and their attempt counts and
-  outcomes; suppresses mutation types tried ≥3 times in 30d without promotion;
-  injects past successful mutations as positive examples into the OPRO prompt
-- [ ] `MutationEffectivenessRegistry` backed by `_riverbank.mutation_effectiveness`
-  table: tracks empirical success rates per `(mutation_type, failure_mode,
-  corpus_domain)` with time-decayed relevance (exponential decay, half-life 90d);
-  consulted by `HypothesisGenerator` to rank candidate mutation types before
-  generating any prompt
-- [ ] `PromptMutatorBackend` (OPRO-style): feeds current prompt + last 5 F1
-  results + top FP/FN patterns + tried-patches to a configurable hypothesis model
-  (defaults to `gpt-4o-mini`); requests one minimal targeted edit with rationale
-  and estimated lift; validates returned YAML against `CompilerProfile` schema
-  before accepting; coordinated mutation detection prevents simultaneously
-  proposing changes to parameters with known interaction effects
-- [ ] `ThresholdSweepBackend`: deterministic adjacent-step grid search over 9
-  numeric parameters (`trusted_threshold`, `tentative_threshold`, `safety_cap`,
-  `max_graph_context_tokens`, `top_entities`, `few_shot.max_examples`,
-  `preprocessing.max_entities`, `extraction_strategy.citation_floor`,
-  `extraction_strategy.extraction_target.min_triples`); the last two are new
-  since v0.15.1 — `citation_floor` controls the hard-reject floor for absent
-  excerpts (default 40), and `min_triples` directly controls triple yield
-  (the primary signal for DiagnosticsEngine Rule 9); note: `citation_similarity_threshold`
-  has been removed — replaced by the soft confidence-penalty model; selects
-  direction based on the diagnosis recommendation; consults `TriedPatchesRegistry`
-  to skip directions already tried
-- [ ] `EvalDrivenFewShotMutator`: targets the top-3 lowest-recall predicates
-  (any corpus, not Wikidata-specific); injects built-in extraction examples from
-  `RecallGapAnalyzer._BUILTIN_EXAMPLES` as targeted few-shot additions
-- [ ] `KnowledgePrefixTuner`: adjusts `max_graph_context_tokens` and
-  `top_entities` based on entity IRI fragmentation rate and observed prompt
-  truncation signals
-- [ ] `PreprocessingStrategyMutator`: toggles preprocessing backend (nlp ↔ llm)
-  and adjusts `max_entities` based on entity catalog quality signals from runs
-- [ ] `HypothesisGenerator`: wraps all five backends, consults
-  `MutationEffectivenessRegistry` to rank backends by empirical success rate for
-  this failure mode, applies multi-property triage (cluster related gaps; batch
-  up to `max_properties_per_mutation` default 3), enforces `max_active_candidates`
-  limit, validates generated YAML before returning any mutation; aborts early if
-  all calibrated lifts fall below noise floor (0.005)
+  `(profile_id, mutation_type, parameter)` attempts; suppresses mutation types
+  tried ≥3 times in 30 days without a promotion
+- [ ] `ThresholdSweepBackend`: deterministic adjacent-step grid search over key
+  numeric parameters — `trusted_threshold`, `tentative_threshold`, `safety_cap`,
+  `few_shot.max_examples`, `preprocessing.max_entities`,
+  `extraction_strategy.citation_floor`,
+  `extraction_strategy.extraction_target.min_triples`; selects direction from
+  the v0.16.0 diagnosis; consults `TriedPatchesRegistry` to skip tried directions;
+  `citation_floor` controls the hard-reject floor for absent excerpts (default 40);
+  `min_triples` controls yield directly
 - [ ] `_tuning_metadata:` block auto-written into candidate profile YAML:
-  generation counter, parent profile IRI, mutation type, rationale, experiment ID
-- [ ] `riverbank tuning propose --profile <name> [--type <mutation_type>]` CLI
-  command: outputs candidate YAML with rationale and calibrated lift estimate
-- [ ] Unit tests for each mutation backend including regression tests against
-  known-bad mutation patterns; integration test verifying `TriedPatchesRegistry`
-  prevents repeated failed approaches
+  generation counter, parent profile IRI, mutation type, rationale
+- [ ] `riverbank tuning propose --profile <name>` CLI: reads latest
+  `DiagnosticsReport`, runs `ThresholdSweepBackend`, outputs candidate YAML
+  with rationale and estimated lift to stdout for operator review
+- [ ] Rolling-average profile comparison: re-processes the last N documents
+  (configurable, default 20) with both profiles; reports per-metric deltas
+- [ ] `riverbank tuning compare --baseline <name> --candidate <yaml>` CLI:
+  runs rolling-average comparison and prints a side-by-side metric table;
+  operator manually promotes the winner via `riverbank profiles promote`
+- [ ] Unit tests for `ThresholdSweepBackend` covering all parameter directions;
+  integration test verifying `TriedPatchesRegistry` suppresses repeated attempts
 
-**Exit criterion:** `riverbank tuning propose --profile X` generates a
-syntactically valid candidate profile YAML with documented rationale. Re-running
-after marking a mutation type as tried does not reproduce the same approach.
-`MutationEffectivenessRegistry` correctly ranks backends by historical success rate.
+**Exit criterion:** `riverbank tuning propose --profile X` produces a
+syntactically valid candidate profile YAML with rationale. `riverbank tuning
+compare` produces a metric comparison table. Re-running after recording a tried
+patch does not produce the same mutation.
 
 ---
 
-### v0.17.0 — A/B Testing Harness
+### v0.17.0 — Automated Rolling-Average Promotion
 
-Goal: safely validate candidate profile mutations against live traffic using
-statistically correct sequential testing before any configuration change takes
-effect. No mutation goes live without statistical evidence.
+Goal: automate the promotion decision from v0.16.1 — route a small fraction of
+live traffic through the candidate profile, measure improvement over 30 documents,
+and promote or discard without operator intervention. Uses rolling-average
+comparison (the same mechanism as `tuning compare`) rather than SPRT, keeping
+the implementation straightforward. **Prerequisite: at least one manual v0.16.1
+cycle has produced a measurable improvement** — proves the propose → compare
+workflow works before automating the decision.
 
 - [ ] `_riverbank.tuning_experiments` table: experiment lifecycle
   (`active`, `promoted`, `demoted`, `expired`, `pending_review`), metrics at
-  resolution, SPRT log-likelihood ratio, Cohen's d effect size, decision
-  rationale, `cohort_source` field (`fresh` or `replay`) for per-cohort
-  confidence weighting
+  resolution, decision rationale
 - [ ] `_riverbank.tuning_cohorts` table: per-source cohort assignment
-  (baseline / candidate) linked to experiment; idempotent via consistent
-  hashing — same source always lands in the same cohort within an experiment
+  (baseline / candidate); idempotent via consistent hashing — same source always
+  lands in the same cohort within an experiment
 - [ ] `CandidateRouter`: consistent-hash assignment using
   `xxhash.xxh64(experiment_id + source_iri)`; configurable split ratio
-  (default 10% candidate, 90% baseline); replay evaluation path for low-volume
-  corpora (re-processes already-ingested documents deterministically when
-  `validation.replay_on_low_volume: true` and fewer than `low_volume_threshold`
-  new documents per week; replay results carry 0.6× weight in SPRT)
-- [ ] Modify `pipeline.run_source()` to query active experiments and route each
-  source to the appropriate profile before extraction; no change to extraction
-  pipeline itself
-- [ ] Replace Welch's t-test with SPRT (`SignificanceTester` with
-  `_compute_llr()`): accumulates sequential log-likelihood ratio comparing H₁
-  (candidate better by `effect_size`) against H₀ (no difference); crosses upper
-  bound A → promote, lower bound B → demote; statistically correct for
-  sequential monitoring without inflating Type I error rate; minimum sample size
-  enforcement (default 30 documents)
-- [ ] Held-out validation: documents used to generate the triggering diagnosis
-  are excluded from A/B cohorts (prevents test-set contamination); 20% of any
-  reference dataset reserved for final validation and never used in A/B scoring
-- [ ] Promotion logic: Pareto dominance check for acceptance (candidate must not
-  regress on precision or cost); scalar ranking via
-  objective = score − λ × (cost / cost_baseline) for choosing between competing
-  candidates; λ = 0.5 for budget-sensitive operators, λ = 0.0 for quality-only
-- [ ] Demotion logic: demote when SPRT LLR ≤ B and regression ≥
-  `demotion_f1_delta` or cost exceeds ceiling; automatic rollback if regression
-  is on an already-promoted variant
-- [ ] `ExperimentPostmortem` auto-generated on every `demoted` or `expired`
-  experiment: `mutation_type`, `failure_mode`, `diagnostic_snapshot` at creation
-  time, `actual_f1_delta`, `predicted_f1_delta`, `calibration_error`, derived
-  `root_cause` and `lesson`; stored in `_riverbank.experiment_postmortems`
-- [ ] Audit trail: every promotion and demotion writes a `_riverbank.log` entry
-  (`operation='tuning_promotion'` / `'tuning_demotion'`) with metrics, SPRT
-  LLR, effect size, and measurement tier
-- [ ] pg-tide event emission on promotion (`riverbank.tuning.promoted`) and
-  demotion (`riverbank.tuning.demoted`) for downstream alerting
-- [ ] `riverbank tuning experiments [--profile <name>]` — list active experiments
-  with current sample counts, cohort sizes, SPRT progress, and metric deltas
-- [ ] `riverbank tuning approve --experiment-id <id>` — manually approve a
-  `pending_review` experiment
-- [ ] `riverbank tuning reject --experiment-id <id> [--reason <text>]` — reject
-  with optional reason recorded in audit log
-- [ ] `riverbank_tuning_experiments_active` Prometheus gauge
-- [ ] `riverbank_tuning_promotions_total` and `riverbank_tuning_demotions_total`
-  Prometheus counters (labels: profile, mutation_type)
-- [ ] Integration tests: clearly-better candidate promoted after `min_sample_size`
-  evaluations via SPRT; clearly-worse candidate demoted via SPRT early stopping;
-  replay evaluation produces valid cohort results on a synthetic low-volume corpus
+  (default 10% candidate)
+- [ ] Promotion rule: auto-promote when rolling-average improvement ≥2% over 30
+  documents and candidate does not regress on precision or cost
+- [ ] Demotion rule: demote when cost exceeds `max_cost_increase` ceiling or
+  rolling average is negative after 30 documents; automatic rollback
+- [ ] Audit trail: every promotion/demotion writes a `_riverbank.log` entry with
+  per-cohort metrics and decision rationale
+- [ ] `riverbank tuning experiments` — list active experiments with document
+  counts and current metric deltas
+- [ ] `riverbank tuning approve --experiment-id <id>` and
+  `riverbank tuning reject --experiment-id <id>` — manual override for
+  `pending_review` experiments
+- [ ] `riverbank_tuning_experiments_active` and
+  `riverbank_tuning_promotions_total` Prometheus metrics
+- [ ] Integration tests: clearly-better candidate promoted after 30 documents;
+  cost-ceiling breach triggers demotion
 
-**Exit criterion:** a synthetic experiment routes traffic correctly, collects
-per-cohort scores, and promotes the winning candidate automatically when the
-SPRT log-likelihood ratio crosses the upper bound. The losing candidate is
-demoted via SPRT early stopping without waiting for the full minimum sample.
-`ExperimentPostmortem` is auto-generated for every demoted experiment.
-
----
-
-### v0.17.1 — Orchestration and Scheduling
-
-Goal: wire the full observe → diagnose → hypothesize → validate → promote loop
-to run autonomously, with configurable scheduling, plateau detection, and
-comprehensive safety guardrails that prevent runaway quality or cost regressions.
-
-- [ ] `TuningOrchestrator.run_cycle()`: orchestrates one full loop iteration —
-  calls `DiagnosticsEngine`, selects top recommendation, calls
-  `HypothesisGenerator`, creates experiment record in DB, registers candidate
-  profile, activates `CandidateRouter` routing; also fires on event-driven
-  trigger (after `trigger_after_n_documents` new documents are ingested)
-- [ ] `PlateauDetector`: after 3 consecutive promotions with mean ΔF1 <
-  `plateau_threshold` (default 0.01), fires a response in order — (1) switch
-  to different mutation type family, (2) expand parameter search space (allow
-  2-step sweeps), (3) reset generation counter as new baseline, (4) escalate
-  to human review with "possible local optimum" notification
-- [ ] `TuningScheduler`: APScheduler-based periodic trigger; configurable
-  interval per profile via `auto_tuning.diagnosis_interval_hours`; reuses the
-  existing APScheduler instance used by nightly lint
-- [ ] Full `auto_tuning:` section in `CompilerProfile` dataclass and profile
-  YAML schema: `enabled`, `diagnosis_interval_hours`,
-  `trigger_after_n_documents`, `validation.*` (split_ratio, min_sample_size,
-  max_experiment_days, replay_on_low_volume, low_volume_threshold),
-  `thresholds.*` (promotion_f1_delta, demotion_f1_delta, max_cost_increase,
-  min_precision, plateau_threshold), `mutations.*` (max_active_candidates,
-  allowed_types, hypothesis_model, max_batch_examples,
-  max_properties_per_mutation), `convergence.*` (window_days,
-  maintenance_interval_multiplier, reactivation_score_delta), and
-  `cost_sensitivity` λ parameter
-- [ ] `riverbank tuning run-once --profile <name>` CLI command: executes one
-  full cycle synchronously, printing each step with timing for debugging
-- [ ] Safety guardrails (enforced in `TuningOrchestrator`):
-  - Precision floor: immediate demotion if candidate precision < floor
-  - Cost ceiling: immediate demotion if candidate cost > `max_cost_increase`
-    × baseline
-  - Freeze-on-regression: if any promoted variant shows >5% F1 drop in 24h,
-    freeze ALL experiments for that profile and emit a critical alert
-  - Generation depth limit: pause auto-tuning at lineage depth 10; require
-    human review before continuing
-  - Mutation conflict prevention: at most one active experiment per parameter
-    type at a time
-  - Minimum evaluation coverage: no promotion without ≥10 scored documents
-- [ ] Post-promotion recompilation policy: when `recompile_on_promotion: true`,
-  schedule background recompile of all sources compiled by the previous profile
-  version; `riverbank tuning stale-sources --profile <name>` lists sources
-  flagged as stale after a promotion (compiled by the prior version)
-- [ ] `riverbank tuning freeze --profile <name>` and
-  `riverbank tuning unfreeze --profile <name>` commands; FROZEN state
-  persisted in `_riverbank.profiles.metadata`; can be entered from any state
-  and requires explicit unfreeze to exit
-- [ ] Mutation auto-approval rules: threshold sweeps (±1 step) and small prompt
-  patches (≤50 words changed) auto-approve; large prompt patches (>50 words
-  changed) and structural changes (backend toggle, model change) require
-  `pending_review`
-- [ ] Loop state machine: BOOTSTRAP → ACTIVE → MAINTENANCE (triggered after
-  `convergence.window_days` with no promotion and last 3 experiments ΔF1 <
-  0.005) → reactivation on score shift or drift; FROZEN state from any state
-- [ ] End-to-end integration test: run 3 full cycles; verify profile evolves,
-  each promotion improves quality, plateau detection fires after 3 small-delta
-  promotions, no guardrail fires falsely
-
-**Exit criterion:** `riverbank tuning run-once --profile X` completes a full
-cycle and either promotes a candidate, demotes a bad one, or logs "no significant
-improvement found" — with a complete audit trail and a matching pg-tide event.
-After 3 consecutive small-delta promotions, `PlateauDetector` fires and strategy
-shifts without human intervention.
-
----
-
-### v0.17.2 — Tuning Observability and Polish
-
-Goal: make the auto-tuning system fully transparent to operators; complete the
-CLI surface; integrate with Langfuse and Perses; add convergence/maintenance
-mode and onboarding path; publish the design as documentation.
-
-- [ ] Perses dashboard panel: active experiment count, F1 trend over time,
-  cost-per-triple trend, promotion and demotion event timeline, experiment
-  sample-size progress bars, tuning state machine status (ACTIVE / MAINTENANCE
-  / FROZEN / BOOTSTRAP) per profile
-- [ ] `riverbank tuning history --profile <name>` CLI: renders the mutation
-  lineage tree (parent → child → outcome) with F1 delta, cost delta, and SPRT
-  LLR at each node; supports `--format json` for programmatic consumption;
-  marks plateau detection events in the tree
-- [ ] `riverbank tuning pareto --profile <name>` CLI: tables the quality × cost
-  Pareto frontier across all historical profile variants; marks the currently
-  active profile and highlights dominated variants
-- [ ] `riverbank tuning rollback --profile <name> --to-generation <n>` CLI:
-  reactivates a previous generation as the current active profile; records a
-  `tuning_rollback` event in the audit log
-- [ ] `riverbank tuning insights --profile <name>` CLI: surfaces
-  `ExperimentPostmortem` lessons, `MutationEffectivenessRegistry` top performers,
-  and cross-profile transfer suggestions; supports `--format json`
-- [ ] `riverbank tuning init --profile <name>` CLI: new profile onboarding path
-  — verifies ≥20 documents ingested with tuning disabled, runs initial
-  evaluation, snapshots the baseline in `_riverbank.tuning_diagnostics`, and
-  enables `auto_tuning.enabled: true`; for corpora without a reference dataset,
-  automatically queues an initial spot-sampling task
-- [ ] `riverbank tuning status --profile <name>` CLI: shows current tuning state
-  (BOOTSTRAP / ACTIVE / MAINTENANCE / FROZEN), active experiment count,
-  last diagnosis timestamp, and convergence progress
-- [ ] Convergence and maintenance mode: automatically transitions to MAINTENANCE
-  when no promotion in `convergence.window_days` (default 30) and the last 3
-  experiments all had ΔF1 < 0.005; diagnosis interval multiplied by
-  `maintenance_interval_multiplier` (default 4×); reactivated automatically
-  when score drops by `reactivation_score_delta` or drift is detected
-- [ ] Langfuse dataset integration: each A/B experiment creates a Langfuse
-  dataset with baseline and candidate cohort results; diff annotations flag
-  which triples appeared, disappeared, or changed confidence between variants
-- [ ] `riverbank_tuning_f1_current` gauge updated on every diagnosis cycle, not
-  only on promotion events; new `riverbank_tuning_state` gauge (0=bootstrap,
-  1=active, 2=maintenance, 3=frozen) per profile
-- [ ] Experiment expiry background task: mark experiments `expired` after
-  `max_experiment_days` with no significant result; archive or delete candidate
-  profiles per `auto_tuning.mutations.on_expiry` policy
-- [ ] `auto_tuning:` section added to example profiles (`wikidata-eval-v1`,
-  `docs-policy-v1-preprocessed`) with sensible defaults, convergence config,
-  and inline YAML comments explaining each option
-- [ ] `riverbank evaluate <document> --profile <name>` CLI: pre-tuning diagnostic
-  for a single document — reports Tier 2 (SHACL score, CQ coverage, entity
-  fragmentation) and Tier 3 (confidence calibration ρ, rejection breakdown) signals
-  without needing auto-tuning loop; optional `--reference <jsonl>` for Tier 1
-  metrics (precision, recall, F1); `--compare <profile>` for side-by-side
-  comparison on the same document
-- [ ] How-to guide: [docs/how-to/enable-auto-tuning.md](docs/how-to/enable-auto-tuning.md)
-- [ ] Concepts page: [docs/concepts/adaptive-compilation.md](docs/concepts/adaptive-compilation.md)
-- [ ] [plans/auto-tuning.md](plans/auto-tuning.md) cross-referenced from ROADMAP
-  and concepts page
-
-**Exit criterion:** an operator can read the Perses dashboard, understand why
-the last promotion happened, inspect the full lineage tree, perform a rollback
-from the CLI, and onboard a new profile using `riverbank tuning init` — without
-consulting source code. A stable profile correctly enters MAINTENANCE mode and
-reactivates when corpus drift is detected.
-
----
-
-### v0.18.0 — Measurement Architecture
-
-Goal: implement the full ground truth pipeline so the auto-tuner works correctly
-with any corpus — curated JSONL reference datasets, Wikidata, noisy-OR bootstrap,
-or human spot-sampling. This makes auto-tuning genuinely corpus-agnostic.
-
-- [ ] `MeasurementPlan` dataclass: tier label (`'gold'`, `'silver'`, `'bronze'`),
-  primary score function, confidence level, recommended minimum sample size,
-  staleness timestamp, composite weights per signal
-- [ ] Full three-tier signal hierarchy in `MeasurementStrategy.select_tier()`:
-  Tier 1 — curated JSONL ground truth or Wikidata property alignment (requires
-  `evaluation.ground_truth` pointing to a JSONL file or `'wikidata'`); Tier 2
-  — SHACL validation score + CQ coverage fraction + noisy-OR promotion rate
-  (structural signals, no external labels); Tier 3 — self-consistency signals
-  (confidence calibration ρ, triple yield, rejection rates, latency)
-- [ ] `evaluation.ground_truth` field added to profile YAML schema: accepts a
-  path to a JSONL ground truth file (predicate-per-line format with subject,
-  predicate, object, label fields) or the string `'wikidata'` for Wikidata-backed
-  evaluation; when absent the system falls back to Tier 2/3
-- [ ] Composite score computation: weighted blend across tiers based on
-  availability and configured `measurement_weights`; per-tier weights configurable
-  in profile YAML; at least one tier must be available or diagnosis is deferred
-- [ ] Human spot-sampling integration with Label Studio (Phase F):
-  `SpotSampler` selects a stratified random sample from recently-ingested
-  sources and creates Label Studio tasks; results scored against the extraction
-  output; triggered automatically after every `spot_sample_every_n_promotions`
-  promotions (default 5)
-- [ ] Cold-start bootstrap path: for any new profile with no reference dataset,
-  `riverbank tuning init` immediately queues a spot-sampling task; diagnosis
-  defers until at least `min_spot_sample_size` (default 20) human labels are
-  available; bootstrap mode uses Tier 2/3 only until then
-- [ ] Measurement miscalibration detection before every diagnosis cycle:
-  (a) predicate alignment coverage check — flag if < 50% of top-K predicates
-  are aligned in the ground truth vocabulary (stale reference dataset);
-  (b) CQ coverage check — flag if CQ relevance < 0.2 before using CQ signals;
-  (c) calibration freshness check — flag Tier 3 confidence as stale if
-  calibration run is > 30d old; (d) reference dataset staleness — warn if
-  ground truth file not updated in > `evaluation.max_reference_age_days` days
-- [ ] `SignificanceTester` updated to use composite score when Tier 1
-  unavailable: accumulates SPRT over per-document composite scores rather
-  than per-document F1; decision thresholds adjusted for higher score variance
-- [ ] Per-tier confidence labels on all promotion audit records:
-  `_riverbank.log` entries include `measurement_tier`, `composite_score`,
-  and individual tier scores at the time of the promotion decision
-- [ ] `riverbank tuning status --profile <name>` extended to show active
-  measurement tier, predicate alignment coverage, reference dataset staleness,
-  and next scheduled spot-sampling event
-- [ ] Integration tests: full cycle with curated JSONL ground truth achieving
-  Tier 1; full cycle with no reference dataset falling back to Tier 2/3;
-  spot-sampling trigger fires correctly after N promotions; miscalibration
-  detection flags correctly when alignment coverage drops below threshold
-
-**Exit criterion:** `riverbank tuning diagnose --profile X` correctly identifies
-Tier 1/2/3 availability and adjusts recommendations accordingly. Human
-spot-sampling is triggered automatically on a corpus with no reference dataset.
-A new corpus with a curated JSONL ground truth file achieves Tier 1 confidence
-without any manual configuration beyond `evaluation.ground_truth`.
-
----
-
-### v0.18.1 — Learning from History
-
-Goal: make the auto-tuner self-improving across experiments — it should get
-better at predicting which mutations will work, transfer successful patterns
-to related profiles, and handle corpora with many simultaneous quality gaps.
-
-- [ ] `ExperimentPostmortem` full analysis pipeline: after every `demoted` or
-  `expired` experiment, automatically derive `root_cause` and `lesson` using
-  LLM analysis of the `diagnostic_snapshot` vs. actual outcome; store in
-  `_riverbank.experiment_postmortems`; surface in `riverbank tuning insights`
-- [ ] `MutationEffectivenessRegistry` time-decay: empirical success rates decay
-  with exponential half-life of 90 days (`decay_weight = exp(-λ·days)`);
-  very old evidence has less influence than recent outcomes; decay applied
-  on-read, not as a scheduled job, for efficiency
-- [ ] Cross-profile transfer suggestions (§7.3): after every promotion in
-  profile A, query other profiles with similar corpus domain and overlapping
-  failure modes; emit a transfer suggestion (not an automatic mutation — requires
-  human approval) surfaced in `riverbank tuning insights` and `riverbank.tuning.
-  transfer_suggestion` pg-tide event; validated by `riverbank tuning suggest
-  --profile B` before any action
-- [ ] `ProposalCalibrator` (§7.5): tracks bias between `predicted_f1_delta` and
-  `actual_f1_delta` over the last 20 experiments using an exponentially-weighted
-  moving average; corrects systematic over- or under-prediction before lift
-  estimates are used for ranking or early-abort decisions; stores calibration
-  state in `_riverbank.proposal_calibration`; early abort if all calibrated
-  lifts fall below 0.005
-- [ ] Multi-property triage (§7.6): when `DiagnosticsReport` has more than 3
-  simultaneous recall gaps, `HypothesisGenerator` clusters them by shared
-  root cause (overlapping FN/FP patterns); batches few-shot injection for
-  up to `max_batch_examples` (default 5) patterns into a single mutation;
-  prioritises by recall × predicate frequency; caps at
-  `max_properties_per_mutation` (default 3) per mutation to keep experiments
-  interpretable
-- [ ] Mutation half-life in `TriedPatchesRegistry`: attempted mutations also
-  decay over time — a failed approach tried 90 days ago should be retryable;
-  configurable `tried_patches_decay_days` (default 90)
-- [ ] Cross-experiment learning validation: after every 20 experiments, run an
-  internal A/B test comparing the `MutationEffectivenessRegistry`-guided
-  proposal order against random; emit a `learning_improving` / `learning_flat`
-  diagnostic event
-- [ ] `riverbank tuning insights --profile <name>` fully populated: post-mortem
-  lessons, top-5 effective mutation types with success rates, cross-profile
-  transfer suggestions, `ProposalCalibrator` bias and confidence, and a
-  plain-language summary of what the tuner has learned about this corpus
-- [ ] Integration tests: after 20 synthetic experiments, `MutationEffectiveness
-  Registry` correctly ranks mutation types by historical success; cross-profile
-  transfer suggestion fires when a promoted mutation matches another profile's
-  failure mode; `ProposalCalibrator` corrects a 20% systematic over-prediction
-  after 10 experiments
-
-**Exit criterion:** after 20+ experiments, recommended mutation types succeed
-at a higher rate than random selection (measured by the internal learning
-validation A/B). `riverbank tuning insights` surfaces at least one cross-profile
-transfer suggestion and a calibrated lift estimate for each queued proposal.
-`ProposalCalibrator` demonstrably reduces calibration error over baseline.
+**Exit criterion:** a synthetic experiment routes traffic correctly, accumulates
+per-cohort rolling averages, and promotes the winning candidate automatically
+after 30 documents when improvement ≥2%. A candidate that increases cost beyond
+the ceiling is demoted and rolled back automatically.
 
 ---
 
@@ -1425,27 +1281,14 @@ v0.15.0 ─── Wikidata evaluation: benchmark dataset, property alignment, sc
 v0.15.1 ─── Extraction improvement loop: per-property recall gap analysis,
     │        prompt tuning from failure modes, 200+ novel-discovery annotations
     │
-v0.16.0 ─── Tuning diagnostics: DiagnosticsEngine (10 rules), corpus drift
-    │        detection, MeasurementStrategy, cold-start bootstrap, tuning_diagnostics
+v0.16.0 ─── Tuning diagnostics: 4 core diagnostic rules, sliding-window baseline,
+    │        cold-start bootstrap, `riverbank tuning diagnose`, 2 Prometheus gauges
     │
-v0.16.1 ─── Hypothesis generation: HypothesisGenerator, 5 mutation backends,
-    │        TriedPatchesRegistry, MutationEffectivenessRegistry
+v0.16.1 ─── Threshold sweep + manual comparison: ThresholdSweepBackend,
+    │        TriedPatchesRegistry, `riverbank tuning propose + compare`
     │
-v0.17.0 ─── A/B testing harness: CandidateRouter, SPRT SignificanceTester,
-    │        ExperimentPostmortem, replay evaluation for low-volume corpora
-    │
-v0.17.1 ─── Orchestration: TuningOrchestrator, PlateauDetector, TuningScheduler,
-    │        full auto_tuning YAML schema, stale-sources, convergence state machine
-    │
-v0.17.2 ─── Observability: Perses dashboard, tuning history, Pareto frontier,
-    │        insights CLI, tuning init, convergence/maintenance mode, docs
-    │
-v0.18.0 ─── Measurement architecture: three-tier ground truth pipeline, human
-    │        spot-sampling, miscalibration detection, per-tier audit labels
-    │
-v0.18.1 ─── Learning from history: ProposalCalibrator, multi-property triage,
-    │        cross-profile transfer, mutation half-life, learning validation
-    │
+v0.17.0 ─── Automated rolling-average promotion: CandidateRouter, rolling-average
+    │        promotion rule, audit trail, `riverbank tuning experiments`
 v1.0.0  ─── Stable: API stability guarantee, signed artifacts, Helm stability, SLOs in CI
 ```
 
@@ -1541,53 +1384,25 @@ producing high-quality triples.
 v0.15.0 and v0.15.1 establish the external benchmark that auto-tuning depends
 on. Without a reproducible, externally-validated quality signal, auto-tuning
 has no north star. The 1,000-article Wikidata benchmark and per-property recall
-gap analysis together provide the Tier 1 measurement signal that v0.16.x builds
-on.
+gap analysis together provide the measurement signal that v0.16.x builds on.
 
-v0.16.0 is the observation layer. The tuning loop cannot improve what it cannot
-measure. Before any mutation is proposed, every quality signal (F1, SHACL,
-CQ coverage, confidence calibration, cost, corpus drift) must be queryable and
-trendable. The DiagnosticsEngine rule set is expanded from 7 to 10 rules to
-cover signals that only became visible after the v0.15.x evaluation work.
+v0.16.0 is the observation layer. Before any mutation is proposed, the key
+quality signals (F1, precision floor, confidence calibration, cost-per-triple)
+must be queryable and trendable. The four core diagnostic rules cover the
+failure modes that matter most and can be validated against real corpora before
+the rule set is expanded.
 
-v0.16.1 automates the creative work. Historically an operator would read the
-diagnostics and manually edit a YAML profile. The HypothesisGenerator replaces
-that step with five mutation backends, each targeting a different class of quality
-gap. The TriedPatchesRegistry and MutationEffectivenessRegistry ensure the
-system learns from failures rather than repeating them.
+v0.16.1 converts a diagnosis into an action. Historically an operator would
+read the diagnostics and manually edit a YAML profile. `ThresholdSweepBackend`
+replaces that step with a deterministic grid search over numeric parameters,
+and `tuning compare` gives the operator a side-by-side metric table to evaluate
+the suggestion before committing.
 
-v0.17.0 adds the safety net. Mutations generated in v0.16.1 must never go live
-without statistical evidence that they help. The SPRT harness (replacing the
-less efficient fixed-sample Welch's t-test) provides statistically valid
-sequential decisions — promotes on large effects quickly, avoids false positives
-on small noisy effects, and auto-generates a post-mortem for every failure.
-Replay evaluation handles low-volume corpora that would otherwise never
-accumulate enough fresh documents for a SPRT decision.
-
-v0.17.1 closes the loop. The orchestrator wires all preceding components into
-an autonomous cycle that runs on schedule and on event-driven triggers. Plateau
-detection prevents the loop from wasting experiments in a local optimum.
-Convergence mode reduces overhead on stable profiles. The full auto_tuning YAML
-schema documents every knob an operator might need to adjust.
-
-v0.17.2 makes the system legible. A tuning loop that operators cannot inspect
-and intervene in will not be trusted. The Perses dashboard, lineage tree, Pareto
-frontier, and insights CLI together give operators complete visibility into what
-changed, why it was promoted, and how to roll it back if needed.
-
-v0.18.0 makes auto-tuning truly corpus-agnostic. The three-tier measurement
-architecture ensures the tuner works whether the corpus has a curated gold
-reference dataset, only structural SHACL/CQ signals, or requires human
-spot-sampling to bootstrap. Without this release, auto-tuning is only practical
-for corpora that have already invested in labeled ground truth.
-
-v0.18.1 makes the system self-improving across experiments. A naive tuning loop
-treats each experiment as independent. v0.18.1 adds cross-experiment memory
-(MutationEffectivenessRegistry with time decay), hypothesis bias correction
-(ProposalCalibrator), parallel gap handling (multi-property triage), and
-cross-corpus knowledge transfer (transfer suggestions). After 20+ experiments
-the system should be measurably better at predicting which mutations will work
-than it was at experiment 1.
+v0.17.0 automates the promotion decision. Once the manual cycle has proven
+it can find improvements, the CandidateRouter routes a small fraction of live
+traffic through the candidate and promotes automatically when rolling-average
+improvement reaches 2% over 30 documents. Cost-ceiling demotion ensures nothing
+regresses silently.
 
 v1.0.0 completes the API stability contract. The goal is not to add features at
 1.0 but to guarantee that v0.x adopters can upgrade to v1.0 without breaking

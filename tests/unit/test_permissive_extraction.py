@@ -538,7 +538,7 @@ class TestMergedPreprocessing:
 
         preprocessor = DocumentPreprocessor()
         profile = MagicMock()
-        profile.preprocessing = {"enabled": True, "strategies": ["document_summary", "entity_catalog"]}
+        profile.preprocessing = {"enabled": True, "backend": "llm", "strategies": ["document_summary", "entity_catalog"]}
         profile.token_optimization = {"merge_preprocessing_below_chars": 0}
 
         with patch.object(preprocessor, "_extract_merged") as mock_merged, \
@@ -556,7 +556,7 @@ class TestMergedPreprocessing:
 
         preprocessor = DocumentPreprocessor()
         profile = MagicMock()
-        profile.preprocessing = {"enabled": True, "strategies": ["document_summary", "entity_catalog"]}
+        profile.preprocessing = {"enabled": True, "backend": "llm", "strategies": ["document_summary", "entity_catalog"]}
         profile.token_optimization = {"merge_preprocessing_below_chars": 10000}
 
         with patch.object(preprocessor, "_extract_merged") as mock_merged, \
@@ -574,7 +574,7 @@ class TestMergedPreprocessing:
 
         preprocessor = DocumentPreprocessor()
         profile = MagicMock()
-        profile.preprocessing = {"enabled": True, "strategies": ["document_summary", "entity_catalog"]}
+        profile.preprocessing = {"enabled": True, "backend": "llm", "strategies": ["document_summary", "entity_catalog"]}
         profile.token_optimization = {"merge_preprocessing_below_chars": 10000}
 
         with patch.object(preprocessor, "_extract_merged") as mock_merged, \
