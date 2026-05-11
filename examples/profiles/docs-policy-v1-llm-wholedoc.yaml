@@ -157,15 +157,16 @@ extraction_strategy:
 # - Improves confidence of extracted facts
 #
 # Confidence threshold strategy:
-#   "high": Only very confident proposals (strict filtering, fewer predicates)
-#   "medium": Balanced—likely + confident proposals (recommended for permissive mode)
-#   "low": All proposals including speculative ones (generous, may introduce noise)
+#   "high": Only very confident proposals (strict filtering, fewest predicates)
+#   "medium": Balanced—likely + confident proposals (recommended for permissive, ~4-10 predicates)
+#   "low": All proposals including speculative (should give most, but may be empty in some cases)
 #
-# For PERMISSIVE profile: use "medium" to get rich predicate discovery without excessive noise.
+# For PERMISSIVE profile: use "medium" to get balanced discovery without excessive noise.
+# If you need more predicates, try "low" or adjust max_predicates upward.
 #
 predicate_inference:
   enabled: true                     # Enable schema discovery
-  confidence_threshold: "medium"    # medium: balanced discovery (more proposals than "high")
+  confidence_threshold: "medium"    # medium: balanced discovery (recommended)
   use_for_extraction: true          # Merge proposals into allowed_predicates
                                     # (constrains extraction to discovered schema)
   max_predicates: 40                # Stop proposing after N predicates
