@@ -30,16 +30,29 @@
 name: docs-policy-v1-llm-wholedoc
 version: 1
 
-# Extractor — "instructor" uses LLM via OpenAI API (or Ollama via base_url override)
+# ============================================================================
+# LLM MODEL CONFIGURATION
+# ============================================================================
+
+# Extractor: "instructor" uses LLM structured output via OpenAI API or Ollama
+# Alternatives: "noop" (no extraction, testing only)
 extractor: instructor
 
-model_provider: ollama
-model_name: llama3.2
-embed_model: nomic-embed-text
-max_fragment_tokens: 2000
+# LLM Provider and model selection
+model_provider: ollama              # ollama, openai, azure, anthropic, or local
+model_name: llama3.2                # LLM model name (e.g., gpt-4, claude-3-sonnet)
+embed_model: nomic-embed-text       # Embedding model for entity resolution, similarity matching
+max_fragment_tokens: 2000           # Max tokens per fragment (used with semantic fragmenter)
 
+# Named graph IRI where triples will be written by default
 named_graph: "http://riverbank.example/graph/trusted"
 
+# ============================================================================
+# EXTRACTION PROMPT
+# ============================================================================
+# Instructs the LLM on what to extract, how to format it, and quality rules.
+# This prompt is injected into every extraction call.
+#
 prompt_text: |
   You are a knowledge graph compiler.  Extract factual claims from the
   following documentation as RDF triples.
@@ -82,51 +95,80 @@ prompt_text: |
     BAD:  ex:won_european_cups ex:Six
     GOOD: ex:won_european_cups "6" or ex:won_european_cups "six times"
 
+# ============================================================================
+# EDITORIAL POLICY
+# ============================================================================
+# Controls fragmentation, filtering, and acceptance criteria for extraction.
+#
 editorial_policy:
-  min_fragment_length: 50
-  max_fragment_length: 500000  # Very high to keep entire document as one fragment
-  min_heading_depth: 0
-  confidence_threshold: 0.0     # PERMISSIVE: accept all confidence levels (no editorial gate)
+  min_fragment_length: 50           # Minimum characters per fragment (skip tiny sections)
+  max_fragment_length: 500000       # Very high to keep entire document as one fragment
+                                    # (whole-document extraction = 1 LLM call)
+  min_heading_depth: 0              # Include all headings (depth 0 = top-level)
+  confidence_threshold: 0.0         # PERMISSIVE: accept ALL confidence levels
+                                    # (no editorial gate filtering triples)
   allowed_languages:
-    - en
+    - en                            # Only process English documents
 
-# Fragmenter: noop (aliased to direct in v0.15.1+) — treats entire document as single fragment
-fragmenter: noop
+# ============================================================================
+# FRAGMENTER
+# ============================================================================
+# Determines how to split documents into extraction units.
+# "noop" (aliased to "direct") treats the entire document as one fragment.
+#
+fragmenter: noop                    # noop: whole-document mode (1 fragment)
+                                    # heading: split at heading boundaries
+                                    # semantic: clustering-based chunking
 direct_extraction:
-  max_doc_chars: 500000  # match max_fragment_length above
+  max_doc_chars: 500000             # Max doc size for noop fragmenter (match max_fragment_length)
 
+# ============================================================================
+# EXTRACTION STRATEGY
+# ============================================================================
+# Controls how many triples to extract and evidence requirements.
+#
 extraction_strategy:
-  # Extraction target: PERMISSIVE mode — ask LLM for high volume of triples
-  # The model will naturally produce 50-100 triples; with min_triples: 100,
-  # we encourage exhaustive extraction. num_predict is auto-scaled to accommodate.
+  # Extraction target: guidance for LLM on triple volume
+  # PERMISSIVE mode: ask for high volume, accept all confidence levels
+  # num_predict token budget is auto-scaled based on these targets.
   extraction_target:
-    min_triples: 40        # Realistic for constrained extraction
-    max_triples: 100       # Fewer, higher-quality triples
-  citation_floor: 0        # PERMISSIVE: accept all triples regardless of excerpt
+    min_triples: 40                 # Minimum expected triples (LLM may undershoot)
+    max_triples: 100                # Maximum expected triples (stop if reached)
+  citation_floor: 0                 # PERMISSIVE: accept all triples
+                                    # (any confidence, any excerpt quality)
+                                    # Higher values filter by confidence in extraction
 
-# Note: constrained_decoding disabled — MD_JSON mode is more reliable with Ollama
+# Constrained decoding (optional): force LLM to output valid structured JSON
+# Disabled: MD_JSON mode is more reliable with Ollama than constrained_decoding
 # constrained_decoding: true
 
-# v0.18.0: Predicate inference — LLM-driven schema discovery
-# Automatically discover domain-appropriate predicates before extraction.
-# The LLM first analyzes the document to propose relevant predicates,
-# then uses those proposals to focus extraction on high-confidence facts.
+# ============================================================================
+# PREDICATE INFERENCE (v0.18.0+)
+# ============================================================================
+# LLM-driven schema discovery: propose domain-appropriate predicates before extraction.
 #
-# This bridges permissive (exhaustive discovery) and constrained (focused extraction):
-# - First pass: LLM proposes predicates based on document content
-# - Second pass: extraction uses proposed predicates + raw vocabulary
-# - Result: natural vocabulary tailored to the document domain
+# Two-pass approach:
+#   Pass 1: LLM analyzes document, proposes relevant predicates
+#   Pass 2: Extraction uses proposed predicates + any other predicates
+#
+# Bridges permissive (exhaustive) and constrained (focused) extraction:
+# - Discovers natural vocabulary tailored to document domain
+# - Reduces predicate sprawl while remaining open-vocabulary
+# - Improves confidence of extracted facts
+#
 predicate_inference:
-  enabled: true
-  confidence_threshold: "high"
-  use_for_extraction: true   # Constrain extraction to discovered predicates — reduces sprawl
-  max_predicates: 40
+  enabled: true                     # Enable schema discovery
+  confidence_threshold: "high"      # Only propose high-confidence predicates
+  use_for_extraction: true          # Merge proposals into allowed_predicates
+                                    # (constrains extraction to discovered schema)
+  max_predicates: 40                # Stop proposing after N predicates
 
-# Extraction target: reduced to realistic volume for constrained extraction
-# With predicate constraints, 40-60 high-quality triples beats 200 noisy ones.
-
-# Competency questions — SPARQL ASK queries that the compiled graph must answer.
-# Used by the golden corpus CI gate (tests/golden/).
+# ============================================================================
+# COMPETENCY QUESTIONS
+# ============================================================================
+# SPARQL queries that the compiled graph MUST satisfy.
+# Used by the golden corpus CI gate (tests/golden/) to validate extraction.
+#
 competency_questions:
   - id: cq-01
     description: "The corpus defines a concept called 'Confidence'"
@@ -148,49 +190,98 @@ competency_questions:
         ?s ?p ?o .
       }
 
+# ============================================================================
+# DOCUMENT DISTILLATION (v0.15.2+)
+# ============================================================================
+# Optional pre-extraction content selection: remove noise, focus on key facts.
+# Cached on disk, no LLM cost for unchanged documents.
+# Strategies: minimal, moderate, aggressive
+#
 distillation:
-  enabled: true
-  strategy: moderate
+  enabled: true                     # Pre-filter content before extraction
+  strategy: moderate                # Balance between compression and information loss
 
-# v0.16.0: Entity resolution — after extraction, ask the LLM to identify which
-# subject IRIs refer to the same real-world entity and emit owl:sameAs links.
-# The vocabulary normalisation pass then rewrites all aliases to the canonical URI.
+# ============================================================================
+# ENTITY RESOLUTION (v0.16.0+)
+# ============================================================================
+# Post-extraction pass: identify entity aliases and emit owl:sameAs links.
+# Merges different IRIs referring to the same real-world entity.
+#
+# Backends:
+#   "llm": One LLM call per document (semantic, intelligent)
+#   "embeddings": Cosine similarity (fast, no LLM cost, may miss some aliases)
+#
 entity_resolution:
-  enabled: true
-  backend: "llm"              # llm: one call per doc; embeddings: cosine-similarity only
-  max_entities_per_call: 50
-  confidence_threshold: 0.75
+  enabled: true                     # Run entity resolution pass
+  backend: "llm"                    # Use LLM for semantic alias detection
+  max_entities_per_call: 50         # Batch size for LLM calls
+  confidence_threshold: 0.75        # Minimum confidence for owl:sameAs assertions
 
-# v0.15.3: Vocabulary normalisation — post-extraction pass
-# DISABLED in this permissive profile: vocabulary normalisation (predicate collapse,
-# categorical promotion) is better suited for constrained/domain-specific extraction.
-# For general-purpose open-vocabulary extraction, it can be too aggressive.
-# To enable, set enabled: true and tune collapse_predicates/categorical_threshold.
+# ============================================================================
+# VOCABULARY NORMALISATION (v0.15.3+)
+# ============================================================================
+# Post-extraction pass: normalize predicates, promote literals, decompose stuffed facts.
+# Four normalization steps:
+#   1. Categorical promotion: repeated literals → IRI resources
+#   2. Predicate collapse: similar predicates → canonical form
+#   3. Fact decomposition: strip qualifiers from predicate names
+#   4. URI canonicalization: merge aliases via owl:sameAs
+#
+# DISABLED in this profile: predicate collapse is too aggressive for open-vocabulary.
+# Better suited for constrained/domain-specific extraction. Can be re-enabled with tuning.
+#
 vocabulary_normalisation:
-  enabled: false
+  enabled: false                    # Disabled for permissive open-vocabulary profile
+  categorical_threshold: 2          # Promote literal when it appears ≥N times with same predicate
+  collapse_predicates: false        # DISABLED: may over-merge unrelated predicates
+  predicate_collapse_backend: "deterministic" # deterministic: edit-distance (safer)
+                                    # llm: semantic (more aggressive)
+  decompose_stuffed_predicates: true           # Decompose predicates like won_first_FA_Cup
+  rewrite_canonical_uris: true                 # Rewrite aliases using owl:sameAs
+  vocabulary_namespace: "http://riverbank.example/vocab/"
 
-# Preprocessing: now free with NLP backend (sumy + spaCy NER)
-# Injects domain summary + entity catalog to guide extraction
+# ============================================================================
+# PREPROCESSING
+# ============================================================================
+# Pre-extraction enrichment: summarize document, catalog entities.
+# Injects domain context and entity catalog into extraction prompt.
+#
+# Backends:
+#   "nlp": sumy LexRank + spaCy NER (no LLM cost, fast)
+#   "llm": LLM-based summarization (higher quality, higher cost)
+#
 preprocessing:
-  enabled: true
-  backend: "nlp"  # Uses sumy LexRank + spaCy NER (no LLM cost)
-  max_tokens_for_preprocessing: 4000
+  enabled: true                     # Run preprocessing pass
+  backend: "nlp"                    # Use NLP-based summarization (no LLM cost)
+  max_tokens_for_preprocessing: 4000 # Summary token budget (avoid too-long summaries)
 
-# Verification: now free with NLI backend (cross-encoder)
-# Filters out hallucinated/contradictory triples against source
+# ============================================================================
+# VERIFICATION (OPTIONAL)
+# ============================================================================
+# Post-extraction hallucination detection: filter triples contradicting source.
+# Uses NLI (Natural Language Inference) cross-encoder, no LLM cost.
+# DISABLED by default: adds ~20% runtime cost for hallucination filtering.
+#
 verification:
-  enabled: false
-  backend: "nli"  # Uses cross-encoder/nli-distilroberta-base (no LLM cost)
+  enabled: false                    # Disabled: adds overhead, marginal quality gain
+  backend: "nli"                    # cross-encoder/nli-distilroberta-base (no LLM cost)
 
-# Vocabulary: PERMISSIVE with intelligent constraints
-# allowed_predicates is empty, so the LLM can propose any predicates.
-# Predicate inference (above) provides intelligent guidance by proposing high-confidence
-# domain-appropriate predicates before extraction. These are merged into allowed_predicates
-# for the extraction pass, steering the LLM toward high-quality facts while remaining open.
+# ============================================================================
+# ALLOWED PREDICATES (VOCABULARY CONSTRAINTS)
+# ============================================================================
+# PERMISSIVE MODE: empty list allows LLM to propose any predicate.
 #
-# To switch to FULLY CONSTRAINED mode, populate this list with domain-specific predicates
-# and disable predicate_inference. See examples/profiles/docs-policy-v1-llm-biography.yaml.
+# Predicate inference (above) provides intelligent guidance:
+#   1. LLM analyzes document and proposes domain-appropriate predicates
+#   2. Proposals are merged into allowed_predicates for extraction
+#   3. Result: focused extraction within discovered schema, not fully open
 #
-# To analyze the natural vocabulary the model produces, use:
+# To switch to FULLY CONSTRAINED mode:
+#   1. Populate this list with domain-specific predicates
+#   2. Disable predicate_inference (set enabled: false)
+#   3. See examples/profiles/docs-policy-v1-llm-biography.yaml for an example
+#
+# To analyze the vocabulary your extraction naturally produces:
 #   riverbank induce-schema --graph http://riverbank.example/graph/trusted --output schema.ttl
-allowed_predicates: []
+#
+allowed_predicates: []              # Empty = PERMISSIVE (any predicate allowed)
