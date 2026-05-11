@@ -28,6 +28,12 @@ MarkdownParser.parse()
         │
         ▼
 ╔══════════════════════════════════════════╗
+║  Distillation Pass (optional, v0.15.2)   ║
+║  Reduces document size pre-fragmentation ║
+╚══════════════════════════════════════════╝
+        │
+        ▼
+╔══════════════════════════════════════════╗
 ║  LLM Preprocessing Pass (once/document) ║
 ║  1. Document summary                     ║
 ║  2. Entity catalog                       ║
@@ -46,6 +52,8 @@ InstructorExtractor.extract()    → triples
 ```
 
 Preprocessing runs **before** fragmentation and **once per document**. The cost is amortised across all fragments in that document.
+
+> **Distillation vs preprocessing:** Distillation (v0.15.2) reduces the *input document* before fragmentation — it removes non-extractable sections. Preprocessing enriches the *extraction prompt* with a summary and entity catalog. Both run before fragmentation and are complementary. See [Use document distillation](../how-to/use-document-distillation.md).
 
 ---
 

@@ -54,4 +54,7 @@ Located in `examples/profiles/`:
 - `wikidata-eval-v1-llm-essential.yaml` — high_precision
 - `wikidata-eval-v1-llm-minimal.yaml` — facts_only
 
-- `wikidata-eval-v1-llm-minimal.yaml` (minimal)
+## Related
+
+- [Use document distillation](use-document-distillation.md) — reduce token cost *before* extraction by pre-filtering non-extractable sections
+- [Tune extraction quality](tune-extraction-quality.md) — comprehensive guide to all extraction quality levers

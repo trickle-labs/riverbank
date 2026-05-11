@@ -5,14 +5,15 @@ The riverbank compilation pipeline transforms raw documents into governed knowle
 ```mermaid
 flowchart TD
     A[Source discovery] --> B[Parsing]
-    B --> C[Fragmentation]
-    C --> D[Editorial policy gate]
-    D --> E[Hash deduplication]
-    E --> F[Vocabulary pass<br>optional]
-    F --> G[LLM extraction]
-    G --> H[SHACL validation]
-    H --> I[Graph write]
-    I --> J[Artifact dependency<br>registration]
+    B --> C[Distillation<br>optional]
+    C --> D[Fragmentation]
+    D --> E[Editorial policy gate]
+    E --> F[Hash deduplication]
+    F --> G[Vocabulary pass<br>optional]
+    G --> H[LLM extraction]
+    H --> I[SHACL validation]
+    I --> J[Graph write]
+    J --> K[Artifact dependency<br>registration]
 ```
 
 ## 1. Source discovery
@@ -28,7 +29,30 @@ The parser converts the raw format into a normalized text representation with he
 - `markdown` — uses `markdown-it-py`, preserves heading structure
 - `docling` — handles PDF, DOCX, HTML via the Docling library
 
-## 3. Fragmentation
+## 3. Distillation (optional)
+
+When `distillation.enabled: true` in the profile, the distillation step runs immediately after parsing and before fragmentation. It selects and compresses extractable content, reducing the token cost of all downstream stages.
+
+Distillation is a **content selection problem**, not raw compression: the step identifies provably non-extractable sections (references, navigation, captions, boilerplate) and removes them deterministically, then applies strategy-specific LLM transformation to the remainder.
+
+**Strategies:**
+
+| Strategy | What it does | LLM calls |
+|---|---|---|
+| `boilerplate_removal` | Deterministic regex stripper — removes reference sections, footnotes, navigation, captions | 0 |
+| `aggressive` | LLM compresses to core facts only (~10 kB) | 1 |
+| `moderate` | LLM removes boilerplate, keeps factual sections verbatim (~30 kB, **default**) | 1 |
+| `conservative` | LLM removes only navigation, references, and captions (~60–90% of original) | 1 |
+| `section_aware` | Two-pass: classify each section by type, then LLM-summarise low-density sections | 1–N |
+| `budget_optimized` | Adaptive: estimates triples-per-kB from a sample, selects strategy to hit cost target | 0–1 |
+
+The distilled text replaces the original for all downstream stages. The original `content_hash` is preserved on the `SourceRecord`, so fragment-level deduplication continues to work correctly.
+
+**Caching:** distillation outputs are cached by `xxh3_128(content) + strategy + target_size`. Re-ingesting an unchanged document costs zero additional LLM calls.
+
+See [Use document distillation](../how-to/use-document-distillation.md) for the full profile schema and worked examples.
+
+## 4. Fragmentation
 
 The fragmenter splits parsed content into compilation units. The heading fragmenter creates one fragment per heading section. Each fragment gets:
 
@@ -36,7 +60,7 @@ The fragmenter splits parsed content into compilation units. The heading fragmen
 - An `xxh3_128` content hash for change detection
 - Character offsets for evidence span validation
 
-## 4. Editorial policy gate
+## 5. Editorial policy gate
 
 Before LLM extraction (which costs money), the editorial policy filters fragments:
 
@@ -47,17 +71,17 @@ Before LLM extraction (which costs money), the editorial policy filters fragment
 
 Skipped fragments are recorded in the run stats, not silently dropped.
 
-## 5. Hash deduplication
+## 6. Hash deduplication
 
 Each fragment's `xxh3_128` hash is compared to the stored hash from the previous run. Unchanged fragments are skipped entirely — zero LLM calls for stable content.
 
 This is the core of incremental compilation: re-ingesting a 1000-document corpus where 3 documents changed produces only 3 fragments worth of LLM calls.
 
-## 6. Vocabulary pass (optional)
+## 7. Vocabulary pass (optional)
 
 When `run_mode_sequence` includes `vocabulary`, a first pass extracts `skos:Concept` triples into the `<vocab>` named graph. This establishes canonical entity IRIs before the full extraction pass, so that relationship extraction can reference consistent entities rather than creating duplicates.
 
-## 7. LLM extraction
+## 8. LLM extraction
 
 The extractor sends the fragment text and profile prompt to the configured LLM and parses the response into structured triples. Each triple carries:
 
@@ -67,7 +91,7 @@ The extractor sends the fragment text and profile prompt to the configured LLM a
 
 The `EvidenceSpan` contract is enforced: the excerpt must match the text at the declared offset. Fabricated citations are rejected.
 
-## 8. SHACL validation
+## 9. SHACL validation
 
 Extracted triples are validated against SHACL shapes:
 
@@ -75,7 +99,7 @@ Extracted triples are validated against SHACL shapes:
 - Triples below threshold → `draft` named graph (pending review)
 - Triples violating shape constraints → rejected with a `pgc:LintFinding`
 
-## 9. Graph write
+## 10. Graph write
 
 Valid triples are written to pg-ripple via `load_triples_with_confidence()`. Each carries:
 
@@ -84,7 +108,7 @@ Valid triples are written to pg-ripple via `load_triples_with_confidence()`. Eac
 - `pgc:compiledAt` → timestamp
 - `pgc:byProfile` → compiler profile reference
 
-## 10. Artifact dependency registration
+## 11. Artifact dependency registration
 
 The artifact dependency graph (`_riverbank.artifact_deps`) records which compiled facts depend on which fragments. This enables:
 

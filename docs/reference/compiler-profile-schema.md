@@ -133,6 +133,63 @@ Controls how triples are extracted and routed by confidence.
 | `safety_cap` | int | no | `50` | Maximum triples per fragment; excess kept by confidence |
 | `batch_size` | int | no | `0` | Group N fragments per LLM call (0 = disabled) |
 
+### `distillation`
+
+Optional pre-fragmentation document distillation step (v0.15.2). Runs immediately after parsing; the distilled text replaces the original for all downstream stages.
+
+```yaml
+distillation:
+  enabled: true
+  strategy: moderate            # boilerplate_removal | aggressive | moderate |
+                                # conservative | section_aware | budget_optimized
+  cache_dir: ~/.riverbank/distill_cache   # optional; created automatically
+  model_provider: ollama        # optional dedicated model for distillation
+  model_name: gemma3:4b         # optional; small fast model works well
+
+  # For aggressive / moderate / conservative:
+  target_size_bytes: 30720      # output size hint; default 10240/30720/0 per strategy
+
+  # For section_aware:
+  section_types:
+    factual:      keep          # copy verbatim
+    biographical: summarize     # LLM 2-3 sentence summary
+    event:        keep
+    reference:    remove        # omit entirely
+    navigation:   remove
+    caption:      remove
+
+  # For budget_optimized:
+  extraction_budget_usd: 1.00
+  min_triple_target: 50
+  sample_fragments: 3
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `enabled` | bool | no | `false` | Enable the distillation step |
+| `strategy` | string | no | `moderate` | Distillation strategy (see below) |
+| `cache_dir` | string | no | `~/.riverbank/distill_cache` | Directory for cached distillation outputs |
+| `model_provider` | string | no | profile's `model_provider` | Override LLM provider for distillation |
+| `model_name` | string | no | profile's `model_name` | Override model for distillation |
+| `target_size_bytes` | int | no | strategy-dependent | Output size hint passed to LLM |
+| `section_types` | map | no | — | Per-section-type actions for `section_aware` strategy |
+| `extraction_budget_usd` | float | no | `1.00` | Cost ceiling for `budget_optimized` |
+| `min_triple_target` | int | no | `50` | Minimum desired triples for `budget_optimized` |
+| `sample_fragments` | int | no | `3` | Sample size for yield estimation in `budget_optimized` |
+
+**Strategy values:**
+
+| Strategy | LLM calls | Output size | Use when |
+|---|---|---|---|
+| `boilerplate_removal` | 0 | ~80–100% of content | Document is structured; just want clean input |
+| `aggressive` | 1 | ~5–15 kB | Very large docs; only top-level facts needed |
+| `moderate` | 1 | ~20–50 kB | Long articles; maximum triple yield (**recommended default**) |
+| `conservative` | 1 | ~60–90% | Every paragraph may contain extractable facts |
+| `section_aware` | 1–N | configurable | Structured docs with heterogeneous section types |
+| `budget_optimized` | 0–1 | dynamic | Cost-constrained high-yield scenarios |
+
+Cache files are named `<xxh3_128_hex>_<strategy>_<target_bytes>.md`. Re-ingesting an unchanged document costs zero LLM calls regardless of strategy.
+
 ### `preprocessing`
 
 Controls LLM document preprocessing (entity catalog, document summary) run before extraction.

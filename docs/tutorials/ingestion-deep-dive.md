@@ -30,34 +30,37 @@ Raw file
 ① Source registration + parsing        → normalised text, heading positions
    │
    ▼
-② Fragmentation                        → list of Fragment objects
+② Distillation (optional)              → compressed/filtered document text
    │
    ▼
-③ Editorial policy gate                → skip or keep each fragment
+③ Fragmentation                        → list of Fragment objects
    │
    ▼
-④ Hash deduplication                   → skip unchanged fragments
+④ Editorial policy gate                → skip or keep each fragment
    │
    ▼
-⑤ Preprocessing                        → document summary + entity catalog
+⑤ Hash deduplication                   → skip unchanged fragments
    │
    ▼
-⑥ Prompt assembly                      → combined system prompt
+⑥ Preprocessing                        → document summary + entity catalog
    │
    ▼
-⑦ LLM extraction                       → raw triples with confidence + evidence
+⑦ Prompt assembly                      → combined system prompt
    │
    ▼
-⑧ Post-extraction quality filters      → evidence grounding, ontology filter,
+⑧ LLM extraction                       → raw triples with confidence + evidence
+   │
+   ▼
+⑨ Post-extraction quality filters      → evidence grounding, ontology filter,
    │                                      NLI verification
    ▼
-⑨ Confidence routing                   → trusted / tentative / discard
+⑩ Confidence routing                   → trusted / tentative / discard
    │
    ▼
-⑩ Graph write + entity resolution      → pg-ripple named graphs
+⑪ Graph write + entity resolution      → pg-ripple named graphs
    │
    ▼
-⑪ SHACL validation (optional)          → shape conformance report
+⑫ SHACL validation (optional)          → shape conformance report
 ```
 
 ---

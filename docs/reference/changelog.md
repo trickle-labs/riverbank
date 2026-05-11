@@ -5,10 +5,17 @@ All notable changes to riverbank, organized by release.
 ## Unreleased
 
 - LLM-based statement fragmentation (`llm_statement` fragmenter)
-- `extraction_focus` profile field: controls precision-vs-recall trade-off at the extractor layer (`comprehensive`, `high_precision`, `facts_only`)
-- Batch extraction: groups multiple fragments into a single LLM call via `extraction_strategy.batch_size` in the profile
 - `direct` fragmenter for pre-split corpora
 - SAVEPOINT-based handling of PostgreSQL extension creation in migrations to prevent transaction abort
+
+## v0.15.2 — Document distillation step
+
+- Optional pre-fragmentation distillation stage: `parse → [distill] → coref → fragment → gate → extract → write`
+- Six distillation strategies: `boilerplate_removal` (deterministic, zero LLM cost), `aggressive` (~10 kB), `moderate` (~30 kB, default), `conservative` (~60–90% of original), `section_aware` (two-pass: classify then act per section type), `budget_optimized` (adaptive strategy selection based on cost and triple-yield targets)
+- Content-addressed cache keyed by `xxh3_128(content) + strategy + target_size_bytes` — subsequent re-ingestion of unchanged documents costs zero additional tokens
+- `distillation.model_provider` / `distillation.model_name` allow a dedicated small model (e.g., `gemma3:4b`) for distillation, independent of the extraction model
+- Run stats: `distillation_bytes_removed`, `distillation_strategy_used`
+- Example profile: `examples/profiles/distil-example.yaml`
 
 ## v0.15.1 — Extraction improvement loop
 

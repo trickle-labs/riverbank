@@ -4,6 +4,8 @@ This guide walks through every lever you can pull to improve the quality, consis
 
 For a full explanation of what happens at each pipeline stage, see [How riverbank ingest works](../tutorials/ingestion-deep-dive.md).
 
+> **Reduce cost before tuning quality:** If you're working with large documents (Wikipedia articles, long reports), consider enabling [document distillation](use-document-distillation.md) first. Distillation removes non-extractable sections *before* fragmentation, reducing the token budget spent on content that would never produce useful triples.
+
 ---
 
 ## The quality spectrum
