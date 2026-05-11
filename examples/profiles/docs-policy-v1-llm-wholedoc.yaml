@@ -132,8 +132,8 @@ extraction_strategy:
   # PERMISSIVE mode: ask for high volume, accept all confidence levels
   # num_predict token budget is auto-scaled based on these targets.
   extraction_target:
-    min_triples: 80                 # Minimum expected triples (LLM may undershoot)
-    max_triples: 160                # Maximum expected triples (stop if reached)
+    min_triples: 100                # Minimum expected triples (encourage rich extraction)
+    max_triples: 250                # Maximum expected triples (higher bound = more discovery)
   citation_floor: 0                 # PERMISSIVE: accept all triples
                                     # (any confidence, any excerpt quality)
                                     # Higher values filter by confidence in extraction
@@ -164,12 +164,23 @@ extraction_strategy:
 # Note: SchemaProposer confidence levels from LLM are: high, medium, exploratory
 # For maximum predicate discovery, use "all"
 #
+# Bridges permissive (exhaustive) and constrained (focused) extraction:
+# - Discovers natural vocabulary tailored to document domain
+# - Proposed predicates are suggestions, but extraction can use others too
+# - This gives maximum predicate discovery while still focusing on relevant terms
+#
+# Two modes:
+#   use_for_extraction: true  → Extraction limited to proposed predicates only (focused)
+#   use_for_extraction: false → Extraction can use proposed + any other relevant predicates (exploratory)
+#
+# For PERMISSIVE profile: use_for_extraction=false gives rich predicate discovery (30+)
+#
 predicate_inference:
   enabled: true                     # Enable schema discovery
-  confidence_threshold: "medium"    # medium: balanced discovery (recommended)
-  use_for_extraction: true          # Merge proposals into allowed_predicates
-                                    # (constrains extraction to discovered schema)
-  max_predicates: 40                # Stop proposing after N predicates
+  confidence_threshold: "all"       # all: accept all confidence levels (high, medium, exploratory)
+  use_for_extraction: false         # false: allow extraction to use proposed + any other predicates
+                                    # (maximizes predicate discovery for permissive extraction)
+  max_predicates: 100               # Maximum predicates to propose (increased for rich discovery)
 
 # ============================================================================
 # COMPETENCY QUESTIONS
