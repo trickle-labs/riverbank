@@ -132,8 +132,8 @@ extraction_strategy:
   # PERMISSIVE mode: ask for high volume, accept all confidence levels
   # num_predict token budget is auto-scaled based on these targets.
   extraction_target:
-    min_triples: 40                 # Minimum expected triples (LLM may undershoot)
-    max_triples: 100                # Maximum expected triples (stop if reached)
+    min_triples: 80                 # Minimum expected triples (LLM may undershoot)
+    max_triples: 160                # Maximum expected triples (stop if reached)
   citation_floor: 0                 # PERMISSIVE: accept all triples
                                     # (any confidence, any excerpt quality)
                                     # Higher values filter by confidence in extraction
@@ -193,13 +193,34 @@ competency_questions:
 # ============================================================================
 # DOCUMENT DISTILLATION (v0.15.2+)
 # ============================================================================
-# Optional pre-extraction content selection: remove noise, focus on key facts.
-# Cached on disk, no LLM cost for unchanged documents.
-# Strategies: minimal, moderate, aggressive
+# Optional pre-extraction content selection: remove boilerplate, focus on key facts.
+#
+# Purpose: Reduces document to essential content before extraction, improving:
+#   - Extraction quality (LLM sees less noise)
+#   - Token efficiency (fewer tokens = lower cost)
+#   - Latency (shorter context to process)
+#
+# How it works:
+#   1. Run on first ingest (LLM call per document)
+#   2. Result cached on disk by content hash + strategy
+#   3. Subsequent ingests reuse cached distillation (zero cost)
+#   4. Original content hash preserved, so source deduplication still works
+#
+# Strategies:
+#   \"boilerplate_removal\": Deterministic heuristics (no LLM cost)
+#   \"minimal\": Keep ~90% of content, remove only obvious noise
+#   \"moderate\": Keep ~70% of content, remove sidebars/ads/metadata (recommended)
+#   \"aggressive\": Keep ~50% of content, extract only main body
+#   \"conservative\": Keep ~80% of content, very selective removal
+#
+# Trade-offs:
+#   - Too aggressive: may lose important context, reduces triple coverage
+#   - Too conservative: minimal speed gain, still large context for LLM
+#   - Moderate: sweet spot for most documents
 #
 distillation:
-  enabled: true                     # Pre-filter content before extraction
-  strategy: moderate                # Balance between compression and information loss
+  enabled: true                     # Enable pre-extraction content filtering
+  strategy: moderate                # Keep ~70% (removes sidebars, metadata, ads)
 
 # ============================================================================
 # ENTITY RESOLUTION (v0.16.0+)
