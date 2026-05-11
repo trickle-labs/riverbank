@@ -205,7 +205,7 @@ def test_preprocess_falls_through_to_llm_when_no_pre_computed_summary() -> None:
     @dataclass
     class _SummaryOnlyProfile:
         preprocessing: dict = field(
-            default_factory=lambda: {"enabled": True, "strategies": ["document_summary"]}
+            default_factory=lambda: {"enabled": True, "backend": "llm", "strategies": ["document_summary"]}
         )
 
     result = preprocessor.preprocess("Some text.", _SummaryOnlyProfile())
@@ -250,7 +250,7 @@ def test_preprocessor_passes_keep_alive_for_ollama() -> None:
     @dataclass
     class _SummaryOnlyProfile:
         preprocessing: dict = field(
-            default_factory=lambda: {"enabled": True, "strategies": ["document_summary"]}
+            default_factory=lambda: {"enabled": True, "backend": "llm", "strategies": ["document_summary"]}
         )
 
     preprocessor.preprocess("Some text.", _SummaryOnlyProfile())
@@ -270,7 +270,7 @@ def test_preprocessor_no_keep_alive_for_openai() -> None:
     @dataclass
     class _SummaryOnlyProfile:
         preprocessing: dict = field(
-            default_factory=lambda: {"enabled": True, "strategies": ["document_summary"]}
+            default_factory=lambda: {"enabled": True, "backend": "llm", "strategies": ["document_summary"]}
         )
 
     preprocessor.preprocess("Some text.", _SummaryOnlyProfile())

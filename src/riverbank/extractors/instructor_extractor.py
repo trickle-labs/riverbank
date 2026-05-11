@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Set to 75: documents with Markdown table/bullet syntax score 75–81% on valid
 # facts because partial_ratio must align bullet markers ("| * ") that the LLM
 # omits in excerpts.  75 rescues borderline cases while still blocking hallucinations.
-_CITATION_SIMILARITY_THRESHOLD: int = 75
+_CITATION_SIMILARITY_THRESHOLD: int = 82
 
 
 _DEFAULT_PROMPT = """\

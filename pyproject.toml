@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "riverbank"
-version = "0.15.1"
+version = "0.15.2"
 description = "Compiled knowledge-base worker for pg-ripple, pg-trickle, and pg-tide"
 readme = "README.md"
 license = { text = "MIT" }

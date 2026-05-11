@@ -91,6 +91,8 @@ class CompilerProfile:
     llm_statement_fragmentation: dict = field(default_factory=dict)
     # v0.16.0: Direct extraction — whole-document single-fragment config
     direct_extraction: dict = field(default_factory=dict)
+    # v0.15.2: Document distillation — optional pre-fragmentation content-selection step
+    distillation: dict = field(default_factory=dict)
     # v0.16.0: Entity resolution — post-extraction owl:sameAs alias merging
     entity_resolution: dict = field(default_factory=dict)
     # v0.17.0: Extraction focus — precision vs recall trade-off at extraction layer
@@ -234,12 +236,24 @@ class IngestPipeline:
             "triples_extracted": 0,
             "triples_citation_rejected": 0,
             "triples_invalid": 0,
+            # v0.15.2: document distillation
+            "distillation_calls": 0,
+            "distillation_cache_hits": 0,
+            "distillation_prompt_tokens": 0,
+            "distillation_completion_tokens": 0,
+            "distillation_bytes_removed": 0,
+            "distillation_strategy_used": "",
         }
         with tracer.start_as_current_span("ingest_pipeline.run") as span:
             for run_mode in sequence:
                 stats = self._run_inner(corpus_path, profile, dry_run, span, run_mode, force, progress_callback)
                 for k in combined:
-                    combined[k] += stats[k]  # type: ignore[operator]
+                    if isinstance(combined[k], str):
+                        # String stats: take last non-empty value
+                        if stats.get(k):
+                            combined[k] = stats[k]
+                    else:
+                        combined[k] += stats[k]  # type: ignore[operator]
             span.set_attribute("ingest.fragments_processed", combined["fragments_processed"])
             span.set_attribute("ingest.fragments_skipped", combined["fragments_skipped"])
             span.set_attribute("ingest.triples_written", combined["triples_written"])
@@ -306,6 +320,13 @@ class IngestPipeline:
             "triples_extracted": 0,
             "triples_citation_rejected": 0,
             "triples_invalid": 0,
+            # v0.15.2: document distillation
+            "distillation_calls": 0,
+            "distillation_cache_hits": 0,
+            "distillation_prompt_tokens": 0,
+            "distillation_completion_tokens": 0,
+            "distillation_bytes_removed": 0,
+            "distillation_strategy_used": "",
             # Corpus size for yield metrics
             "corpus_bytes": 0,
         }
@@ -441,6 +462,63 @@ class IngestPipeline:
         )
 
         doc = parser.parse(source)
+        tracer = otel_trace.get_tracer(__name__)
+
+        # v0.15.2: Document distillation — optional pre-fragmentation content-selection
+        # step.  The distilled text replaces the original for fragmentation,
+        # preprocessing, and extraction.  Results are cached on disk keyed by
+        # content hash + strategy so unchanged documents incur no LLM cost on
+        # re-ingest.  The original content_hash is preserved for deduplication.
+        distillation_cfg: dict = getattr(profile, "distillation", {})
+        if distillation_cfg.get("enabled", False) and not dry_run:
+            with tracer.start_as_current_span("ingest_pipeline.distill") as dist_span:
+                dist_span.set_attribute("source.iri", source.iri)
+                try:
+                    from riverbank.distillers import DocumentDistiller  # noqa: PLC0415
+                    _distiller = DocumentDistiller.from_profile(profile, settings=self._settings)
+                    _distill_result = _distiller.distill(
+                        raw_text=doc.raw_text,
+                        content_hash=source.content_hash,
+                        profile=profile,
+                    )
+                    if _distill_result.distilled_text and _distill_result.distilled_text != doc.raw_text:
+                        from riverbank.connectors.fs import SourceRecord as _SR_D  # noqa: PLC0415
+                        _distilled_source = _SR_D(
+                            iri=source.iri,
+                            path=source.path,
+                            content=_distill_result.distilled_text.encode("utf-8"),
+                            content_hash=source.content_hash,  # keep original hash for dedup
+                            mime_type=source.mime_type,
+                        )
+                        doc = parser.parse(_distilled_source)
+                    stats["distillation_calls"] += _distill_result.llm_calls
+                    stats["distillation_cache_hits"] += 1 if _distill_result.cache_hit else 0
+                    stats["distillation_prompt_tokens"] += _distill_result.prompt_tokens
+                    stats["distillation_completion_tokens"] += _distill_result.completion_tokens
+                    _bytes_removed = max(0, _distill_result.original_bytes - _distill_result.distilled_bytes)
+                    stats["distillation_bytes_removed"] += _bytes_removed
+                    if _distill_result.strategy_used:
+                        stats["distillation_strategy_used"] = _distill_result.strategy_used
+                    dist_span.set_attribute("distillation.cache_hit", _distill_result.cache_hit)
+                    dist_span.set_attribute("distillation.llm_calls", _distill_result.llm_calls)
+                    dist_span.set_attribute("distillation.strategy", _distill_result.strategy_used)
+                    if progress_callback:
+                        progress_callback(
+                            "distillation_done",
+                            {
+                                "source": source.iri,
+                                "cache_hit": _distill_result.cache_hit,
+                                "strategy_used": _distill_result.strategy_used,
+                                "original_bytes": _distill_result.original_bytes,
+                                "distilled_bytes": _distill_result.distilled_bytes,
+                            },
+                        )
+                except Exception as _dist_exc:  # noqa: BLE001
+                    logger.warning(
+                        "Distillation failed for %s — continuing with original text: %s",
+                        source.iri,
+                        _dist_exc,
+                    )
 
         # v0.12.0: coreference resolution — runs on the full document text before
         # fragmentation to replace pronouns/anaphoric refs with entity names.
@@ -513,7 +591,6 @@ class IngestPipeline:
 
         fragments = list(fragmenter.fragment(doc))
         existing_hashes = self._get_existing_hashes(conn, source.iri)
-        tracer = otel_trace.get_tracer(__name__)
 
         # §3.9 Adaptive preprocessing: skip preprocessing for small single-fragment
         # documents where the value of entity canonicalization is minimal.

@@ -26,6 +26,7 @@ class _Profile:
     preprocessing: dict = field(
         default_factory=lambda: {
             "enabled": True,
+            "backend": "llm",
             "strategies": ["document_summary", "entity_catalog"],
             "max_entities": 50,
             "predefined_predicates": ["rdf:type", "rdfs:label", "schema:isPartOf"],
@@ -313,7 +314,7 @@ def test_preprocess_summary_only_strategy() -> None:
     @dataclass
     class _SummaryOnlyProfile:
         preprocessing: dict = field(
-            default_factory=lambda: {"enabled": True, "strategies": ["document_summary"]}
+            default_factory=lambda: {"enabled": True, "backend": "llm", "strategies": ["document_summary"]}
         )
 
     result = preprocessor.preprocess("Some text.", _SummaryOnlyProfile())

@@ -20,6 +20,7 @@ def _make_profile(**kwargs: object) -> MagicMock:
     profile.named_graph = "http://riverbank.example/graph/trusted"
     profile.entity_resolution = {
         "enabled": True,
+        "backend": "llm",
         "max_entities_per_call": 50,
         "confidence_threshold": 0.8,
     }
@@ -136,7 +137,7 @@ def test_run_deduplicates_subjects() -> None:
 
 def test_run_batches_when_over_max_entities() -> None:
     profile = _make_profile()
-    profile.entity_resolution = {"enabled": True, "max_entities_per_call": 3, "confidence_threshold": 0.8}
+    profile.entity_resolution = {"enabled": True, "backend": "llm", "max_entities_per_call": 3, "confidence_threshold": 0.8}
     subjects = [f"ex:Entity{i}" for i in range(7)]
     pass_ = EntityResolutionPass()
 
@@ -234,7 +235,6 @@ def test_call_llm_rejects_low_confidence_pairs() -> None:
     assert triples == []
 
 
-@pytest.mark.skip(reason="Python 3.12 compatibility issue with instructor/mock - passes in Python 3.14")
 def test_call_llm_writes_symmetric_triples() -> None:
     """Each confirmed pair produces two triples (A→B and B→A)."""
     pass_ = EntityResolutionPass()

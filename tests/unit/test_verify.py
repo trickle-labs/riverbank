@@ -18,6 +18,7 @@ class _Profile:
     verification: dict = field(
         default_factory=lambda: {
             "enabled": True,
+            "backend": "llm",
             "confidence_threshold": 0.75,
             "drop_below": 0.4,
             "boost_above": 0.8,
