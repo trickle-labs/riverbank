@@ -975,10 +975,18 @@ class IngestPipeline:
                 vn_span.set_attribute("source.iri", source.iri)
                 vn_span.set_attribute("vocab_norm.input_triples", len(vocab_norm_buffer))
                 try:
-                    from riverbank.vocabulary import VocabularyNormalisationPass  # noqa: PLC0415
+                    from riverbank.vocabulary import (  # noqa: PLC0415
+                        VocabularyNormalisationPass,
+                        build_llm_predicate_collapser,
+                    )
 
                     _vn_pass = VocabularyNormalisationPass.from_profile(profile)
-                    vn_result = _vn_pass.run(vocab_norm_buffer)
+                    _llm_collapser = None
+                    if vocab_norm_cfg.get("predicate_collapse_backend") == "llm":
+                        _llm_collapser = build_llm_predicate_collapser(
+                            self._settings, profile
+                        )
+                    vn_result = _vn_pass.run(vocab_norm_buffer, llm_client=_llm_collapser)
 
                     stats["vocab_literals_promoted"] += vn_result.vocab_literals_promoted
                     stats["vocab_predicates_collapsed"] += vn_result.vocab_predicates_collapsed

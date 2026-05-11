@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Literal, Tuple, Type
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -24,6 +24,29 @@ class LLMSettings(BaseModel):
     model: str = "llama3.2"
     embed_model: str = "nomic-embed-text"
     max_tokens: int = 4096
+
+    @field_validator("api_base")
+    @classmethod
+    def _normalise_api_base(cls, v: str) -> str:
+        """Ensure bare host:port Ollama bases end with /v1.
+
+        The OpenAI client appends ``/chat/completions`` to whatever
+        ``base_url`` is given, so ``http://localhost:11434`` produces a
+        404 while ``http://localhost:11434/v1`` works correctly.  We
+        normalise here once so all callers benefit automatically.
+
+        Only appends /v1 when the URL has no path (or just ``/``), leaving
+        full paths like Azure OpenAI deployments untouched.
+        """
+        from urllib.parse import urlparse  # noqa: PLC0415
+
+        stripped = v.rstrip("/")
+        parsed = urlparse(stripped)
+        # Path is absent or trivial (empty / root) → looks like a bare host:port
+        path = parsed.path or ""
+        if not path or path == "/":
+            return stripped + "/v1"
+        return stripped
 
 
 class DatabaseSettings(BaseModel):

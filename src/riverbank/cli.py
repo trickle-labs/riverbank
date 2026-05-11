@@ -374,9 +374,9 @@ def ingest(
         table.add_row("", "")  # spacer
         table.add_row("  → Tentative (0.35–0.75)", f"[cyan]{tentative}[/cyan]")
         table.add_row("  → Trusted (≥ 0.75)", f"[green]{trusted}[/green]")
-        table.add_row("  → Written total", f"[bold green]{stats['triples_written']}[/bold green]")
+        table.add_row("  → Submitted (this run)", f"[bold green]{stats['triples_written']}[/bold green]")
     else:
-        table.add_row("Triples written", str(stats["triples_written"]))
+        table.add_row("Submitted (this run)", str(stats["triples_written"]))
 
     # Triples per kilobyte of corpus
     corpus_kb = stats.get("corpus_bytes", 0) / 1024
@@ -396,6 +396,26 @@ def ingest(
     table.add_row("Errors", str(stats["errors"]))
 
     rprint(table)
+
+    # Show the authoritative triple count from the DB (separate from "submitted" stats).
+    # "Submitted" counts triples sent to pg_ripple in this run; the DB total reflects
+    # all accumulated triples across all runs (pg_ripple deduplicates internally).
+    if not dry_run:
+        try:
+            from sqlalchemy import create_engine as _create_engine  # noqa: PLC0415
+            from riverbank.catalog.graph import count_triples as _count_triples  # noqa: PLC0415
+            _engine = _create_engine(get_settings().db.dsn)
+            with _engine.connect() as _conn:
+                _total = _count_triples(_conn, named_graph=profile.named_graph)
+            _engine.dispose()
+            if _total > 0:
+                rprint(
+                    f"[dim]Total triples in [bold]{profile.named_graph}[/bold]: "
+                    f"[bold cyan]{_total}[/bold cyan]  "
+                    f"(submitted this run: {stats['triples_written']})[/dim]"
+                )
+        except Exception:  # noqa: BLE001
+            pass  # DB count is best-effort; don't fail the command
 
     if stats["errors"] > 0:
         rprint(f"[red bold]{stats['errors']} error(s) — see logs for details[/red bold]")
@@ -462,12 +482,15 @@ def reset_database(
     settings = get_settings()
     engine = create_engine(settings.db.dsn)
     try:
+        # Step 1: Clear all graphs — committed in its own transaction so that a
+        # failure in step 2 cannot roll back the graph clearing.
         with engine.connect() as conn:
-            # Step 1: Clear all graphs
             _clear_graph(conn, named_graph=None)
-            rprint("[dim]✓ Cleared all named graphs[/dim]")
+            conn.commit()
+        rprint("[dim]✓ Cleared all named graphs[/dim]")
 
-            # Step 2: Truncate fragment and source metadata
+        # Step 2: Truncate fragment and source metadata (separate transaction)
+        with engine.connect() as conn:
             try:
                 conn.execute(text("TRUNCATE _riverbank.fragments CASCADE"))
                 conn.execute(text("TRUNCATE _riverbank.sources CASCADE"))
@@ -475,6 +498,7 @@ def reset_database(
                 rprint("[dim]✓ Cleared fragment and source metadata[/dim]")
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Could not truncate metadata tables: %s", exc)
+                conn.rollback()
                 # Try individual deletes if TRUNCATE fails (e.g., no CASCADE support)
                 try:
                     conn.execute(text("DELETE FROM _riverbank.fragments"))

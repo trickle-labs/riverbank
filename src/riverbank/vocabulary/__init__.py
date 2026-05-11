@@ -112,10 +112,28 @@ _IRI_PATTERN = re.compile(
     r"^(?:https?://|<|[a-zA-Z_][a-zA-Z0-9_+\-.]*:[a-zA-Z_/<])"
 )
 
+# Matches bare unicode escapes that should have been real Unicode characters.
+# Pattern: u followed by exactly 4 hex digits, e.g. "u2013" for U+2013 (en-dash).
+# This happens when Python string repr leaks into a literal instead of the char.
+_UNICODE_ESCAPE_RE = re.compile(r"u([0-9a-fA-F]{4})")
+
 
 def _is_iri(value: str) -> bool:
     """Return ``True`` if *value* looks like an IRI rather than a plain literal."""
     return bool(_IRI_PATTERN.match(value.strip()))
+
+
+def _normalize_literal_unicode(value: str) -> str:
+    """Decode bare unicode escape sequences in a string literal.
+
+    Converts ``u2013`` → ``–`` (en-dash), ``u2014`` → ``—`` (em-dash), etc.
+    Only applied to non-IRI object values.
+
+    Example::
+
+        "1972u201373"  →  "1972–73"
+    """
+    return _UNICODE_ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), value)
 
 
 def _to_camel_case(s: str) -> str:
@@ -344,13 +362,16 @@ class PredicateCollapser:
 
 # Qualifier patterns: (compiled_regex, qualifier_predicate_name)
 # Each regex must capture the qualifier value in group 1.
+# Patterns are tried in order; first match wins.
+# End-anchored patterns (with $) are listed first so they take priority over
+# mid-word variants, which match the same tokens anywhere in the local name.
 _QUALIFIER_PATTERNS: list[tuple[re.Pattern, str]] = [
     # _in_YYYY  or  _YYYY at end
     (re.compile(r"_in_(\d{4})$", re.IGNORECASE), "ex:year"),
     (re.compile(r"_(\d{4})$"), "ex:year"),
-    # _on_DATE (e.g. _on_15_march, _on_march_15)
+    # _on_DATE (e.g. _on_15_march, _on_march_15) at end
     (re.compile(r"_on_(\d{1,2}_\w+|\w+_\d{1,2})$", re.IGNORECASE), "ex:date"),
-    # Ordinals: _first, _second, …, _tenth
+    # Ordinals at end: _first, _second, …, _tenth
     (
         re.compile(
             r"_(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)$",
@@ -358,8 +379,28 @@ _QUALIFIER_PATTERNS: list[tuple[re.Pattern, str]] = [
         ),
         "ex:ordinal",
     ),
-    # Numeric ordinals: _1st, _2nd, _3rd, _4th, …
+    # Numeric ordinals at end: _1st, _2nd, _3rd, _4th, …
     (re.compile(r"_(\d+(?:st|nd|rd|th))$", re.IGNORECASE), "ex:ordinal"),
+    # Mid-word ordinals: _first_, _second_, … (predicate continues after ordinal)
+    # e.g. won_first_FA_Cup → won_FA_Cup  +  ex:ordinal "first"
+    (
+        re.compile(
+            r"_(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)_",
+            re.IGNORECASE,
+        ),
+        "ex:ordinal",
+    ),
+    # Mid-word numeric ordinals: _1st_, _2nd_, …
+    (re.compile(r"_(\d+(?:st|nd|rd|th))_", re.IGNORECASE), "ex:ordinal"),
+    # Number words at mid-word position: _two_, _three_, …, _ten_
+    # e.g. won_two_further_European_Cups → won_further_European_Cups + count "two"
+    (
+        re.compile(
+            r"_(two|three|four|five|six|seven|eight|nine|ten)_",
+            re.IGNORECASE,
+        ),
+        "ex:count",
+    ),
 ]
 
 
@@ -384,6 +425,9 @@ class FactDecomposer:
     def decompose(self, triples: list) -> tuple[list, int]:
         """Expand each fact-stuffed triple into two triples.
 
+        Handles both end-of-string qualifiers (``founded_in_2019``) and
+        mid-word qualifiers (``won_first_FA_Cup`` → ``won_FA_Cup``).
+
         :returns: ``(expanded_triple_list, n_decomposed)``
         """
         result: list = []
@@ -395,7 +439,18 @@ class FactDecomposer:
             for pattern, qual_pred in _QUALIFIER_PATTERNS:
                 m = pattern.search(local)
                 if m:
-                    base_local = local[: m.start()]
+                    before = local[: m.start()]
+                    after = local[m.end() :]
+                    # Rejoin the fragments around the qualifier, adding a
+                    # connecting underscore only when both halves are non-empty.
+                    if before and after:
+                        base_local = before + "_" + after
+                    elif before:
+                        base_local = before
+                    elif after:
+                        base_local = after.lstrip("_")
+                    else:
+                        base_local = "predicate"
                     qualifier_value = m.group(1).replace("_", " ")
                     base_predicate = (ns + base_local) if ns else base_local
                     result.append(t.model_copy(update={"predicate": base_predicate}))
@@ -536,6 +591,93 @@ class URICanonicaliser:
 
 
 # ---------------------------------------------------------------------------
+# LLM predicate collapse client factory
+# ---------------------------------------------------------------------------
+
+_PREDICATE_COLLAPSE_PROMPT = """\
+You are a knowledge graph schema curator.
+
+Below is a list of predicate IRIs extracted from a single document.
+Group the predicates that are **semantically equivalent** — i.e. they express
+the same relationship between subject and object, just worded differently.
+
+Rules:
+- Only group predicates whose meaning is clearly the same.
+- Do NOT group predicates that have meaningfully different semantics.
+- Return ONLY a JSON object with key "groups", containing an array of arrays.
+  Each inner array lists the equivalent predicate strings.
+  Predicates that have no equivalent can be omitted or listed alone.
+- Do not include any explanation outside the JSON.
+
+Predicates:
+{predicates}
+"""
+
+
+def build_llm_predicate_collapser(
+    settings: Any,
+    profile: Any,
+) -> "Optional[Callable[[list[str]], list[list[str]]]]":
+    """Return an LLM callable for predicate grouping, or ``None`` on failure.
+
+    The callable accepts a list of predicate IRI strings and returns a list
+    of equivalence groups (each group is a list of semantically equivalent
+    predicate strings).  Used by :class:`PredicateCollapser` in ``llm`` mode.
+
+    Falls back to ``None`` (caller uses deterministic mode) when the openai
+    package is unavailable or the LLM call is not configured.
+    """
+    try:
+        import json  # noqa: PLC0415
+
+        from openai import OpenAI  # noqa: PLC0415
+
+        model_provider = getattr(profile, "model_provider", "ollama")
+        model_name = getattr(profile, "model_name", "llama3.2")
+
+        api_base = getattr(settings.llm, "api_base", "http://localhost:11434/v1")
+        api_key = getattr(settings.llm, "api_key", "ollama" if model_provider == "ollama" else "")
+        # api_base is already normalised by LLMSettings._normalise_api_base validator
+
+        client = OpenAI(api_key=api_key, base_url=api_base)
+
+        def _llm_grouper(predicates: list[str]) -> list[list[str]]:
+            prompt = _PREDICATE_COLLAPSE_PROMPT.format(
+                predicates="\n".join(predicates)
+            )
+            try:
+                resp = client.chat.completions.create(
+                    model=model_name,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.0,
+                    max_tokens=1024,
+                )
+                raw = resp.choices[0].message.content or "{}"
+                # Strip markdown code fences if present
+                raw = re.sub(r"^```[a-z]*\n?", "", raw.strip(), flags=re.MULTILINE)
+                raw = re.sub(r"```$", "", raw.strip())
+                data = json.loads(raw)
+                groups: list[list[str]] = data.get("groups", [])
+                # Validate: only keep groups whose members are in our predicate set
+                pred_set = set(predicates)
+                return [
+                    [p for p in g if p in pred_set]
+                    for g in groups
+                    if len([p for p in g if p in pred_set]) >= 2
+                ]
+            except Exception as _e:  # noqa: BLE001
+                import logging as _log  # noqa: PLC0415
+                _log.getLogger(__name__).warning(
+                    "LLM predicate collapse call failed, falling back to deterministic: %s", _e
+                )
+                return []
+
+        return _llm_grouper
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# ---------------------------------------------------------------------------
 # VocabularyNormalisationPass (orchestrator)
 # ---------------------------------------------------------------------------
 
@@ -605,6 +747,15 @@ class VocabularyNormalisationPass:
         result = list(triples)
         n_promoted = n_collapsed = n_decomposed = n_rewritten = 0
 
+        # 0. Unicode normalization — decode bare unicode escapes in literals
+        #    e.g. "1972u201373" → "1972–73"  (leaked \uXXXX without backslash)
+        result = [
+            t.model_copy(update={"object_value": _normalize_literal_unicode(t.object_value)})
+            if not _is_iri(t.object_value) and _UNICODE_ESCAPE_RE.search(t.object_value)
+            else t
+            for t in result
+        ]
+
         # 1. Categorical literal → IRI
         cat_map = self._categorical.detect(result)
         if cat_map:
@@ -623,6 +774,16 @@ class VocabularyNormalisationPass:
         # 4. Entity URI canonicalisation
         if self.config.rewrite_canonical_uris:
             result, n_rewritten = self._canonicaliser.canonicalise(result)
+
+        # 5. Deduplication — after URI rewriting, previously distinct triples
+        #    may now share the same (subject, predicate, object_value) key.
+        #    Keep the one with the highest confidence.
+        seen: dict[tuple[str, str, str], Any] = {}
+        for t in result:
+            key = (t.subject, t.predicate, t.object_value)
+            if key not in seen or t.confidence > seen[key].confidence:
+                seen[key] = t
+        result = list(seen.values())
 
         return NormalisationResult(
             triples=result,

@@ -61,6 +61,27 @@ prompt_text: |
   - Object values must be clean strings: use ex:Entity_Name for entity IRIs, plain text for literals
   - No markdown formatting, no brackets, no special wrapping in object values
 
+  ENTITY CANONICALISATION:
+  - Use ONE consistent IRI for each real-world entity throughout the document.
+    For example, always use ex:Liverpool_Football_Club for the football club,
+    never ex:Liverpool, ex:Club, ex:The_Reds, or ex:LFC.
+  - Choose the most precise and unambiguous form: prefer ex:Liverpool_Football_Club
+    over ex:Liverpool (which could be the city).
+
+  PREDICATE QUALITY:
+  - Use simple, reusable predicates: ex:founded_in, ex:managed_by, ex:won_title.
+  - Do NOT encode years, ordinals, or conditions inside predicate names.
+    BAD:  ex:won_first_FA_Cup, ex:appointed_manager_in_1974
+    GOOD: ex:won_trophy with object "FA Cup", and a separate ex:year "1974"
+  - Do NOT extract statistical summary rows, infobox tables, or trophy lists
+    as separate entities. Extract individual facts instead.
+  - Use standard predicates for common relationships:
+    ex:founded_in (year/place), ex:based_in (location), ex:managed_by (person),
+    ex:affiliated_with (org), ex:plays_in (league/competition).
+  - Do NOT use number words (one, two, six, etc.) as object IRIs.
+    BAD:  ex:won_european_cups ex:Six
+    GOOD: ex:won_european_cups "6" or ex:won_european_cups "six times"
+
 editorial_policy:
   min_fragment_length: 50
   max_fragment_length: 500000  # Very high to keep entire document as one fragment
@@ -79,8 +100,8 @@ extraction_strategy:
   # The model will naturally produce 50-100 triples; with min_triples: 100,
   # we encourage exhaustive extraction. num_predict is auto-scaled to accommodate.
   extraction_target:
-    min_triples: 100       # Encourage exhaustive extraction (permissive mode)
-    max_triples: 300       # Cap to prevent runaway output
+    min_triples: 40        # Realistic for constrained extraction
+    max_triples: 100       # Fewer, higher-quality triples
   citation_floor: 0        # PERMISSIVE: accept all triples regardless of excerpt
 
 # Note: constrained_decoding disabled — MD_JSON mode is more reliable with Ollama
@@ -98,8 +119,11 @@ extraction_strategy:
 predicate_inference:
   enabled: true
   confidence_threshold: "high"
-  use_for_extraction: false  # Report predicates but don't filter — maximize volume
-  max_predicates: 50
+  use_for_extraction: true   # Constrain extraction to discovered predicates — reduces sprawl
+  max_predicates: 40
+
+# Extraction target: reduced to realistic volume for constrained extraction
+# With predicate constraints, 40-60 high-quality triples beats 200 noisy ones.
 
 # Competency questions — SPARQL ASK queries that the compiled graph must answer.
 # Used by the golden corpus CI gate (tests/golden/).
@@ -127,7 +151,24 @@ competency_questions:
 distillation:
   enabled: true
   strategy: moderate
-  
+
+# v0.16.0: Entity resolution — after extraction, ask the LLM to identify which
+# subject IRIs refer to the same real-world entity and emit owl:sameAs links.
+# The vocabulary normalisation pass then rewrites all aliases to the canonical URI.
+entity_resolution:
+  enabled: true
+  backend: "llm"              # llm: one call per doc; embeddings: cosine-similarity only
+  max_entities_per_call: 50
+  confidence_threshold: 0.75
+
+# v0.15.3: Vocabulary normalisation — post-extraction pass
+# DISABLED in this permissive profile: vocabulary normalisation (predicate collapse,
+# categorical promotion) is better suited for constrained/domain-specific extraction.
+# For general-purpose open-vocabulary extraction, it can be too aggressive.
+# To enable, set enabled: true and tune collapse_predicates/categorical_threshold.
+vocabulary_normalisation:
+  enabled: false
+
 # Preprocessing: now free with NLP backend (sumy + spaCy NER)
 # Injects domain summary + entity catalog to guide extraction
 preprocessing:
@@ -140,14 +181,6 @@ preprocessing:
 verification:
   enabled: false
   backend: "nli"  # Uses cross-encoder/nli-distilroberta-base (no LLM cost)
-
-# Entity resolution: merge aliases with owl:sameAs using embedding similarity
-# e.g. ex:Marie_Curie ≡ ex:Maria_Salomea_Skłodowska-Curie
-entity_resolution:
-  enabled: true
-  backend: "embeddings"          # no LLM cost — uses all-MiniLM-L6-v2
-  similarity_threshold: 0.94     # cosine similarity to assert owl:sameAs (high to avoid Pierre/Marie false match)
-  confidence_threshold: 0.00     # min confidence to write the triple
 
 # Vocabulary: PERMISSIVE with intelligent constraints
 # allowed_predicates is empty, so the LLM can propose any predicates.

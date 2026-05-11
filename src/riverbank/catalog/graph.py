@@ -116,7 +116,13 @@ def load_triples_with_confidence(
 
     Converts triples to N-Triples format and calls
     ``pg_ripple.load_triples_with_confidence(data, confidence, format, graph_uri)``.
-    Returns the number of triples submitted.
+    Returns the number of triples *submitted* to pg_ripple in this call.
+
+    .. note::
+        The return value counts triples **submitted**, not triples **newly
+        inserted**.  pg_ripple deduplicates internally; previously-seen triples
+        will not raise an error but also will not inflate the stored count.
+        Use :func:`count_triples` to get the authoritative total after writing.
 
     Falls back gracefully (logs a warning, returns 0) when pg_ripple is not
     installed in the target database.
@@ -154,6 +160,37 @@ def load_triples_with_confidence(
             )
             return 0
         raise
+
+
+def count_triples(conn: Any, named_graph: str | None = None) -> int:
+    """Return the total number of triples stored by pg_ripple.
+
+    When *named_graph* is given, restricts the count to that graph.
+    Returns 0 when pg_ripple is not available.
+    """
+    if named_graph:
+        sparql = f"SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH <{named_graph}> {{ ?s ?p ?o }} }}"
+    else:
+        sparql = "SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }"
+    try:
+        rows = conn.execute(text("SELECT * FROM pg_ripple.sparql(:query)"), {"query": sparql}).fetchall()
+        if not rows:
+            return 0
+        import json  # noqa: PLC0415
+        raw = rows[0][0]
+        if isinstance(raw, str):
+            data = json.loads(raw)
+        elif isinstance(raw, dict):
+            data = raw
+        else:
+            return 0
+        return int(data.get("n", 0))
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc).lower()
+        if _is_missing_extension(msg):
+            return 0
+        logger.debug("count_triples failed: %s", exc)
+        return 0
 
 
 def shacl_score(
@@ -268,7 +305,14 @@ def clear_graph(conn: Any, named_graph: str | None = None) -> int:
                     text("SELECT * FROM pg_ripple.list_graphs()")
                 ).fetchall()
                 for row in graphs:
-                    iri = row[0].strip("<>")  # strip angle brackets returned by list_graphs
+                    raw = row[0]
+                    # pg_ripple.list_graphs() wraps IRIs in one layer of angle
+                    # brackets, e.g. "<trusted>" or "<http://…/graph/trusted>".
+                    # Strip exactly one "<" / ">" so that the IRI passed to
+                    # clear_graph is correct.  Using .strip("<>") is wrong for
+                    # entries like "<<trusted>>" because it removes both layers,
+                    # turning "<trusted>" into "trusted" — a silent no-op.
+                    iri = raw[1:-1] if (raw.startswith("<") and raw.endswith(">")) else raw
                     conn.execute(
                         text("SELECT pg_ripple.clear_graph(cast(:iri as text))"),
                         {"iri": iri},
