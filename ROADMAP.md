@@ -88,7 +88,7 @@
 | v0.15.2 | Document distillation step — optional pre-fragmentation content-selection step with six configurable strategies (`boilerplate_removal`, `aggressive`, `moderate`, `conservative`, `section_aware`, `budget_optimized`); on-disk cache keyed by content hash + strategy; `boilerplate_removal` is deterministic (zero LLM cost); all strategies preserve the original content hash for downstream deduplication; new run stats: `distillation_calls`, `distillation_cache_hits`, `distillation_bytes_removed`, `distillation_strategy_used` | **Done** | Medium |
 | v0.15.3 | Vocabulary normalisation pass — post-extraction pass (domain-agnostic) converting repeated categorical string literals to IRI resources (`"Director"` → `vocab:Director`, `"Approved"` → `vocab:Approved`), collapsing fragmented predicate clusters to canonical form (`ex:is_director` / `ex:is_ceo` / `ex:is_chair` → `ex:holds_role` + `vocab:*`), decomposing fact-stuffed predicate names into structured triples with qualifier predicates, and optionally rewriting entity URIs to canonical form after `owl:sameAs` resolution; deterministic and LLM-guided backends; new stats: `vocab_literals_promoted`, `vocab_predicates_collapsed`, `vocab_facts_decomposed`, `vocab_uris_rewritten` | **Done** | Medium |
 | v0.15.4 | Predicate guidance injection — prompt-injected predicate hints (proposed predicates surfaced as soft guidance in the extraction prompt, not hard constraints) + seed predicates support (`seed_predicates` list in profile YAML merged with inference proposals before injection); `use_for_extraction: false` mode retains open-vocabulary extraction while biasing the LLM toward discovered domain vocabulary; new `suggested_predicates` field in `SchemaProposer` response; extraction prompt template extended with `PREDICATE HINTS` block | **Done** | Small |
-| v0.15.5 | Embedding-based predicate canonicalization — post-extraction pass using `nomic-embed-text` to cluster semantically equivalent predicates and rewrite to a canonical representative (`was_born_in` / `born_in` / `birthplace` → `has_birth_place`); DBSCAN clustering with configurable similarity threshold; LLM-assisted canonical name selection per cluster; new stats: `predicates_canonicalized`, `predicate_clusters_merged`; integrates with existing vocabulary normalisation pass | Planned | Medium |
+| v0.15.5 | Embedding-based predicate canonicalization — post-extraction pass using `nomic-embed-text` to cluster semantically equivalent predicates and rewrite to a canonical representative (`was_born_in` / `born_in` / `birthplace` → `has_birth_place`); DBSCAN clustering with configurable similarity threshold; LLM-assisted canonical name selection per cluster; new stats: `predicates_canonicalized`, `predicate_clusters_merged`; integrates with existing vocabulary normalisation pass | **Done** | Medium |
 
 ### Adaptive Auto-Tuning (v0.16.x – v0.17.x)
 
@@ -652,6 +652,57 @@ predicate_canonicalization:
 
 **Expected outcome:** 44 extracted predicates reduced to ~15–20 canonical predicates
 covering the same factual content, with `owl:equivalentProperty` audit trail.
+
+---
+
+### v0.15.5 Checklist
+
+- [x] `EmbeddingPredicateCanonicali` class in `vocabulary/__init__.py` —
+  post-extraction pass that embeds predicate labels, DBSCAN-clusters by cosine
+  similarity, and rewrites non-canonical predicate IRIs to canonical form;
+  `canonicalize(triples) → (new_triples, predicates_canonicalized, predicate_clusters_merged)`
+- [x] `_dbscan_cluster()` — pure-Python DBSCAN using cosine-distance matrix;
+  `min_samples=1` so all points belong to some cluster; `eps = 1 - threshold`
+- [x] `_pick_canonical()` — selects canonical predicate via:
+  (1) LLM prompt when `llm_rename=True` (validates result with safe-identifier
+  regex); (2) falls back to most-frequent predicate, tiebroken by shorter IRI
+- [x] `_make_ollama_embedder()` — tries Ollama `/v1/embeddings` with
+  `nomic-embed-text`; connectivity-tested at construction time; returns `None`
+  on failure without raising
+- [x] `_make_st_embedder()` — sentence-transformers fallback; maps
+  `nomic-embed-text` → `all-MiniLM-L6-v2`; returns `None` on failure
+- [x] Protected namespace predicates (`rdf:`, `rdfs:`, `owl:`, `skos:`,
+  `shacl:`) are never included in the canonicalization candidate list
+- [x] `NormalisationConfig` gains 4 fields: `embedding_canonicalization` (bool,
+  default `False`), `embedding_canonicalization_threshold` (float, default
+  `0.88`), `embedding_canonicalization_model` (str, default
+  `"nomic-embed-text"`), `embedding_canonicalization_llm_rename` (bool, default
+  `True`)
+- [x] `NormalisationResult` gains 2 new fields: `predicates_canonicalized` (int,
+  default `0`), `predicate_clusters_merged` (int, default `0`)
+- [x] `VocabularyNormalisationPass.__init__` accepts optional `settings` arg;
+  constructs `EmbeddingPredicateCanonicali` instance only when
+  `embedding_canonicalization=True`
+- [x] `VocabularyNormalisationPass.from_profile(profile, settings=None)` reads
+  all 4 new config keys from `vocabulary_normalisation` dict
+- [x] `VocabularyNormalisationPass.run()` calls `_embedding_canonicali.canonicalize()`
+  as step 5 (after URI canonicalization, before dedup); populates
+  `predicates_canonicalized` and `predicate_clusters_merged` in result
+- [x] Pipeline (`pipeline/__init__.py`): `VocabularyNormalisationPass.from_profile`
+  call passes `settings=self._settings`; stats dict in both `run()` and
+  `_run_inner()` includes `predicates_canonicalized` and `predicate_clusters_merged`;
+  new stats collected from `vn_result` and added to OpenTelemetry span attributes
+- [x] Unit tests: `test_predicate_canonicalization.py` — 19 tests covering
+  config defaults, NormalisationResult fields, `from_profile` reading config,
+  `_dbscan_cluster` grouping and singleton cases, `_pick_canonical` frequency
+  fallback, end-to-end rewrite, graceful fallback when no embedder, protected
+  namespace skip, pipeline stats keys, YAML round-trip
+
+**Exit criterion:** `vocabulary_normalisation.embedding_canonicalization: true`
+in a profile produces `predicates_canonicalized > 0` when synonymous predicates
+exist in the triple buffer; falls back gracefully (zero stats, no exception) when
+Ollama/sentence-transformers is unavailable. All unit tests pass with no real
+LLM or embedding calls.
 
 ---
 

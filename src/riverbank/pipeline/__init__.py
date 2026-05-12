@@ -260,6 +260,9 @@ class IngestPipeline:
             "predicate_inference_proposed": 0,
             # v0.15.4: predicate guidance injection
             "predicate_hints_injected": 0,
+            # v0.15.5: embedding-based predicate canonicalization
+            "predicates_canonicalized": 0,
+            "predicate_clusters_merged": 0,
         }
         with tracer.start_as_current_span("ingest_pipeline.run") as span:
             for run_mode in sequence:
@@ -355,6 +358,9 @@ class IngestPipeline:
             "predicate_inference_proposed": 0,
             # v0.15.4: predicate guidance injection
             "predicate_hints_injected": 0,
+            # v0.15.5: embedding-based predicate canonicalization
+            "predicates_canonicalized": 0,
+            "predicate_clusters_merged": 0,
             # Corpus size for yield metrics
             "corpus_bytes": 0,
         }
@@ -1058,7 +1064,9 @@ class IngestPipeline:
                         build_llm_predicate_collapser,
                     )
 
-                    _vn_pass = VocabularyNormalisationPass.from_profile(profile)
+                    _vn_pass = VocabularyNormalisationPass.from_profile(
+                        profile, settings=self._settings
+                    )
                     _llm_collapser = None
                     if vocab_norm_cfg.get("predicate_collapse_backend") == "llm":
                         _llm_collapser = build_llm_predicate_collapser(
@@ -1070,10 +1078,15 @@ class IngestPipeline:
                     stats["vocab_predicates_collapsed"] += vn_result.vocab_predicates_collapsed
                     stats["vocab_facts_decomposed"] += vn_result.vocab_facts_decomposed
                     stats["vocab_uris_rewritten"] += vn_result.vocab_uris_rewritten
+                    # v0.15.5: embedding-based predicate canonicalization stats
+                    stats["predicates_canonicalized"] += vn_result.predicates_canonicalized
+                    stats["predicate_clusters_merged"] += vn_result.predicate_clusters_merged
                     vn_span.set_attribute("vocab_norm.literals_promoted", vn_result.vocab_literals_promoted)
                     vn_span.set_attribute("vocab_norm.predicates_collapsed", vn_result.vocab_predicates_collapsed)
                     vn_span.set_attribute("vocab_norm.facts_decomposed", vn_result.vocab_facts_decomposed)
                     vn_span.set_attribute("vocab_norm.uris_rewritten", vn_result.vocab_uris_rewritten)
+                    vn_span.set_attribute("vocab_norm.predicates_canonicalized", vn_result.predicates_canonicalized)
+                    vn_span.set_attribute("vocab_norm.predicate_clusters_merged", vn_result.predicate_clusters_merged)
 
                     # Write normalised triples grouped by named graph
                     from itertools import groupby  # noqa: PLC0415
@@ -1092,17 +1105,33 @@ class IngestPipeline:
                         else:
                             stats["triples_trusted"] += written
 
-                    logger.info(
-                        "Vocabulary normalisation: %d→%d triples for %s "
-                        "(+%d promoted, +%d collapsed, +%d decomposed, +%d rewritten)",
-                        len(vocab_norm_buffer),
-                        len(vn_result.triples),
-                        source.iri,
-                        vn_result.vocab_literals_promoted,
-                        vn_result.vocab_predicates_collapsed,
-                        vn_result.vocab_facts_decomposed,
-                        vn_result.vocab_uris_rewritten,
-                    )
+                    if vn_result.predicates_canonicalized > 0:
+                        logger.info(
+                            "Vocabulary normalisation: %d→%d triples for %s "
+                            "(+%d promoted, +%d collapsed, +%d decomposed, +%d rewritten, "
+                            "+%d canonicalized across %d cluster(s))",
+                            len(vocab_norm_buffer),
+                            len(vn_result.triples),
+                            source.iri,
+                            vn_result.vocab_literals_promoted,
+                            vn_result.vocab_predicates_collapsed,
+                            vn_result.vocab_facts_decomposed,
+                            vn_result.vocab_uris_rewritten,
+                            vn_result.predicates_canonicalized,
+                            vn_result.predicate_clusters_merged,
+                        )
+                    else:
+                        logger.info(
+                            "Vocabulary normalisation: %d→%d triples for %s "
+                            "(+%d promoted, +%d collapsed, +%d decomposed, +%d rewritten)",
+                            len(vocab_norm_buffer),
+                            len(vn_result.triples),
+                            source.iri,
+                            vn_result.vocab_literals_promoted,
+                            vn_result.vocab_predicates_collapsed,
+                            vn_result.vocab_facts_decomposed,
+                            vn_result.vocab_uris_rewritten,
+                        )
                 except Exception as _vn_exc:  # noqa: BLE001
                     logger.warning(
                         "Vocabulary normalisation failed for %s — writing original triples: %s",
