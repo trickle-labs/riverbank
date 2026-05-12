@@ -1,4 +1,4 @@
-"""Vocabulary normalisation pass for riverbank (v0.15.3).
+"""Vocabulary normalisation pass for riverbank (v0.15.3 + v0.15.5).
 
 Post-extraction pass that converts the ad-hoc predicate/object vocabulary
 produced by open-vocabulary extraction into a tighter, semantically consistent
@@ -65,6 +65,7 @@ __all__ = [
     "PredicateCollapser",
     "FactDecomposer",
     "URICanonicaliser",
+    "EmbeddingPredicateCanonicali",
     "VocabularyNormalisationPass",
 ]
 
@@ -84,6 +85,11 @@ class NormalisationConfig:
     decompose_stuffed_predicates: bool = True
     rewrite_canonical_uris: bool = False
     vocabulary_namespace: str = "http://riverbank.example/vocab/"
+    # v0.15.5: embedding-based predicate canonicalization
+    embedding_canonicalization: bool = False
+    embedding_canonicalization_threshold: float = 0.88
+    embedding_canonicalization_model: str = "nomic-embed-text"
+    embedding_canonicalization_llm_rename: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +106,9 @@ class NormalisationResult:
     vocab_predicates_collapsed: int = 0
     vocab_facts_decomposed: int = 0
     vocab_uris_rewritten: int = 0
+    # v0.15.5: embedding-based predicate canonicalization
+    predicates_canonicalized: int = 0
+    predicate_clusters_merged: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +187,37 @@ def _predicate_namespace(predicate: str) -> str:
         if sep in s:
             return s.rsplit(sep, 1)[0] + sep
     return ""
+
+
+def _label_from_iri(iri: str) -> str:
+    """Derive a human-readable label from an IRI local name.
+
+    Used by :class:`EmbeddingPredicateCanonicali` to produce text that can be
+    embedded by a language model.
+
+    Examples::
+
+        "http://example.org/hasDefinition"  → "has definition"
+        "ex:was_born_in"                    → "was born in"
+        "birthplace"                        → "birthplace"
+    """
+    local = _local_name(iri)
+    # camelCase → words
+    local = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", local)
+    local = re.sub(r"([a-z\d])([A-Z])", r"\1 \2", local)
+    # snake_case / kebab-case → words
+    local = local.replace("_", " ").replace("-", " ")
+    return local.strip().lower()
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
 
 
 # ---------------------------------------------------------------------------
@@ -591,6 +631,438 @@ class URICanonicaliser:
 
 
 # ---------------------------------------------------------------------------
+# 5. EmbeddingPredicateCanonicali (v0.15.5)
+# ---------------------------------------------------------------------------
+
+_CANONICAL_NAME_PROMPT = """\
+You are a knowledge graph schema curator.
+
+You have a cluster of semantically equivalent predicates:
+{predicates}
+
+Choose the BEST canonical predicate name for this cluster.
+
+Rules:
+- Prefer a concise, snake_case name like "has_birth_place" over verbose variants
+- Prefer names that clearly express the relationship direction (subject → object)
+- If all variants are poor, propose a better name following the pattern:
+  "has_<noun>", "is_<adjective>", "was_<verb>_by", "born_in", "located_in"
+- Return ONLY a JSON object with key "canonical" containing the chosen predicate string.
+- Do not include the namespace prefix (e.g. return "has_birth_place" not "ex:has_birth_place")
+
+Frequencies (number of triples using each predicate):
+{frequencies}
+"""
+
+
+class EmbeddingPredicateCanonicali:
+    """Post-extraction pass: embed predicate labels, DBSCAN-cluster, rewrite to canonical.
+
+    Uses ``nomic-embed-text`` (via Ollama) or falls back to ``all-MiniLM-L6-v2``
+    (sentence-transformers).  Groups predicates by semantic similarity using
+    DBSCAN, then optionally asks the LLM to select the best canonical name for
+    each cluster.
+
+    Example::
+
+        was_born_in (0.97 similarity) → has_birth_place
+        born_in     (0.95)            → has_birth_place
+        birthplace  (0.91)            → has_birth_place
+
+    New stats: ``predicates_canonicalized``, ``predicate_clusters_merged``.
+
+    Profile YAML::
+
+        vocabulary_normalisation:
+          enabled: true
+          embedding_canonicalization: true
+          embedding_canonicalization_threshold: 0.88
+          embedding_canonicalization_model: "nomic-embed-text"
+          embedding_canonicalization_llm_rename: true
+
+    Falls back gracefully when embedding libraries are unavailable or the LLM
+    call fails — returns the original triples unchanged.
+    """
+
+    # Well-known ontology namespace prefixes that must never be remapped
+    _PROTECTED_NAMESPACES = frozenset(
+        {
+            "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+            "http://www.w3.org/2000/01/rdf-schema#",
+            "http://www.w3.org/2002/07/owl#",
+            "http://www.w3.org/2004/02/skos/core#",
+            "http://www.w3.org/ns/shacl#",
+        }
+    )
+
+    def __init__(
+        self,
+        threshold: float = 0.88,
+        model_name: str = "nomic-embed-text",
+        llm_rename: bool = True,
+        settings: Any = None,
+    ) -> None:
+        self._threshold = threshold
+        self._model_name = model_name
+        self._llm_rename = llm_rename
+        self._settings = settings
+        self._embedder: Any = None  # lazy-loaded
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def canonicalize(
+        self,
+        triples: list,
+        llm_client: Any = None,
+    ) -> tuple[list, int, int]:
+        """Cluster predicates by embedding similarity and rewrite to canonical forms.
+
+        Args:
+            triples: List of :class:`~riverbank.prov.ExtractedTriple` objects.
+            llm_client: Optional LLM client (openai.OpenAI compatible) for
+                canonical name selection.  When ``None`` and
+                ``llm_rename=True``, the pass will attempt to build one from
+                ``self._settings``.
+
+        Returns:
+            ``(new_triples, predicates_canonicalized, predicate_clusters_merged)``
+            where *predicates_canonicalized* is the total number of predicate
+            rewrites and *predicate_clusters_merged* is the number of synonym
+            clusters that were merged.
+        """
+        import logging as _log  # noqa: PLC0415
+        _logger = _log.getLogger(__name__)
+
+        if not triples:
+            return triples, 0, 0
+
+        # Collect predicate IRIs and their frequencies
+        from collections import Counter as _Counter  # noqa: PLC0415
+        freq: _Counter = _Counter(t.predicate for t in triples)
+        predicates = [
+            p for p in freq
+            if not any(p.startswith(ns) for ns in self._PROTECTED_NAMESPACES)
+        ]
+
+        if len(predicates) < 2:
+            return triples, 0, 0
+
+        # Embed predicate labels
+        embedder = self._get_embedder()
+        if embedder is None:
+            _logger.debug(
+                "EmbeddingPredicateCanonicali: embedding unavailable — skipping"
+            )
+            return triples, 0, 0
+
+        labels = [_label_from_iri(p) for p in predicates]
+        try:
+            raw_embeddings = embedder(labels)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "EmbeddingPredicateCanonicali: embedding failed — %s", exc
+            )
+            return triples, 0, 0
+
+        # DBSCAN clustering
+        clusters = self._dbscan_cluster(predicates, raw_embeddings, self._threshold)
+        multi_clusters = [c for c in clusters if len(c) >= 2]
+        if not multi_clusters:
+            return triples, 0, 0
+
+        # Build canonicalization map {non_canonical → canonical}
+        canon_map: dict[str, str] = {}
+        for cluster in multi_clusters:
+            canonical = self._pick_canonical(cluster, freq, llm_client)
+            # Preserve namespace of the most-frequent predicate in the cluster
+            canon_ns = _predicate_namespace(canonical)
+            for pred in cluster:
+                if pred != canonical:
+                    # If canonical has no namespace but member does, keep member's ns
+                    if not canon_ns:
+                        member_ns = _predicate_namespace(pred)
+                        member_local = _local_name(canonical)
+                        canon_iri = member_ns + member_local if member_ns else canonical
+                    else:
+                        canon_iri = canonical
+                    canon_map[pred] = canon_iri
+
+        if not canon_map:
+            return triples, 0, 0
+
+        # Rewrite triples
+        result = []
+        n_rewritten = 0
+        for t in triples:
+            if t.predicate in canon_map:
+                result.append(t.model_copy(update={"predicate": canon_map[t.predicate]}))
+                n_rewritten += 1
+            else:
+                result.append(t)
+
+        n_clusters_merged = len(multi_clusters)
+        _logger.info(
+            "EmbeddingPredicateCanonicali: %d predicates rewritten across "
+            "%d cluster(s) (threshold=%.2f)",
+            n_rewritten,
+            n_clusters_merged,
+            self._threshold,
+        )
+        return result, n_rewritten, n_clusters_merged
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _get_embedder(self) -> "Any | None":
+        """Return a callable ``(labels: list[str]) → list[list[float]]``.
+
+        Tries Ollama first (nomic-embed-text), then sentence-transformers.
+        Returns ``None`` when neither is available.
+        """
+        if self._embedder is not None:
+            return self._embedder
+
+        # Try Ollama embed API first (nomic-embed-text is Ollama-specific)
+        if self._model_name == "nomic-embed-text" or ":" in self._model_name:
+            ollama_fn = self._make_ollama_embedder()
+            if ollama_fn is not None:
+                self._embedder = ollama_fn
+                return self._embedder
+
+        # Fall back to sentence-transformers
+        st_fn = self._make_st_embedder()
+        if st_fn is not None:
+            self._embedder = st_fn
+            return self._embedder
+
+        return None
+
+    def _make_ollama_embedder(self) -> "Any | None":
+        """Return an Ollama embeddings callable or None on failure."""
+        try:
+            from openai import OpenAI  # noqa: PLC0415
+
+            settings = self._settings
+            if settings is None:
+                try:
+                    from riverbank.config import get_settings as _gs  # noqa: PLC0415
+                    settings = _gs()
+                except Exception:  # noqa: BLE001
+                    return None
+
+            llm = getattr(settings, "llm", None)
+            api_base: str = getattr(llm, "api_base", "http://localhost:11434/v1")
+            # Normalize to embeddings endpoint — Ollama uses /api/embed but
+            # the OpenAI-compat client uses /v1/embeddings via the base URL.
+            client = OpenAI(api_key="ollama", base_url=api_base)
+            model_name = self._model_name
+
+            def _embed(labels: list[str]) -> list[list[float]]:
+                resp = client.embeddings.create(input=labels, model=model_name)
+                return [item.embedding for item in resp.data]
+
+            # Quick connectivity test
+            _embed(["test"])
+
+            import logging as _log  # noqa: PLC0415
+            _log.getLogger(__name__).debug(
+                "EmbeddingPredicateCanonicali: using Ollama %s", model_name
+            )
+            return _embed
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _make_st_embedder(self) -> "Any | None":
+        """Return a sentence-transformers embeddings callable or None."""
+        try:
+            from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+
+            # nomic-embed-text is not a ST model; map to the default ST model
+            st_model = (
+                self._model_name
+                if "/" in self._model_name or self._model_name.startswith("all-")
+                else "all-MiniLM-L6-v2"
+            )
+            model = SentenceTransformer(st_model)
+
+            def _embed(labels: list[str]) -> list[list[float]]:
+                vecs = model.encode(labels, show_progress_bar=False)
+                return [list(v) for v in vecs]
+
+            import logging as _log  # noqa: PLC0415
+            _log.getLogger(__name__).debug(
+                "EmbeddingPredicateCanonicali: using sentence-transformers %s", st_model
+            )
+            return _embed
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _dbscan_cluster(
+        self,
+        predicates: list[str],
+        embeddings: list[list[float]],
+        eps_similarity: float,
+    ) -> list[list[str]]:
+        """DBSCAN-style clustering using cosine similarity.
+
+        *eps_similarity* is the minimum similarity (not distance) for two
+        points to be considered neighbours.  Converted to ``eps = 1 - eps_similarity``
+        in cosine-distance space.
+
+        Returns a list of clusters (each cluster is a non-empty list of
+        predicate IRI strings).  Singleton clusters are included so that
+        noise points can be tracked.
+        """
+        n = len(predicates)
+        eps = 1.0 - eps_similarity
+
+        # Build cosine-distance matrix
+        dist: list[list[float]] = [[0.0] * n for _ in range(n)]
+        for i in range(n):
+            for j in range(i + 1, n):
+                try:
+                    sim = _cosine_similarity(embeddings[i], embeddings[j])
+                except Exception:  # noqa: BLE001
+                    sim = 0.0
+                d = max(0.0, 1.0 - sim)
+                dist[i][j] = d
+                dist[j][i] = d
+
+        # DBSCAN with min_samples=1 so every point belongs to some cluster
+        # (min_samples=1 means no noise — every point is a core point or part
+        # of a cluster whose core point reached it within eps).
+        min_samples = 1
+        visited = [False] * n
+        cluster_ids = [-1] * n
+        cid = 0
+
+        def _neighbours(idx: int) -> list[int]:
+            return [j for j in range(n) if j != idx and dist[idx][j] <= eps]
+
+        for i in range(n):
+            if visited[i]:
+                continue
+            visited[i] = True
+            nbrs = _neighbours(i)
+            if len(nbrs) < min_samples - 1:
+                # Singleton (noise in standard DBSCAN; here assigned to own cluster)
+                cluster_ids[i] = cid
+                cid += 1
+                continue
+            cluster_ids[i] = cid
+            seed = list(nbrs)
+            while seed:
+                j = seed.pop(0)
+                if not visited[j]:
+                    visited[j] = True
+                    j_nbrs = _neighbours(j)
+                    if len(j_nbrs) >= min_samples - 1:
+                        seed.extend(j_nbrs)
+                if cluster_ids[j] == -1:
+                    cluster_ids[j] = cid
+            cid += 1
+
+        # Group predicates by cluster id
+        groups: dict[int, list[str]] = {}
+        for i, p in enumerate(predicates):
+            groups.setdefault(cluster_ids[i], []).append(p)
+
+        return list(groups.values())
+
+    def _pick_canonical(
+        self,
+        cluster: list[str],
+        freq: "Counter",
+        llm_client: Any = None,
+    ) -> str:
+        """Select the canonical predicate for a cluster.
+
+        Strategy:
+        1. If ``llm_rename=True``, ask the LLM to choose (or propose) the best
+           canonical name.  The LLM result is validated against the cluster
+           members; if it proposes a new name, it is accepted when it passes
+           a basic sanity check.
+        2. Fall back to the most-frequent predicate as canonical.
+        """
+        import logging as _log  # noqa: PLC0415
+        _logger = _log.getLogger(__name__)
+
+        # Frequency-based fallback (used when LLM is disabled or fails)
+        freq_canonical = max(cluster, key=lambda p: (freq.get(p, 0), -len(p)))
+
+        if not self._llm_rename:
+            return freq_canonical
+
+        # Try LLM
+        client = llm_client
+        if client is None and self._settings is not None:
+            try:
+                from openai import OpenAI as _OAI  # noqa: PLC0415
+                llm = getattr(self._settings, "llm", None)
+                api_base: str = getattr(llm, "api_base", "http://localhost:11434/v1")
+                api_key: str = getattr(llm, "api_key", "ollama")
+                client = _OAI(api_key=api_key, base_url=api_base)
+            except Exception:  # noqa: BLE001
+                return freq_canonical
+
+        if client is None:
+            return freq_canonical
+
+        freq_lines = "\n".join(
+            f"  {p}: {freq.get(p, 0)} triple(s)" for p in cluster
+        )
+        prompt = _CANONICAL_NAME_PROMPT.format(
+            predicates="\n".join(f"  {p}" for p in cluster),
+            frequencies=freq_lines,
+        )
+
+        try:
+            llm_settings = getattr(self._settings, "llm", None) if self._settings else None
+            model_name: str = getattr(llm_settings, "model", "llama3.2") if llm_settings else "llama3.2"
+            resp = client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=128,
+            )
+            raw = (resp.choices[0].message.content or "").strip()
+            # Strip markdown fences
+            raw = re.sub(r"^```[a-z]*\n?", "", raw, flags=re.MULTILINE)
+            raw = re.sub(r"```$", "", raw.strip())
+
+            import json as _json  # noqa: PLC0415
+            data = _json.loads(raw)
+            chosen_local = data.get("canonical", "").strip()
+
+            if not chosen_local:
+                return freq_canonical
+
+            # Sanitize: only allow safe identifier characters
+            if not re.match(r"^[a-z_][a-z0-9_]*$", chosen_local):
+                # Accept if it's a valid local name (may have uppercase)
+                if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", chosen_local):
+                    _logger.debug(
+                        "EmbeddingPredicateCanonicali: LLM proposed unsafe name %r — using frequency fallback",
+                        chosen_local,
+                    )
+                    return freq_canonical
+
+            # Map to the namespace of the most-frequent predicate
+            ns = _predicate_namespace(freq_canonical)
+            return (ns + chosen_local) if ns else chosen_local
+
+        except Exception as exc:  # noqa: BLE001
+            _logger.debug(
+                "EmbeddingPredicateCanonicali: LLM canonical name selection failed — %s",
+                exc,
+            )
+            return freq_canonical
+
+
+# ---------------------------------------------------------------------------
 # LLM predicate collapse client factory
 # ---------------------------------------------------------------------------
 
@@ -683,7 +1155,19 @@ def build_llm_predicate_collapser(
 
 
 class VocabularyNormalisationPass:
-    """Orchestrate all four vocabulary normalisation sub-passes.
+    """Orchestrate all vocabulary normalisation sub-passes (v0.15.3 + v0.15.5).
+
+    Passes applied in order:
+
+    0. Unicode normalization — decode bare unicode escapes in literals.
+    1. Categorical literal promotion — repeated literals → vocab:* IRIs.
+    2. Predicate cluster collapse — edit-distance or LLM grouping.
+    3. Fact-stuffed predicate decomposition — qualifier stripping.
+    4. Entity URI canonicalisation — owl:sameAs rewriting (optional).
+    5. Embedding-based predicate canonicalization (v0.15.5, optional) —
+       DBSCAN clusters of semantically equivalent predicates rewritten to
+       a canonical form using nomic-embed-text + optional LLM renaming.
+    6. Deduplication — keep highest-confidence triple per (s, p, o) key.
 
     Usage::
 
@@ -691,14 +1175,16 @@ class VocabularyNormalisationPass:
         result = pass_.run(triple_buffer)
         # result.triples  — normalised triple list
         # result.vocab_literals_promoted, .vocab_predicates_collapsed, …
+        # result.predicates_canonicalized, .predicate_clusters_merged  (v0.15.5)
 
     The pass is idempotent: running it twice on the same buffer produces the
     same result as running it once (assuming no new categorical clusters
     emerge after the first pass).
     """
 
-    def __init__(self, config: NormalisationConfig) -> None:
+    def __init__(self, config: NormalisationConfig, settings: Any = None) -> None:
         self.config = config
+        self._settings = settings
         self._categorical = CategoricalDetector(
             threshold=config.categorical_threshold,
             vocab_namespace=config.vocabulary_namespace,
@@ -708,9 +1194,20 @@ class VocabularyNormalisationPass:
         )
         self._decomposer = FactDecomposer()
         self._canonicaliser = URICanonicaliser()
+        # v0.15.5: embedding-based predicate canonicalization
+        self._embedding_canonicali: Optional[EmbeddingPredicateCanonicali] = (
+            EmbeddingPredicateCanonicali(
+                threshold=config.embedding_canonicalization_threshold,
+                model_name=config.embedding_canonicalization_model,
+                llm_rename=config.embedding_canonicalization_llm_rename,
+                settings=settings,
+            )
+            if config.embedding_canonicalization
+            else None
+        )
 
     @classmethod
-    def from_profile(cls, profile: Any) -> "VocabularyNormalisationPass":
+    def from_profile(cls, profile: Any, settings: Any = None) -> "VocabularyNormalisationPass":
         """Construct from a :class:`~riverbank.pipeline.CompilerProfile`."""
         cfg: dict = getattr(profile, "vocabulary_normalisation", {})
         config = NormalisationConfig(
@@ -725,8 +1222,19 @@ class VocabularyNormalisationPass:
             vocabulary_namespace=cfg.get(
                 "vocabulary_namespace", "http://riverbank.example/vocab/"
             ),
+            # v0.15.5
+            embedding_canonicalization=cfg.get("embedding_canonicalization", False),
+            embedding_canonicalization_threshold=cfg.get(
+                "embedding_canonicalization_threshold", 0.88
+            ),
+            embedding_canonicalization_model=cfg.get(
+                "embedding_canonicalization_model", "nomic-embed-text"
+            ),
+            embedding_canonicalization_llm_rename=cfg.get(
+                "embedding_canonicalization_llm_rename", True
+            ),
         )
-        return cls(config)
+        return cls(config, settings=settings)
 
     def run(
         self,
@@ -746,6 +1254,7 @@ class VocabularyNormalisationPass:
         """
         result = list(triples)
         n_promoted = n_collapsed = n_decomposed = n_rewritten = 0
+        n_canonicalized = n_clusters_merged = 0
 
         # 0. Unicode normalization — decode bare unicode escapes in literals
         #    e.g. "1972u201373" → "1972–73"  (leaked \uXXXX without backslash)
@@ -775,9 +1284,19 @@ class VocabularyNormalisationPass:
         if self.config.rewrite_canonical_uris:
             result, n_rewritten = self._canonicaliser.canonicalise(result)
 
-        # 5. Deduplication — after URI rewriting, previously distinct triples
-        #    may now share the same (subject, predicate, object_value) key.
-        #    Keep the one with the highest confidence.
+        # 5. v0.15.5: Embedding-based predicate canonicalization
+        #    Runs after the deterministic passes so that it operates on a
+        #    cleaner predicate set (collapsed + decomposed).  The LLM client
+        #    is NOT shared with the predicate collapser — this pass builds its
+        #    own client from settings when llm_rename is enabled.
+        if self._embedding_canonicali is not None:
+            result, n_canonicalized, n_clusters_merged = (
+                self._embedding_canonicali.canonicalize(result)
+            )
+
+        # 6. Deduplication — after URI rewriting + canonicalization, previously
+        #    distinct triples may now share the same (subject, predicate, object_value)
+        #    key.  Keep the one with the highest confidence.
         seen: dict[tuple[str, str, str], Any] = {}
         for t in result:
             key = (t.subject, t.predicate, t.object_value)
@@ -791,4 +1310,6 @@ class VocabularyNormalisationPass:
             vocab_predicates_collapsed=n_collapsed,
             vocab_facts_decomposed=n_decomposed,
             vocab_uris_rewritten=n_rewritten,
+            predicates_canonicalized=n_canonicalized,
+            predicate_clusters_merged=n_clusters_merged,
         )
