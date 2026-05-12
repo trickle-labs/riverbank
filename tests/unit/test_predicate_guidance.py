@@ -105,6 +105,7 @@ seed_predicates:
 
 def test_schema_proposer_returns_suggested_predicates() -> None:
     """SchemaProposer.propose() must return suggested_predicates with tiers."""
+    pytest.importorskip("openai")
     from riverbank.inference.schema_proposer import SchemaProposer
 
     profile = CompilerProfile.default()
@@ -159,6 +160,7 @@ def test_schema_proposer_returns_suggested_predicates() -> None:
 
 def test_schema_proposer_error_returns_suggested_predicates_empty() -> None:
     """Error path must still return suggested_predicates with empty tier lists."""
+    pytest.importorskip("openai")
     from riverbank.inference.schema_proposer import SchemaProposer
 
     profile = CompilerProfile.default()
