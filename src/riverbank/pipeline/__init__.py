@@ -108,6 +108,10 @@ class CompilerProfile:
     owl_rl: dict = field(default_factory=dict)
     # v0.18.0: Predicate inference — LLM-driven schema discovery from documents
     predicate_inference: dict = field(default_factory=dict)
+    # v0.15.4: Seed predicates — static domain-common predicates merged with
+    # inference proposals before PREDICATE HINTS injection.  Applied even when
+    # predicate_inference is disabled.
+    seed_predicates: list = field(default_factory=list)
     # id is set after the profile is registered in the catalog DB
     id: Optional[int] = None
 
@@ -254,6 +258,8 @@ class IngestPipeline:
             # v0.18.0: predicate inference
             "predicate_inference_calls": 0,
             "predicate_inference_proposed": 0,
+            # v0.15.4: predicate guidance injection
+            "predicate_hints_injected": 0,
         }
         with tracer.start_as_current_span("ingest_pipeline.run") as span:
             for run_mode in sequence:
@@ -347,6 +353,8 @@ class IngestPipeline:
             # v0.18.0: predicate inference
             "predicate_inference_calls": 0,
             "predicate_inference_proposed": 0,
+            # v0.15.4: predicate guidance injection
+            "predicate_hints_injected": 0,
             # Corpus size for yield metrics
             "corpus_bytes": 0,
         }
@@ -569,7 +577,11 @@ class IngestPipeline:
                 logger.debug("Coreference resolution skipped: %s", _coref_exc)
 
         # v0.18.0: Predicate inference — propose schema before extraction
+        # v0.15.4: When use_for_extraction: false, inject PREDICATE HINTS block
+        #          into the extraction prompt as soft guidance.
         predicate_inference_cfg: dict = getattr(profile, "predicate_inference", {})
+        seed_predicates: list = list(getattr(profile, "seed_predicates", []) or [])
+        _hint_predicates: dict[str, list[str]] = {"high": [], "medium": [], "exploratory": []}
         if predicate_inference_cfg.get("enabled", False) and not dry_run:
             try:
                 from riverbank.inference.schema_proposer import SchemaProposer  # noqa: PLC0415
@@ -604,6 +616,11 @@ class IngestPipeline:
                             },
                         )
                 else:
+                    # v0.15.4: use_for_extraction: false — collect hints for injection
+                    _hint_predicates = inference_result.get(
+                        "suggested_predicates",
+                        {"high": [], "medium": [], "exploratory": []},
+                    )
                     logger.debug(
                         "Predicate inference: proposed %d predicates (use_for_extraction=%s)",
                         len(proposed_predicates),
@@ -611,6 +628,56 @@ class IngestPipeline:
                     )
             except Exception as _infer_exc:  # noqa: BLE001
                 logger.warning("Predicate inference failed, continuing without it: %s", _infer_exc)
+
+        # v0.15.4: Build and inject PREDICATE HINTS block into extraction prompt.
+        # Seed predicates are always treated as "high" confidence hints; they are
+        # merged with the inference proposals before injection.  Injection happens
+        # when there are any hints to inject (seed or inferred) and the profile is
+        # NOT using constrained extraction (use_for_extraction: true already adds
+        # predicates to allowed_predicates as hard constraints, so hints would be
+        # redundant).
+        _use_for_extraction = predicate_inference_cfg.get("use_for_extraction", False)
+        if not _use_for_extraction and not dry_run:
+            # Merge seed predicates into "high" tier
+            merged_high = list(_hint_predicates.get("high", []))
+            for _sp in seed_predicates:
+                if _sp not in merged_high:
+                    merged_high.append(_sp)
+            _hint_predicates = dict(_hint_predicates)
+            _hint_predicates["high"] = merged_high
+
+            _all_hints = (
+                _hint_predicates.get("high", [])
+                + _hint_predicates.get("medium", [])
+                + _hint_predicates.get("exploratory", [])
+            )
+            if _all_hints:
+                stats["predicate_hints_injected"] += len(_all_hints)
+                _hints_block = _build_predicate_hints_block(_hint_predicates)
+                from dataclasses import replace as _dc_replace_hints  # noqa: PLC0415
+                profile = _dc_replace_hints(
+                    profile,
+                    prompt_text=profile.prompt_text + "\n\n" + _hints_block,
+                )
+                logger.info(
+                    "Predicate guidance injection: %d hints injected into extraction prompt "
+                    "(%d high, %d medium, %d exploratory)",
+                    len(_all_hints),
+                    len(_hint_predicates.get("high", [])),
+                    len(_hint_predicates.get("medium", [])),
+                    len(_hint_predicates.get("exploratory", [])),
+                )
+                if progress_callback:
+                    progress_callback(
+                        "predicate_hints_injected",
+                        {
+                            "source": source.iri,
+                            "hints_count": len(_all_hints),
+                            "high": _hint_predicates.get("high", []),
+                            "medium": _hint_predicates.get("medium", []),
+                            "exploratory": _hint_predicates.get("exploratory", []),
+                        },
+                    )
 
         fragments = list(fragmenter.fragment(doc))
         existing_hashes = self._get_existing_hashes(conn, source.iri)
@@ -1647,3 +1714,40 @@ def _gate_config_from_profile(profile: CompilerProfile) -> Any:
 def _confidence_threshold(profile: CompilerProfile) -> float:
     ep = profile.editorial_policy or {}
     return float(ep.get("confidence_threshold", 0.7))
+
+
+# ---------------------------------------------------------------------------
+# v0.15.4: Predicate guidance helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_predicate_hints_block(
+    hint_predicates: dict[str, list[str]],
+) -> str:
+    """Build the PREDICATE HINTS block for injection into the extraction prompt.
+
+    Args:
+        hint_predicates: Dict with keys ``"high"``, ``"medium"``, ``"exploratory"``
+                         mapping to lists of predicate IRI strings.
+
+    Returns:
+        A formatted multi-line string block, or empty string if no hints.
+    """
+    high = hint_predicates.get("high", [])
+    medium = hint_predicates.get("medium", [])
+    exploratory = hint_predicates.get("exploratory", [])
+
+    if not (high or medium or exploratory):
+        return ""
+
+    lines = [
+        "PREDICATE HINTS (prefer these when relevant, but propose others freely):",
+    ]
+    if high:
+        lines.append(f"  High confidence:   {', '.join(high)}")
+    if medium:
+        lines.append(f"  Medium confidence: {', '.join(medium)}")
+    if exploratory:
+        lines.append(f"  Exploratory:       {', '.join(exploratory)}")
+
+    return "\n".join(lines)
