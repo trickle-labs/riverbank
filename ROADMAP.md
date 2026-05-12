@@ -87,7 +87,7 @@
 | v0.15.1 | Extraction improvement loop — per-property recall gap analysis, extraction prompt tuning from failure modes, 200+ novel-discovery annotations, published evaluation methodology | **Done** | Medium |
 | v0.15.2 | Document distillation step — optional pre-fragmentation content-selection step with six configurable strategies (`boilerplate_removal`, `aggressive`, `moderate`, `conservative`, `section_aware`, `budget_optimized`); on-disk cache keyed by content hash + strategy; `boilerplate_removal` is deterministic (zero LLM cost); all strategies preserve the original content hash for downstream deduplication; new run stats: `distillation_calls`, `distillation_cache_hits`, `distillation_bytes_removed`, `distillation_strategy_used` | **Done** | Medium |
 | v0.15.3 | Vocabulary normalisation pass — post-extraction pass (domain-agnostic) converting repeated categorical string literals to IRI resources (`"Director"` → `vocab:Director`, `"Approved"` → `vocab:Approved`), collapsing fragmented predicate clusters to canonical form (`ex:is_director` / `ex:is_ceo` / `ex:is_chair` → `ex:holds_role` + `vocab:*`), decomposing fact-stuffed predicate names into structured triples with qualifier predicates, and optionally rewriting entity URIs to canonical form after `owl:sameAs` resolution; deterministic and LLM-guided backends; new stats: `vocab_literals_promoted`, `vocab_predicates_collapsed`, `vocab_facts_decomposed`, `vocab_uris_rewritten` | **Done** | Medium |
-| v0.15.4 | Predicate guidance injection — prompt-injected predicate hints (proposed predicates surfaced as soft guidance in the extraction prompt, not hard constraints) + seed predicates support (`seed_predicates` list in profile YAML merged with inference proposals before injection); `use_for_extraction: false` mode retains open-vocabulary extraction while biasing the LLM toward discovered domain vocabulary; new `suggested_predicates` field in `SchemaProposer` response; extraction prompt template extended with `PREDICATE HINTS` block | Planned | Small |
+| v0.15.4 | Predicate guidance injection — prompt-injected predicate hints (proposed predicates surfaced as soft guidance in the extraction prompt, not hard constraints) + seed predicates support (`seed_predicates` list in profile YAML merged with inference proposals before injection); `use_for_extraction: false` mode retains open-vocabulary extraction while biasing the LLM toward discovered domain vocabulary; new `suggested_predicates` field in `SchemaProposer` response; extraction prompt template extended with `PREDICATE HINTS` block | **Done** | Small |
 | v0.15.5 | Embedding-based predicate canonicalization — post-extraction pass using `nomic-embed-text` to cluster semantically equivalent predicates and rewrite to a canonical representative (`was_born_in` / `born_in` / `birthplace` → `has_birth_place`); DBSCAN clustering with configurable similarity threshold; LLM-assisted canonical name selection per cluster; new stats: `predicates_canonicalized`, `predicate_clusters_merged`; integrates with existing vocabulary normalisation pass | Planned | Medium |
 
 ### Adaptive Auto-Tuning (v0.16.x – v0.17.x)
@@ -573,6 +573,43 @@ recall from open-vocabulary exploration.
 current open-vocabulary baseline (44 predicates, ~8 synonym pairs).
 
 **New stats:** `predicate_hints_injected` (count of predicates injected into prompt).
+
+---
+
+### v0.15.4 Checklist
+
+- [x] `SchemaProposer.propose()` returns new `suggested_predicates` field — dict
+  with keys `"high"`, `"medium"`, `"exploratory"` each mapping to a list of
+  predicate IRI strings, populated from the raw LLM response regardless of the
+  `confidence_threshold` filter applied to `allowed_predicates`
+- [x] `SchemaProposer.propose()` error path returns `suggested_predicates` with
+  empty tier lists so callers never need to guard against a missing key
+- [x] `CompilerProfile` gains `seed_predicates: list` field (default `[]`);
+  loaded from YAML via `from_yaml()`
+- [x] `_build_predicate_hints_block()` helper in `pipeline/__init__.py` formats
+  the `PREDICATE HINTS` block from a tier dict; returns `""` when no hints are
+  present so it is safe to call unconditionally
+- [x] `pipeline/_process_source()`: when `use_for_extraction: false` (or
+  predicate inference is disabled) and hints are available (from inference
+  proposals or `seed_predicates`), inject `PREDICATE HINTS` block into the
+  extraction prompt via `dataclasses.replace`; seed predicates are merged into
+  the `"high"` tier before injection
+- [x] `predicate_hints_injected` stat added to both the combined stats dict in
+  `IngestPipeline.run()` and the per-run stats dict in `_run_inner()`;
+  incremented with the count of predicates injected per source
+- [x] No hints injected when `use_for_extraction: true` (predicates are added
+  to `allowed_predicates` as hard constraints — hints would be redundant)
+- [x] No hints injected when both `seed_predicates` is empty and no inference
+  proposals are available
+- [x] Unit tests: `test_predicate_guidance.py` — 13 tests covering
+  `_build_predicate_hints_block`, `seed_predicates` profile field, YAML loading,
+  `SchemaProposer` return value, error path, stat presence, hint suppression cases
+
+**Exit criterion:** `riverbank ingest` with `seed_predicates: [ex:born_in, ...]`
+and `predicate_inference.use_for_extraction: false` produces a `PREDICATE HINTS`
+block in the extraction prompt and reports `predicate_hints_injected > 0` in run
+stats. All unit tests pass with no LLM calls. `use_for_extraction: true` leaves
+the prompt unchanged (predicates go to `allowed_predicates` only).
 
 ---
 

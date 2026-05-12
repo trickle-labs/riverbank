@@ -143,18 +143,18 @@ ACTION: Output ONLY JSON starting with { and ending with }.
         user_message = f"Analyze this document:\n\n{doc_sample}"
 
         # Create OpenAI-compatible client
-        client = OpenAI(
-            base_url=api_base,
-            api_key=api_key,
-        )
-
-        logger.info(
-            "Proposing predicates for document (%d chars) using %s",
-            len(document_text),
-            model_name,
-        )
-
         try:
+            client = OpenAI(
+                base_url=api_base,
+                api_key=api_key,
+            )
+
+            logger.info(
+                "Proposing predicates for document (%d chars) using %s",
+                len(document_text),
+                model_name,
+            )
+
             response = client.chat.completions.create(
                 model=model_name,
                 messages=[
@@ -308,6 +308,23 @@ ACTION: Output ONLY JSON starting with { and ending with }.
                 )
                 predicates = predicates[:max_preds]
 
+            # v0.15.4: Build suggested_predicates — the full proposal list with
+            # confidence tiers, regardless of confidence_threshold filtering.
+            # Used to inject PREDICATE HINTS into the extraction prompt when
+            # use_for_extraction: false.
+            suggested_predicates: dict[str, list[str]] = {
+                "high": [],
+                "medium": [],
+                "exploratory": [],
+            }
+            if isinstance(parsed, dict) and "predicates" in parsed:
+                for pred_item in parsed.get("predicates", []):
+                    if isinstance(pred_item, dict):
+                        name = pred_item.get("name", "").strip()
+                        conf = pred_item.get("confidence", "medium")
+                        if name and conf in suggested_predicates:
+                            suggested_predicates[conf].append(name)
+
             diagnostics = {
                 "prompt_tokens": usage.prompt_tokens,
                 "completion_tokens": usage.completion_tokens,
@@ -318,6 +335,7 @@ ACTION: Output ONLY JSON starting with { and ending with }.
             result = {
                 "allowed_predicates": predicates,
                 "allowed_classes": classes,
+                "suggested_predicates": suggested_predicates,
                 "diagnostics": diagnostics,
                 "raw_reasoning": raw_reasoning,
             }
@@ -337,6 +355,7 @@ ACTION: Output ONLY JSON starting with { and ending with }.
             return {
                 "allowed_predicates": [],
                 "allowed_classes": [],
+                "suggested_predicates": {"high": [], "medium": [], "exploratory": []},
                 "diagnostics": {"error": str(exc)},
                 "raw_reasoning": {},
             }
