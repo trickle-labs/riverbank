@@ -87,6 +87,8 @@
 | v0.15.1 | Extraction improvement loop — per-property recall gap analysis, extraction prompt tuning from failure modes, 200+ novel-discovery annotations, published evaluation methodology | **Done** | Medium |
 | v0.15.2 | Document distillation step — optional pre-fragmentation content-selection step with six configurable strategies (`boilerplate_removal`, `aggressive`, `moderate`, `conservative`, `section_aware`, `budget_optimized`); on-disk cache keyed by content hash + strategy; `boilerplate_removal` is deterministic (zero LLM cost); all strategies preserve the original content hash for downstream deduplication; new run stats: `distillation_calls`, `distillation_cache_hits`, `distillation_bytes_removed`, `distillation_strategy_used` | **Done** | Medium |
 | v0.15.3 | Vocabulary normalisation pass — post-extraction pass (domain-agnostic) converting repeated categorical string literals to IRI resources (`"Director"` → `vocab:Director`, `"Approved"` → `vocab:Approved`), collapsing fragmented predicate clusters to canonical form (`ex:is_director` / `ex:is_ceo` / `ex:is_chair` → `ex:holds_role` + `vocab:*`), decomposing fact-stuffed predicate names into structured triples with qualifier predicates, and optionally rewriting entity URIs to canonical form after `owl:sameAs` resolution; deterministic and LLM-guided backends; new stats: `vocab_literals_promoted`, `vocab_predicates_collapsed`, `vocab_facts_decomposed`, `vocab_uris_rewritten` | **Done** | Medium |
+| v0.15.4 | Predicate guidance injection — prompt-injected predicate hints (proposed predicates surfaced as soft guidance in the extraction prompt, not hard constraints) + seed predicates support (`seed_predicates` list in profile YAML merged with inference proposals before injection); `use_for_extraction: false` mode retains open-vocabulary extraction while biasing the LLM toward discovered domain vocabulary; new `suggested_predicates` field in `SchemaProposer` response; extraction prompt template extended with `PREDICATE HINTS` block | Planned | Small |
+| v0.15.5 | Embedding-based predicate canonicalization — post-extraction pass using `nomic-embed-text` to cluster semantically equivalent predicates and rewrite to a canonical representative (`was_born_in` / `born_in` / `birthplace` → `has_birth_place`); DBSCAN clustering with configurable similarity threshold; LLM-assisted canonical name selection per cluster; new stats: `predicates_canonicalized`, `predicate_clusters_merged`; integrates with existing vocabulary normalisation pass | Planned | Medium |
 
 ### Adaptive Auto-Tuning (v0.16.x – v0.17.x)
 
@@ -523,6 +525,96 @@ and each produces:
 - Embedded qualifiers stripped from predicate names and emitted as separate triples
 - Entity URI canonicalisation rewrites all non-canonical subject URIs when enabled
 - All 4 normalisations covered by unit tests with no domain-specific hardcoding
+
+---
+
+### v0.15.4 — Predicate Guidance Injection
+
+Goal: improve naming consistency of open-vocabulary extraction by surfacing predicate
+inference proposals as **soft guidance** in the extraction prompt rather than hard
+constraints. See [plans/best-of-both-worlds.md](plans/best-of-both-worlds.md) for
+full strategy rationale (Strategies 1 + 4).
+
+**Motivation:** When `predicate_inference.use_for_extraction: false`, proposals are
+discarded after inference — the LLM never sees them. Injecting them as suggestions
+reduces synonym sprawl (`was_born_in` / `born_in` / `birthplace`) without losing
+recall from open-vocabulary exploration.
+
+**Changes:**
+
+1. `SchemaProposer.propose()` returns a new `suggested_predicates` field (separate
+   from `allowed_predicates`) carrying the full proposal list with confidence tiers.
+
+2. `pipeline/__init__.py`: when `use_for_extraction: false` and proposals are
+   available, inject a `PREDICATE HINTS` block into the extraction prompt:
+
+   ```
+   PREDICATE HINTS (prefer these when relevant, but propose others freely):
+     High confidence:   ex:discovered, ex:received_award, ex:born_in
+     Medium confidence: ex:collaborated_with, ex:studied_at
+     Exploratory:       ex:contributed_to_theory_of
+   ```
+
+3. New profile key `seed_predicates` — a static list of domain-common predicates
+   (e.g. `ex:founded_in`, `ex:nationality`) merged with inference proposals before
+   injection, so they appear in hints even when predicate inference is disabled.
+
+4. Profile YAML example:
+   ```yaml
+   seed_predicates:
+     - ex:born_in
+     - ex:received_award
+     - ex:nationality
+   predicate_inference:
+     use_for_extraction: false   # open-vocab, but hints injected
+   ```
+
+**Expected outcome:** 30–35 unique predicates with ~20% fewer synonym pairs vs
+current open-vocabulary baseline (44 predicates, ~8 synonym pairs).
+
+**New stats:** `predicate_hints_injected` (count of predicates injected into prompt).
+
+---
+
+### v0.15.5 — Embedding-Based Predicate Canonicalization
+
+Goal: reduce predicate sprawl post-extraction by clustering semantically equivalent
+predicates using embeddings and rewriting all triples in each cluster to a single
+canonical predicate name. See [plans/best-of-both-worlds.md](plans/best-of-both-worlds.md)
+(Strategy 3).
+
+**Motivation:** Even with v0.15.4 hints, open-vocabulary extraction produces synonym
+predicates across documents (`was_born_in` / `has_birth_place` / `born_in`). These
+can't be queried uniformly. Embedding similarity detects semantic equivalence without
+requiring manual schema work.
+
+**Design:**
+
+1. After extraction (or as a post-ingest `riverbank canonicalize-predicates` command),
+   collect all distinct predicates from the named graph.
+2. Embed each predicate IRI using `nomic-embed-text` (already in the stack).
+3. Cluster with DBSCAN (configurable `eps` similarity threshold, default 0.15 cosine
+   distance).
+4. For each cluster with ≥ 2 members, select canonical name:
+   - **Deterministic:** most frequent predicate in the cluster
+   - **LLM-assisted:** ask LLM to pick the most readable/standard form
+5. Rewrite all triples with non-canonical predicates in-place via `UPDATE` on
+   pg_ripple.
+6. Emit `owl:equivalentProperty` assertions for the cluster members.
+
+**Profile YAML:**
+```yaml
+predicate_canonicalization:
+  enabled: true
+  backend: "deterministic"   # or "llm"
+  similarity_threshold: 0.85  # cosine similarity to form a cluster
+  min_cluster_size: 2
+```
+
+**New stats:** `predicates_canonicalized`, `predicate_clusters_merged`.
+
+**Expected outcome:** 44 extracted predicates reduced to ~15–20 canonical predicates
+covering the same factual content, with `owl:equivalentProperty` audit trail.
 
 ---
 
